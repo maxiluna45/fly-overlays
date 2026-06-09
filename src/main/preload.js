@@ -35,4 +35,12 @@ contextBridge.exposeInMainWorld('fly', {
   togglePreview: () => ipcRenderer.invoke('preview:toggle'),
   getPreview: () => ipcRenderer.invoke('preview:get'),
   setPreview: (enabled) => ipcRenderer.invoke('preview:set', enabled),
+
+  onUpdater: (channel, callback) => {
+    const listener = (_event, data) => callback(data);
+    ipcRenderer.on('updater:' + channel, listener);
+    return () => ipcRenderer.removeListener('updater:' + channel, listener);
+  },
+  installUpdate: () => ipcRenderer.invoke('updater:install'),
+  checkUpdate: () => ipcRenderer.invoke('updater:check'),
 });

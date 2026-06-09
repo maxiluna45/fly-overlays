@@ -10,15 +10,28 @@ import { OVERLAY_META } from "../overlay-catalog.js";
 import { Button } from "./ui/button.jsx";
 import { Switch } from "./ui/switch.jsx";
 import { Slider } from "./ui/slider.jsx";
+import { useToast } from "./ui/toast.jsx";
 
 // Por ahora solo el delta bar está implementado
 const IMPLEMENTED = ["delta"];
+
+function formatBytes(bps) {
+  if (!bps || !isFinite(bps)) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let i = 0;
+  while (bps >= 1024 && i < units.length - 1) {
+    bps /= 1024;
+    i++;
+  }
+  return `${bps.toFixed(1)} ${units[i]}`;
+}
 
 export function Dashboard() {
   const [config, setConfig] = useState(null);
   const [selectedId, setSelectedId] = useState("delta");
   const [preview, setPreview] = useState(false);
   const [scale, setScale] = useState(0.6);
+  const toast = useToast();
 
   const load = useCallback(async () => {
     const c = await window.fly.getConfig();
@@ -32,6 +45,62 @@ export function Dashboard() {
     const unsub = window.fly.onConfigChange((c) => setConfig(c));
     return unsub;
   }, [load]);
+
+  // Updater toasts
+  useEffect(() => {
+    if (!window.fly?.onUpdater) return;
+
+    const unsubs = [
+      window.fly.onUpdater("checking", () => {
+        toast.show({
+          tone: "info",
+          title: "Buscando actualizaciones...",
+          duration: 2000,
+        });
+      }),
+
+      window.fly.onUpdater("available", (info) => {
+        toast.show({
+          tone: "update",
+          title: `Versión ${info.version} disponible`,
+          description: "Descargando en segundo plano...",
+          duration: 0,
+          id: "updater-download",
+        });
+      }),
+
+      window.fly.onUpdater("progress", (p) => {
+        toast.update("updater-download", {
+          description: `Descargando... ${Math.round(p.percent)}% · ${formatBytes(p.bytesPerSecond)}/s`,
+          progress: p.percent,
+        });
+      }),
+
+      window.fly.onUpdater("downloaded", (info) => {
+        toast.show({
+          tone: "update",
+          title: `Actualización ${info.version} lista`,
+          description: "Reiniciá la app para aplicar la nueva versión.",
+          duration: 0,
+          action: {
+            label: "Reiniciar ahora",
+            onClick: () => window.fly.installUpdate(),
+          },
+        });
+      }),
+
+      window.fly.onUpdater("error", (err) => {
+        toast.show({
+          tone: "error",
+          title: "Error al actualizar",
+          description: err.message,
+          duration: 6000,
+        });
+      }),
+    ];
+
+    return () => unsubs.forEach((u) => u && u());
+  }, [toast]);
 
   const handleToggle = async (id) => {
     await window.fly.toggleOverlay(id);

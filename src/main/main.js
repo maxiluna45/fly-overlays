@@ -11,6 +11,7 @@ let configStore = null;
 let overlayManager = null;
 let dashboardWindow = null;
 let broadcastInterval = null;
+let sendUpdate = () => {};
 
 function createDashboardWindow() {
   dashboardWindow = new BrowserWindow({
@@ -79,15 +80,40 @@ app.whenReady().then(() => {
 
   // Auto-update (solo en build empaquetado)
   if (!isDev) {
-    autoUpdater.checkForUpdatesAndNotify().catch((err) => {
-      console.error('[updater] error:', err.message);
+    sendUpdate = (channel, payload = {}) => {
+      if (dashboardWindow && !dashboardWindow.isDestroyed()) {
+        dashboardWindow.webContents.send('updater:' + channel, payload);
+      }
+    };
+
+    // Chequear al iniciar (silencioso si no hay update)
+    autoUpdater.checkForUpdates().catch((err) => {
+      console.error('[updater] error checking:', err.message);
     });
 
-    autoUpdater.on('update-available', () => {
-      console.log('[updater] nueva versión disponible, descargando...');
+    autoUpdater.on('checking-for-update', () => {
+      sendUpdate('checking');
     });
-    autoUpdater.on('update-downloaded', () => {
-      console.log('[updater] update descargado, se instalará al cerrar');
+
+    autoUpdater.on('update-available', (info) => {
+      sendUpdate('available', { version: info.version });
+    });
+
+    autoUpdater.on('download-progress', (progress) => {
+      sendUpdate('progress', {
+        percent: progress.percent,
+        bytesPerSecond: progress.bytesPerSecond,
+        transferred: progress.transferred,
+        total: progress.total,
+      });
+    });
+
+    autoUpdater.on('update-downloaded', (info) => {
+      sendUpdate('downloaded', { version: info.version });
+    });
+
+    autoUpdater.on('error', (err) => {
+      sendUpdate('error', { message: err.message });
     });
   }
 
@@ -151,4 +177,11 @@ ipcMain.handle('preview:set', (_e, enabled) => {
   if (enabled) irsdk.enablePreview();
   else irsdk.disablePreview();
   return irsdk.isPreview();
+});
+
+ipcMain.handle('updater:install', () => {
+  autoUpdater.quitAndInstall();
+});
+ipcMain.handle('updater:check', () => {
+  autoUpdater.checkForUpdates();
 });
