@@ -12,6 +12,9 @@ let overlayManager = null;
 let dashboardWindow = null;
 let broadcastInterval = null;
 let sendUpdate = () => {};
+let updateCheckInterval = null;
+let isQuitting = false;
+let pendingUpdateMessages = [];
 let previewShowAll = false;
 let previewSelectedId = null;
 
@@ -41,6 +44,31 @@ function createDashboardWindow() {
 
   dashboardWindow.once('ready-to-show', () => dashboardWindow.show());
   dashboardWindow.on('closed', () => { dashboardWindow = null; });
+
+  // Cuando el dashboard termine de cargar, drenamos los mensajes encolados del updater
+  dashboardWindow.webContents.on('did-finish-load', () => {
+    if (pendingUpdateMessages.length > 0) {
+      for (const { channel, payload } of pendingUpdateMessages) {
+        dashboardWindow.webContents.send('updater:' + channel, payload);
+      }
+      pendingUpdateMessages = [];
+    }
+  });
+
+  // Interceptar el evento close: cuando el usuario cierra el dashboard,
+  // cerramos toda la app (incluyendo los overlays).
+  dashboardWindow.on('close', () => {
+    if (!isQuitting) {
+      isQuitting = true;
+      // Cerrar todas las ventanas de overlays
+      for (const [id, win] of overlayManager.windows.entries()) {
+        if (win && !win.isDestroyed()) {
+          win.destroy();
+        }
+      }
+      app.quit();
+    }
+  });
 
   if (!isDev) {
     dashboardWindow.setMenuBarVisibility(false);
@@ -86,7 +114,15 @@ app.whenReady().then(() => {
   if (!isDev) {
     sendUpdate = (channel, payload = {}) => {
       if (dashboardWindow && !dashboardWindow.isDestroyed()) {
-        dashboardWindow.webContents.send('updater:' + channel, payload);
+        // Si el dashboard ya cargó, enviamos directo
+        if (dashboardWindow.webContents.isLoading()) {
+          pendingUpdateMessages.push({ channel, payload });
+        } else {
+          dashboardWindow.webContents.send('updater:' + channel, payload);
+        }
+      } else {
+        // Dashboard aún no existe, encolamos
+        pendingUpdateMessages.push({ channel, payload });
       }
     };
 
@@ -95,12 +131,24 @@ app.whenReady().then(() => {
       console.error('[updater] error checking:', err.message);
     });
 
+    // Chequeo periódico cada 1 hora mientras la app está abierta
+    updateCheckInterval = setInterval(() => {
+      autoUpdater.checkForUpdates().catch((err) => {
+        console.error('[updater] error checking:', err.message);
+      });
+    }, 60 * 60 * 1000); // 1 hora
+
     autoUpdater.on('checking-for-update', () => {
       sendUpdate('checking');
     });
 
     autoUpdater.on('update-available', (info) => {
+      console.log('[updater] update available:', info.version);
       sendUpdate('available', { version: info.version });
+    });
+
+    autoUpdater.on('update-not-available', (info) => {
+      console.log('[updater] no update available. current:', info.version);
     });
 
     autoUpdater.on('download-progress', (progress) => {
@@ -150,12 +198,23 @@ app.whenReady().then(() => {
   });
 });
 
+app.on('before-quit', () => {
+  isQuitting = true;
+  // Cerrar todos los overlays que sigan abiertos
+  for (const [id, win] of overlayManager.windows.entries()) {
+    if (win && !win.isDestroyed()) {
+      win.destroy();
+    }
+  }
+});
+
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
 });
 
 app.on('window-all-closed', () => {
   if (broadcastInterval) clearInterval(broadcastInterval);
+  if (updateCheckInterval) clearInterval(updateCheckInterval);
   if (irsdk) irsdk.stop();
   if (process.platform !== 'darwin') app.quit();
 });
