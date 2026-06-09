@@ -38,7 +38,10 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: release/*.exe
+          files: |
+            release/*.exe
+            release/latest.yml
+            release/latest.yml.gz
           generate_release_notes: true
           draft: false
           prerelease: false

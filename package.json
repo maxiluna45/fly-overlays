@@ -1,6 +1,6 @@
 {
   "name": "fly-overlays",
-  "version": "0.1.0",
+  "version": "0.2.2",
   "description": "iRacing overlays built with Electron + React",
   "author": "maxiluna45",
   "main": "src/main/main.js",
@@ -9,7 +9,7 @@
     "dev:renderer": "vite",
     "dev:electron": "wait-on tcp:5173 && cross-env NODE_ENV=development electron .",
     "build:renderer": "vite build",
-    "build:electron": "npm run build:renderer && cross-env NODE_OPTIONS=--no-deprecation ELECTRON_BUILDER_CACHE=%LOCALAPPDATA%\\electron-builder\\Cache electron-builder --win portable --x64 --publish never",
+    "build:electron": "npm run build:renderer && cross-env NODE_OPTIONS=--no-deprecation ELECTRON_BUILDER_CACHE=%LOCALAPPDATA%\\electron-builder\\Cache electron-builder --win portable --x64",
     "start": "npm run build:renderer && cross-env NODE_ENV=production electron .",
     "dist": "npm run build:electron"
   },
@@ -61,6 +61,10 @@
       {
         "from": "node_modules/@irsdk-node/native",
         "to": "node_modules/@irsdk-node/native"
+      },
+      {
+        "from": "build/app-update.yml",
+        "to": "app-update.yml"
       }
     ],
     "buildDependenciesFromSource": false,

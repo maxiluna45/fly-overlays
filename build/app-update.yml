@@ -1,0 +1,4 @@
+provider: github
+owner: maxiluna45
+repo: fly-overlays
+releaseType: release

@@ -309,10 +309,24 @@ class IrsdkClient {
     const lap = this._read(telemetry, 'Lap') || 0;
     const bestLap = this._read(telemetry, 'LapBestLapTime') || 0;
     const currentLap = this._read(telemetry, 'LapCurrentLapTime') || 0;
-    const lapDeltaToBest = this._read(telemetry, 'LapDeltaToBestLap') || 0;
-    const lapDeltaRate = this._read(telemetry, 'LapDeltaToBestLap_DD') || 0;
     const lapDistPct = this._read(telemetry, 'LapDistPct') || 0;
     const sessionTime = this._read(telemetry, 'SessionTime') || 0;
+
+    // Detectar tipo de sesión del SessionInfo
+    // iRacing expone SessionType como string. Valores comunes:
+    //   "Practice", "Qualify", "Race"
+    const sessionType = (session && typeof session === 'object' && (session.SessionType || session.SessionName)) || 'Practice';
+    const isRace = /race/i.test(sessionType);
+    const isQual = /qual/i.test(sessionType);
+    const isPractice = !isRace && !isQual;
+
+    // Siempre comparamos contra tu mejor vuelta personal (LapDeltaToBestLap).
+    // Si querés cambiar esto más adelante, solo modificá este bloque.
+    let lapDeltaToBest, lapDeltaRate;
+    if (isQual || isRace || isPractice) {
+      lapDeltaToBest = this._read(telemetry, 'LapDeltaToBestLap') || 0;
+      lapDeltaRate = this._read(telemetry, 'LapDeltaToBestLap_DD') || 0;
+    }
 
     // Detectar cruces de splits y meta
     this._updateSectors({ lap, lapDistPct, currentLap, sessionTime });
@@ -323,6 +337,7 @@ class IrsdkClient {
       speed,
       onTrack: typeof speed === 'number' && speed > 0.5,
       session: session?.SessionNum,
+      sessionType,
     };
   }
 
@@ -489,14 +504,44 @@ class IrsdkClient {
           const lap = this._read(telemetry, 'Lap') || 0;
           const bestLap = this._read(telemetry, 'LapBestLapTime') || 0;
           const currentLap = this._read(telemetry, 'LapCurrentLapTime') || 0;
-          const lapDeltaToBest = this._read(telemetry, 'LapDeltaToBestLap') || 0;
-          const lapDeltaRate = this._read(telemetry, 'LapDeltaToBestLap_DD') || 0;
           const speed = this._read(telemetry, 'Speed') || 0;
           const lapDistPct = this._read(telemetry, 'LapDistPct') || 0;
+
+          // Detectar tipo de sesión del SessionInfo (cacheado)
+          let sessionType = this._cachedSessionType || 'Practice';
+          try {
+            const session = this.sdk.getSessionData();
+            if (session) {
+              sessionType = (session.SessionType || session.SessionName || 'Practice');
+              this._cachedSessionType = sessionType;
+            }
+          } catch (_) {}
+
+          const isRace = /race/i.test(sessionType);
+          const isQual = /qual/i.test(sessionType);
+
+          // Por defecto usamos LapDeltaToBestLap en todos los modos
+          // (vs tu mejor vuelta personal). El usuario puede cambiar esto
+          // modificando la lógica abajo si prefiere otra referencia.
+          let lapDeltaToBest, lapDeltaRate;
+          if (isQual) {
+            // Qualy: vs tu all-time best
+            lapDeltaToBest = this._read(telemetry, 'LapDeltaToBestLap') || 0;
+            lapDeltaRate = this._read(telemetry, 'LapDeltaToBestLap_DD') || 0;
+          } else if (isRace) {
+            // Carrera: vs tu mejor vuelta personal (más útil para mejorar tu propio ritmo)
+            lapDeltaToBest = this._read(telemetry, 'LapDeltaToBestLap') || 0;
+            lapDeltaRate = this._read(telemetry, 'LapDeltaToBestLap_DD') || 0;
+          } else {
+            // Práctica: vs tu mejor vuelta personal
+            lapDeltaToBest = this._read(telemetry, 'LapDeltaToBestLap') || 0;
+            lapDeltaRate = this._read(telemetry, 'LapDeltaToBestLap_DD') || 0;
+          }
 
           const delta = this._computeDelta({ lap, bestLap, currentLap, lapDeltaToBest, deltaRate: lapDeltaRate, speed, lapDistPct });
           this._cachedData.delta = delta;
           this._cachedData.lap = lap;
+          this._cachedData.sessionType = sessionType;
         }
       } catch (_) {}
     }
