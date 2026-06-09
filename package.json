@@ -1,0 +1,85 @@
+{
+  "name": "fly-overlays",
+  "version": "0.1.0",
+  "description": "iRacing overlays built with Electron + React",
+  "author": "maxiluna45",
+  "main": "src/main/main.js",
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "dev:renderer": "vite",
+    "dev:electron": "wait-on tcp:5173 && cross-env NODE_ENV=development electron .",
+    "build:renderer": "vite build",
+    "build:electron": "npm run build:renderer && cross-env NODE_OPTIONS=--no-deprecation ELECTRON_BUILDER_CACHE=%LOCALAPPDATA%\\electron-builder\\Cache electron-builder --win portable --x64",
+    "start": "npm run build:renderer && cross-env NODE_ENV=production electron .",
+    "dist": "npm run build:electron"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9",
+    "irsdk-node": "^4.4.0",
+    "tailwindcss": "^4.0.0",
+    "@tailwindcss/vite": "^4.0.0",
+    "@radix-ui/react-switch": "^1.1.2",
+    "@radix-ui/react-slider": "^1.2.2",
+    "@radix-ui/react-slot": "^1.1.1",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.469.0",
+    "tailwind-merge": "^2.6.0",
+    "tw-animate-css": "^1.1.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^6.0.3",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "com.flyoverlays.app",
+    "productName": "Fly Overlays",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "src/main/**/*",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "**/node_modules/@irsdk-node/native/**",
+      "**/node_modules/@irsdk-node/native-*/**"
+    ],
+    "extraResources": [
+      {
+        "from": "node_modules/@irsdk-node/native",
+        "to": "node_modules/@irsdk-node/native"
+      }
+    ],
+    "buildDependenciesFromSource": false,
+    "npmRebuild": false,
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "artifactName": "FlyOverlays-${version}-portable.exe"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "maxiluna45",
+        "repo": "fly-overlays",
+        "releaseType": "release"
+      }
+    ]
+  }
+}
