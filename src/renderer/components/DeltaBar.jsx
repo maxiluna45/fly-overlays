@@ -99,23 +99,58 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null }) {
   const isNear = Math.abs(renderDelta) < 0.05;
   const showBar = telemetry.onTrack && telemetry.connected;
 
-  const fillColor = isNear
-    ? "rgba(255,255,255,0.25)"
-    : isGaining
-      ? "rgba(52,211,153,0.95)"
-      : "rgba(248,113,113,0.95)";
+  // Intensidad del color: 0 = blanco (neutral), 1 = color saturado
+  // Transición suave: de -0.05 a 0 va de 1 (verde) a 0 (blanco),
+  // de 0 a 0.05 va de 0 (blanco) a 1 (rojo)
+  // Más allá de ±0.05, intensidad = 1
+  const absDelta = Math.abs(renderDelta);
+  let colorIntensity;
+  if (isNear) {
+    // Transición lineal de 0 a 1 en el rango [-0.05, 0.05] pero al revez
+    // para verde (negativo) y rojo (positivo)
+    colorIntensity = absDelta / 0.05;
+  } else {
+    colorIntensity = 1;
+  }
 
-  const valueColor = isNear
-    ? "var(--color-text)"
-    : isGaining
-      ? "var(--color-pos)"
-      : "var(--color-neg)";
+  // Interpola entre blanco y el color (verde o rojo) según la intensidad
+  // Usamos función para no tener que precomputar todos los rgba
+  const interpColor = (targetRgb) => {
+    // targetRgb es un array [r, g, b] del color saturado
+    // En 0, devuelve blanco con algo de opacidad (gris claro)
+    // En 1, devuelve el color saturado
+    if (colorIntensity === 0) {
+      return "rgba(232, 238, 248, 0.55)"; // blanco/gris suave
+    }
+    // Interpola de blanco al target
+    const r = Math.round(232 + (targetRgb[0] - 232) * colorIntensity);
+    const g = Math.round(238 + (targetRgb[1] - 238) * colorIntensity);
+    const b = Math.round(248 + (targetRgb[2] - 248) * colorIntensity);
+    return `rgb(${r}, ${g}, ${b})`;
+  };
 
-  const valueGlow = isNear
-    ? "0 0 12px rgba(255,255,255,0.25)"
+  // RGB de los colores (green-500 y red-600)
+  const GREEN_RGB = [34, 197, 94];
+  const RED_RGB = [220, 38, 38];
+
+  const fillColor = isGaining
+    ? (colorIntensity > 0.95
+        ? "rgba(34, 197, 94, 0.95)"
+        : interpColor(GREEN_RGB))
+    : (colorIntensity > 0.95
+        ? "rgba(220, 38, 38, 0.95)"
+        : interpColor(RED_RGB));
+
+  const valueColor = isGaining
+    ? (colorIntensity > 0.95 ? "var(--color-pos)" : interpColor(GREEN_RGB))
+    : (colorIntensity > 0.95 ? "var(--color-neg)" : interpColor(RED_RGB));
+
+  // Glow más sutil cuando no es saturado
+  const valueGlow = colorIntensity < 0.95
+    ? `0 0 12px rgba(255,255,255,0.2)`
     : isGaining
-      ? "0 0 16px rgba(52,211,153,0.65), 0 0 4px rgba(52,211,153,0.9)"
-      : "0 0 16px rgba(248,113,113,0.65), 0 0 4px rgba(248,113,113,0.9)";
+      ? "0 0 16px rgba(34,197,94,0.65), 0 0 4px rgba(34,197,94,0.9)"
+      : "0 0 16px rgba(220,38,38,0.65), 0 0 4px rgba(220,38,38,0.9)";
 
   const shouldShow =
     unlocked ||
@@ -240,9 +275,10 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null }) {
             </div>
 
             <div
-              className="rounded-md bg-ink-800/85 border border-white/10 inline-flex items-center justify-center"
+              className="rounded-md border border-white/15 inline-flex items-center justify-center"
               style={{
-                boxShadow: "0 4px 16px rgba(0,0,0,0.5), 0 0 0 1px rgba(0,0,0,0.4) inset",
+                background: "rgba(0, 0, 0, 0.85)",
+                boxShadow: "0 4px 20px rgba(0,0,0,0.7), 0 0 0 1px rgba(0,0,0,0.6) inset",
                 backdropFilter: "blur(12px)",
                 padding: "6px 16px",
                 minWidth: "110px",

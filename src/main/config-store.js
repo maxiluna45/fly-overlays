@@ -12,6 +12,14 @@ const DEFAULTS = {
       height: 120,
       opacity: 0.8,
     },
+    sectors: {
+      enabled: false,
+      x: null,
+      y: null,
+      width: 600,
+      height: 160,
+      opacity: 0.8,
+    },
   },
   hotkeys: {
     toggleLock: 'F7',

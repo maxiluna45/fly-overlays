@@ -12,6 +12,8 @@ let overlayManager = null;
 let dashboardWindow = null;
 let broadcastInterval = null;
 let sendUpdate = () => {};
+let previewShowAll = false;
+let previewSelectedId = null;
 
 function createDashboardWindow() {
   dashboardWindow = new BrowserWindow({
@@ -64,6 +66,8 @@ function broadcastTelemetry() {
     lap: irsdk.getSession().lap,
     onTrack: irsdk.isOnTrack(),
     preview: irsdk.isPreview(),
+    sectors: irsdk.getSectors(),
+    lapTimes: irsdk.getLapTimes(),
   };
   for (const [id, win] of overlayManager.windows.entries()) {
     if (overlayManager.isUnlocked(id)) continue;
@@ -157,7 +161,11 @@ app.on('window-all-closed', () => {
 });
 
 ipcMain.handle('config:get', () => configStore.get());
-ipcMain.handle('config:toggle-overlay', (_e, id) => overlayManager.toggle(id));
+ipcMain.handle('config:toggle-overlay', (_e, id) => {
+  const enabled = overlayManager.toggle(id);
+  applyPreviewMode();
+  return enabled;
+});
 ipcMain.handle('config:set-overlay', (_e, id, updates) => {
   return overlayManager.applyOverlayUpdate(id, updates);
 });
@@ -171,13 +179,62 @@ ipcMain.handle('overlay:toggle-lock', () => {
   return results;
 });
 
-ipcMain.handle('preview:toggle', () => irsdk.togglePreview());
+ipcMain.handle('sectors:get', () => {
+  if (!irsdk || typeof irsdk.getSectors !== 'function') {
+    return {
+      current: new Array(9).fill(null),
+      last: new Array(9).fill(null),
+      best: new Array(9).fill(null),
+    };
+  }
+  return irsdk.getSectors();
+});
+
+ipcMain.handle('preview:toggle', () => {
+  const enabled = irsdk.togglePreview();
+  applyPreviewMode();
+  return enabled;
+});
 ipcMain.handle('preview:get', () => irsdk.isPreview());
 ipcMain.handle('preview:set', (_e, enabled) => {
   if (enabled) irsdk.enablePreview();
   else irsdk.disablePreview();
   return irsdk.isPreview();
 });
+ipcMain.handle('preview:configure', (_e, { showAll, selectedId }) => {
+  previewShowAll = !!showAll;
+  previewSelectedId = selectedId || null;
+  applyPreviewMode();
+  return { showAll: previewShowAll, selectedId: previewSelectedId };
+});
+
+function applyPreviewMode() {
+  // Si preview está OFF, los overlays siguen su config (enabled normal)
+  // Si preview está ON:
+  //   - showAll=false: solo el overlay seleccionado se muestra
+  //   - showAll=true: todos los overlays activos se muestran
+  const preview = irsdk.isPreview();
+  if (!preview) {
+    // Restaurar estado normal: solo los enabled
+    for (const [id, ov] of Object.entries(configStore.get().overlays)) {
+      if (ov.enabled) overlayManager.show(id);
+      else overlayManager.hide(id);
+    }
+    return;
+  }
+  // Modo preview
+  if (previewShowAll) {
+    for (const [id, ov] of Object.entries(configStore.get().overlays)) {
+      if (ov.enabled) overlayManager.show(id);
+      else overlayManager.hide(id);
+    }
+  } else if (previewSelectedId) {
+    for (const [id, ov] of Object.entries(configStore.get().overlays)) {
+      if (id === previewSelectedId) overlayManager.show(id);
+      else overlayManager.hide(id);
+    }
+  }
+}
 
 ipcMain.handle('updater:install', () => {
   autoUpdater.quitAndInstall();

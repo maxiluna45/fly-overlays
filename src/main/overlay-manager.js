@@ -12,6 +12,15 @@ const REGISTRY = {
     name: 'Delta Bar',
     description: 'Diferencia vs best lap',
     entry: 'delta.html',
+    minWidth: 320,
+    minHeight: 80,
+  },
+  sectors: {
+    name: 'Sector Times',
+    description: 'Comparativa de sectores vs best',
+    entry: 'sectors.html',
+    minWidth: 320,
+    minHeight: 140,
   },
 };
 

@@ -10,10 +10,12 @@ import { OVERLAY_META } from "../overlay-catalog.js";
 import { Button } from "./ui/button.jsx";
 import { Switch } from "./ui/switch.jsx";
 import { Slider } from "./ui/slider.jsx";
+import { VerticalSlider } from "./ui/vertical-slider.jsx";
 import { useToast } from "./ui/toast.jsx";
+import { ErrorBoundary } from "./ui/error-boundary.jsx";
 
 // Por ahora solo el delta bar está implementado
-const IMPLEMENTED = ["delta"];
+const IMPLEMENTED = ["delta", "sectors"];
 
 function formatBytes(bps) {
   if (!bps || !isFinite(bps)) return "0 B";
@@ -30,6 +32,7 @@ export function Dashboard() {
   const [config, setConfig] = useState(null);
   const [selectedId, setSelectedId] = useState("delta");
   const [preview, setPreview] = useState(false);
+  const [previewShowAll, setPreviewShowAll] = useState(false);
   const [scale, setScale] = useState(0.6);
   const toast = useToast();
 
@@ -45,6 +48,12 @@ export function Dashboard() {
     const unsub = window.fly.onConfigChange((c) => setConfig(c));
     return unsub;
   }, [load]);
+
+  useEffect(() => {
+    if (window.fly?.configurePreview) {
+      window.fly.configurePreview({ showAll: previewShowAll, selectedId });
+    }
+  }, [selectedId, previewShowAll]);
 
   // Updater toasts
   useEffect(() => {
@@ -110,6 +119,12 @@ export function Dashboard() {
   const handlePreviewToggle = async () => {
     const next = await window.fly.togglePreview();
     setPreview(next);
+  };
+
+  const handlePreviewShowAllToggle = async () => {
+    const next = !previewShowAll;
+    setPreviewShowAll(next);
+    await window.fly.configurePreview({ showAll: next, selectedId });
   };
 
   const handleOpacity = async (id, value) => {
@@ -198,6 +213,7 @@ export function Dashboard() {
               }}
             />
 
+            {/* Preview del centro: SIEMPRE solo el overlay seleccionado (referencia visual estática) */}
             <div
               className="relative border-2 border-dashed border-white/10 rounded-md"
               style={{
@@ -214,12 +230,31 @@ export function Dashboard() {
                   height: ov.height || 120,
                 }}
               >
-                <DeltaBarLite />
+                {selectedId === "delta" && <DeltaBarLite />}
+                {selectedId === "sectors" && (
+                  <ErrorBoundary resetKey={selectedId}>
+                    <SectorLite />
+                  </ErrorBoundary>
+                )}
               </div>
             </div>
 
             <div className="absolute bottom-2 left-2 text-[10px] text-white/40 font-mono">
               {ov.width || 600} × {ov.height || 120} @ {Math.round(scale * 100)}%
+            </div>
+
+            {/* Slider vertical de zoom — fijo a la derecha, no se mueve con el overlay */}
+            <div
+              className="absolute right-4 top-1/2 -translate-y-1/2 z-20"
+              style={{ pointerEvents: "auto" }}
+            >
+              <VerticalSlider
+                value={Math.round(scale * 100)}
+                min={25}
+                max={150}
+                step={5}
+                onValueChange={(v) => setScale(v / 100)}
+              />
             </div>
           </div>
 
@@ -228,6 +263,16 @@ export function Dashboard() {
               {Object.values(config.overlays).filter((o) => o.enabled).length} activo
             </span>
             <div className="flex-1" />
+            <Button
+              variant={previewShowAll ? "default" : "outline"}
+              size="sm"
+              className="h-8 gap-1.5"
+              onClick={handlePreviewShowAllToggle}
+              title="Cuando Preview ON: muestra todos los overlays activos. Cuando OFF: solo el seleccionado."
+            >
+              <Layers className="size-3.5" />
+              {previewShowAll ? "Show all" : "Show selected"}
+            </Button>
             <Button
               variant={preview ? "default" : "outline"}
               size="sm"
@@ -354,7 +399,7 @@ function DeltaBarLite() {
     ? "rgba(255,255,255,0.25)"
     : isGaining
       ? "rgba(52,211,153,0.95)"
-      : "rgba(248,113,113,0.95)";
+      : "rgba(220, 38, 38, 0.95)";
 
   const valueColor = isNear
     ? "#e8eef8"
@@ -412,4 +457,136 @@ function DeltaBarLite() {
 
 function useRefSafe(v) {
   return React.useRef(v);
+}
+
+const SECTOR_TONE_LITE = {
+  empty: "rgba(255,255,255,0.06)",
+  gray: "rgba(120, 130, 145, 0.85)",
+  green: "rgba(34, 197, 94, 0.95)",
+  purple: "rgba(168, 85, 247, 0.95)",
+};
+
+const SECTOR_GLOW_LITE = {
+  empty: "none",
+  gray: "0 0 8px rgba(120,130,145,0.4)",
+  green: "0 0 10px rgba(34,197,94,0.7)",
+  purple: "0 0 10px rgba(168,85,247,0.7)",
+};
+
+function getMicroToneLite(cur, last, best) {
+  if (cur == null) return "empty";
+  if (best != null && cur <= best) return "purple";
+  if (last != null && cur < last) return "green";
+  return "gray";
+}
+
+function formatLapTimeLite(seconds) {
+  if (seconds == null || !isFinite(seconds) || seconds <= 0) return "——.———";
+  const m = Math.floor(seconds / 60);
+  const s = (seconds - m * 60).toFixed(3);
+  return `${m}:${s.padStart(6, "0")}`;
+}
+
+function sumArray(arr) {
+  return (arr || []).reduce((acc, v) => acc + (v != null && isFinite(v) ? v : 0), 0);
+}
+
+function SectorLite() {
+  const [sectors, setSectors] = useState({
+    current: new Array(24).fill(null),
+    last: new Array(24).fill(null),
+    best: new Array(24).fill(null),
+  });
+  const [lapTimes, setLapTimes] = useState({
+    currentLap: 0,
+    bestLap: 0,
+    lastLap: 0,
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.fly) return;
+    if (typeof window.fly.onTelemetry !== "function") return;
+    const unsub = window.fly.onTelemetry((data) => {
+      if (data.sectors) {
+        setSectors({
+          current: Array.isArray(data.sectors.current) ? data.sectors.current : new Array(24).fill(null),
+          last: Array.isArray(data.sectors.last) ? data.sectors.last : new Array(24).fill(null),
+          best: Array.isArray(data.sectors.best) ? data.sectors.best : new Array(24).fill(null),
+        });
+      }
+      if (data.lapTimes) {
+        setLapTimes(data.lapTimes);
+      }
+    });
+    return unsub;
+  }, []);
+
+  // Tiempos oficiales de iRacing (no suma de micro-sectores)
+  const curLap = lapTimes.currentLap;
+  const bestLap = lapTimes.bestLap;
+  const lastLap = lapTimes.lastLap;
+
+  return (
+    <div
+      className="w-full h-full rounded-2xl overflow-hidden relative"
+      style={{
+        background: "linear-gradient(180deg, rgba(20,24,32,0.85) 0%, rgba(10,13,18,0.92) 100%)",
+        border: "1px solid rgba(255,255,255,0.08)",
+        boxShadow: "0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px rgba(0,0,0,0.4) inset",
+        backdropFilter: "blur(16px)",
+      }}
+    >
+      {/* Header con tiempos */}
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1 p-3 pb-2">
+        <TimeLite label="Current" time={curLap} className="text-white" />
+        <TimeLite label="Best" time={bestLap} className="text-pos" />
+        <TimeLite label="Last" time={lastLap} className="text-white/80" />
+        <TimeLite label="Record" time={sectors.best?.some((v) => v != null) ? bestLap : null} className="text-purple-300" />
+      </div>
+
+      <div className="mx-3 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.12), transparent)" }} />
+
+      {/* Body: 3 sectores en una línea, cada uno con 8 sub */}
+      <div className="p-3 pt-2 flex gap-3">
+        {[0, 1, 2].map((sectorIdx) => {
+          const offset = sectorIdx * 8;
+          return (
+            <div key={sectorIdx} className="flex-1 flex flex-col gap-1.5">
+              <div className="text-[11px] font-bold text-white/50 text-center">S{sectorIdx + 1}</div>
+              <div className="flex gap-0.5">
+                {new Array(8).fill(0).map((_, i) => {
+                  const cur = sectors.current?.[offset + i] ?? null;
+                  const last = sectors.last?.[offset + i] ?? null;
+                  const best = sectors.best?.[offset + i] ?? null;
+                  const tone = getMicroToneLite(cur, last, best);
+                  return (
+                    <div
+                      key={i}
+                      className="flex-1 h-7 rounded-sm transition-all duration-150"
+                      style={{
+                        background: SECTOR_TONE_LITE[tone],
+                        boxShadow: SECTOR_GLOW_LITE[tone],
+                        minWidth: 0,
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function TimeLite({ label, time, className }) {
+  return (
+    <div className="flex items-baseline gap-2">
+      <span className="text-[10px] font-bold uppercase tracking-widest text-white/40 w-16">{label}</span>
+      <span className={`text-[15px] font-mono tnum font-semibold ${className}`}>
+        {time != null && time > 0 ? formatLapTimeLite(time) : "——.———"}
+      </span>
+    </div>
+  );
 }
