@@ -97,6 +97,7 @@ function broadcastTelemetry() {
     sectors: irsdk.getSectors(),
     lapTimes: irsdk.getLapTimes(),
     tyres: irsdk.getTyres(),
+    relative: irsdk.getRelative(),
   };
   for (const [id, win] of overlayManager.windows.entries()) {
     if (overlayManager.isUnlocked(id)) continue;

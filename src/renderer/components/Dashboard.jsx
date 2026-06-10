@@ -16,7 +16,7 @@ import { useToast } from "./ui/toast.jsx";
 import { ErrorBoundary } from "./ui/error-boundary.jsx";
 
 // Por ahora solo el delta bar está implementado
-const IMPLEMENTED = ["delta", "sectors", "tyres"];
+const IMPLEMENTED = ["delta", "sectors", "tyres", "relative"];
 
 function formatBytes(bps) {
   if (!bps || !isFinite(bps)) return "0 B";
@@ -767,6 +767,15 @@ const SETTING_LABELS = {
     borderRadius: "Radio de las celdas",
     pressureUnit: "Unidad de presión",
   },
+  relative: {
+    showLicense: "Mostrar licencia",
+    showIRating: "Mostrar iRating",
+    showCarNumber: "Mostrar número de auto",
+    maxRows: "Máximo de pilotos",
+    rowHeight: "Alto de fila",
+    fontSize: "Tamaño de fuente",
+    borderRadius: "Radio del contenedor",
+  },
 };
 
 function labelFor(overlayKey, k) {
@@ -839,7 +848,8 @@ function AppearanceSettings({ overlayId, overlayKey, settings = {}, onChange }) 
   const isDelta = overlayKey === "delta";
   const isSectors = overlayKey === "sectors";
   const isTyres = overlayKey === "tyres";
-  if (!isDelta && !isSectors && !isTyres) return null;
+  const isRelative = overlayKey === "relative";
+  if (!isDelta && !isSectors && !isTyres && !isRelative) return null;
 
   return (
     <div className="pt-2 border-t border-border space-y-3">
@@ -910,6 +920,18 @@ function AppearanceSettings({ overlayId, overlayKey, settings = {}, onChange }) 
           <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="cellMaxWidth" min={100} max={300} step={10} unit="px" value={settings.cellMaxWidth} onChange={onChange} />
           <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="gap" min={0} max={24} step={1} unit="px" value={settings.gap} onChange={onChange} />
           <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="borderRadius" min={0} max={24} step={1} unit="px" value={settings.borderRadius} onChange={onChange} />
+        </>
+      )}
+
+      {isRelative && (
+        <>
+          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showLicense" value={settings.showLicense} onChange={onChange} />
+          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showIRating" value={settings.showIRating} onChange={onChange} />
+          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showCarNumber" value={settings.showCarNumber} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="maxRows" min={4} max={30} step={1} unit="" value={settings.maxRows} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="rowHeight" min={20} max={48} step={2} unit="px" value={settings.rowHeight} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="fontSize" min={9} max={18} step={1} unit="px" value={settings.fontSize} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="borderRadius" min={0} max={20} step={1} unit="px" value={settings.borderRadius} onChange={onChange} />
         </>
       )}
     </div>

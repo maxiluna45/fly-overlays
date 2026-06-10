@@ -41,6 +41,15 @@ const OVERLAY_DEFAULT_SETTINGS = {
     bandGap: 2,              // separación entre bandas (en px)
     pressureUnit: "kPa",     // "kPa" o "psi"
   },
+  relative: {
+    showIRating: true,       // mostrar iRating en el tag de licencia
+    showLicense: true,       // mostrar el tag de licencia (LicLevel)
+    showCarNumber: true,     // mostrar número del auto
+    maxRows: 12,             // máximo de pilotos visibles
+    borderRadius: 8,         // radio del contenedor
+    rowHeight: 26,           // alto de cada fila
+    fontSize: 11,            // tamaño de fuente base
+  },
 };
 
 const DEFAULTS = {
@@ -71,6 +80,15 @@ const DEFAULTS = {
       height: 320,
       opacity: 0.85,
       settings: { ...OVERLAY_DEFAULT_SETTINGS.tyres },
+    },
+    relative: {
+      enabled: false,
+      x: null,
+      y: null,
+      width: 420,
+      height: 400,
+      opacity: 0.9,
+      settings: { ...OVERLAY_DEFAULT_SETTINGS.relative },
     },
   },
   hotkeys: {

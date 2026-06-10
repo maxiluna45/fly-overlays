@@ -66,6 +66,7 @@ export function SectorTimes({ previewMode = false, injectedTelemetry = null, set
     currentLap: 0,
     bestLap: 0,
     lastLap: 0,
+    lastLapInvalid: false,
   });
 
   const [unlocked, setUnlocked] = useState(false);
@@ -205,7 +206,12 @@ export function SectorTimes({ previewMode = false, injectedTelemetry = null, set
               <div className="grid grid-cols-2 gap-x-4 gap-y-1 p-3 pb-2">
                 <LapTimeRow label="Current" time={currentLap} accent="text-white" />
                 <LapTimeRow label="Best" time={bestSum} accent="" />
-                <LapTimeRow label="Last" time={lastSum} accent="text-white/80" />
+                <LapTimeRow
+                  label="Last"
+                  time={lastSum}
+                  accent="text-white/80"
+                  invalid={lapTimes.lastLapInvalid}
+                />
                 <LapTimeRow
                   label="Record"
                   time={bestSum > 0 ? bestSum : null}
@@ -239,9 +245,10 @@ export function SectorTimes({ previewMode = false, injectedTelemetry = null, set
   );
 }
 
-function LapTimeRow({ label, time, accent }) {
+function LapTimeRow({ label, time, accent, invalid = false }) {
   // Si no hay accent, usar el color de texto por defecto (blanco)
   const colorStyle = accent === "" ? { color: "var(--color-text)" } : undefined;
+  const hasTime = time != null && time > 0;
   return (
     <div className="flex items-baseline gap-2">
       <span
@@ -254,7 +261,21 @@ function LapTimeRow({ label, time, accent }) {
         className={`font-mono tnum font-semibold ${accent}`}
         style={{ ...colorStyle, fontSize: 'var(--value-font-size, 15px)' }}
       >
-        {time != null && time > 0 ? formatLapTime(time) : "——.———"}
+        {hasTime ? (
+          <>
+            {formatLapTime(time)}
+            {invalid && (
+              <span
+                className="ml-1 text-red-400"
+                title="Vuelta inválida (off-track / cut). Tiempo calculado a partir de micro-sectores."
+              >
+                *
+              </span>
+            )}
+          </>
+        ) : (
+          "——.———"
+        )}
       </span>
     </div>
   );

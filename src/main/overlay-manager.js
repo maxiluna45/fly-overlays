@@ -29,6 +29,13 @@ const REGISTRY = {
     minWidth: 400,
     minHeight: 280,
   },
+  relative: {
+    name: 'Relative',
+    description: 'Clasificación en tiempo real',
+    entry: 'relative.html',
+    minWidth: 360,
+    minHeight: 200,
+  },
 };
 
 class OverlayManager {

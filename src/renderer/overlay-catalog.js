@@ -1,4 +1,4 @@
-import { Gauge, Layers, CircleDot } from "lucide-react";
+import { Gauge, Layers, CircleDot, ListOrdered } from "lucide-react";
 
 export const OVERLAY_META = {
   delta: {
@@ -15,5 +15,10 @@ export const OVERLAY_META = {
     name: "Tyres",
     description: "Temperatura y presión de neumáticos",
     icon: CircleDot,
+  },
+  relative: {
+    name: "Relative",
+    description: "Clasificación en tiempo real",
+    icon: ListOrdered,
   },
 };

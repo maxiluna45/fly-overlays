@@ -317,12 +317,23 @@ class IrsdkClient {
     const isQual = /qual/i.test(sessionType);
     const isPractice = !isRace && !isQual;
 
-    // Siempre comparamos contra tu mejor vuelta personal (LapDeltaToBestLap).
-    // Si querés cambiar esto más adelante, solo modificá este bloque.
-    let lapDeltaToBest, lapDeltaRate;
+    // Cascada de deltas como FALLBACK. El cálculo principal (en _computeDelta)
+    // es nuestro: currentLap - bestLap * lapDistPct, siempre vs tu best real.
+    // Esta cascada solo se usa en la primera vuelta (cuando bestLap == -1)
+    // para mostrar un delta vs vuelta óptima en lo que completás la primera.
+    let lapDeltaToBest = 0;
+    let lapDeltaRate = 0;
     if (isQual || isRace || isPractice) {
-      lapDeltaToBest = this._read(telemetry, 'LapDeltaToBestLap') || 0;
-      lapDeltaRate = this._read(telemetry, 'LapDeltaToBestLap_DD') || 0;
+      if (this._read(telemetry, 'LapDeltaToBestLap_OK')) {
+        lapDeltaToBest = this._read(telemetry, 'LapDeltaToBestLap') || 0;
+        lapDeltaRate = this._read(telemetry, 'LapDeltaToBestLap_DD') || 0;
+      } else if (this._read(telemetry, 'LapDeltaToSessionBestLap_OK')) {
+        lapDeltaToBest = this._read(telemetry, 'LapDeltaToSessionBestLap') || 0;
+        lapDeltaRate = this._read(telemetry, 'LapDeltaToSessionBestLap_DD') || 0;
+      } else if (this._read(telemetry, 'LapDeltaToOptimalLap_OK')) {
+        lapDeltaToBest = this._read(telemetry, 'LapDeltaToOptimalLap') || 0;
+        lapDeltaRate = this._read(telemetry, 'LapDeltaToOptimalLap_DD') || 0;
+      }
     }
 
     // Detectar cruces de splits y meta
@@ -407,35 +418,27 @@ class IrsdkClient {
   }
 
   _computeDelta({ lap, bestLap, currentLap, lapDeltaToBest, deltaRate, speed, lapDistPct }) {
-    // Sin best lap válido → no podemos calcular delta
-    if (!bestLap || bestLap <= 0) return 0;
-
-    // ESTRATEGIA: usamos LapDeltaToBestLap_DD (rate of change, s/s) que se
-    // actualiza en cada frame con telemetría. Combinado con la velocidad
-    // del auto (m/s), podemos extrapolar el delta "live" en cualquier
-    // punto de la vuelta.
+    // ESTRATEGIA PRINCIPAL: calcular el delta nosotros mismos contra tu best
+    // personal. Fórmula exacta en cualquier punto de la vuelta:
+    //   delta = currentLap - (bestLap * lapDistPct)
     //
-    // Cuando el delta DD es -0.5 (s/s) y vamos a 50 m/s, estamos perdiendo
-    // 25 m de delta por segundo. Traducido a tiempo:
-    //   delta_actual = deltaReportado + (velocidad_normalizada * -DD)
-    //
-    // bo2 official hace exactamente esto: `Speed * -delta`.
-
-    if (deltaRate == null || speed == null) {
-      return lapDeltaToBest;
+    // ¿Por qué? iRacing reporta LapDeltaToBestLap intermitente en multi-
+    // jugador y a veces lo confunde con el delta vs vuelta óptima. Calculando
+    // nosotros mismos siempre comparamos contra tu mejor vuelta real,
+    // desde la primera hasta la última, sin depender de flags _OK.
+    if (
+      bestLap != null && bestLap > 0 &&
+      currentLap != null && currentLap > 0 &&
+      lapDistPct != null && lapDistPct > 0
+    ) {
+      return currentLap - (bestLap * lapDistPct);
     }
 
-    // Normalizar: bo2 multiplica por SpeedLocal, que está en m/s.
-    // El factor de escala no es crítico si mantenemos la convención:
-    // un delta DD de -1 s/s con speed alto = perdiendo tiempo rápido.
-    // Para hacerlo similar a bo2, multiplicamos por la velocidad normalizada.
-    const refSpeed = 30; // m/s (~108 km/h, velocidad típica de curva)
-    const speedFactor = (speed || 0) / refSpeed;
-
-    // El rate (s/s) es el cambio del delta por segundo.
-    // Aproximación: el delta "futuro" a este ritmo es deltaRate * distancia_recorrida_desde_punto_de_referencia
-    // Pero como no tenemos el punto de referencia, usamos la fórmula de bo2:
-    return (lapDeltaToBest || 0) + (deltaRate * speedFactor);
+    // FALLBACK (primera vuelta, sin best personal): usar el delta del sim
+    // (cascada Best → SessionBest → Optimal, ya armada por el caller).
+    // Si el sim tampoco tiene nada válido, devolvemos 0.
+    if (lapDeltaToBest == null) return 0;
+    return lapDeltaToBest;
   }
 
   _read(telemetry, key) {
@@ -467,27 +470,57 @@ class IrsdkClient {
     return { lap: this._cachedData.lap };
   }
 
-  // Devuelve los tiempos oficiales de iRacing (no la suma de micro-sectores)
-  // que se actualizan en vivo y son exactos.
+  // Devuelve los tiempos oficiales de iRacing.
+  // - currentLap y bestLap: vienen directo del sim (siempre disponibles).
+  // - lastLap: si iRacing lo publica (LapLastLapTime > 0) lo usamos tal cual.
+  //   Si NO lo publica (caso típico: vuelta inválida por off-track/cut donde
+  //   el sim desestima el tiempo), lo calculamos sumando los 24 micro-sectores
+  //   del último cruce de meta. En ese caso marcamos `lastLapInvalid: true`
+  //   para que la UI pueda indicarlo visualmente.
   getLapTimes() {
+    const out = { currentLap: 0, bestLap: 0, lastLap: 0, lastLapInvalid: false };
     if (this.sdk && this._connected) {
       try {
         const telemetry = this.sdk.getTelemetry();
         if (telemetry) {
-          return {
-            currentLap: this._read(telemetry, 'LapCurrentLapTime') || 0,
-            bestLap: this._read(telemetry, 'LapBestLapTime') || 0,
-            lastLap: this._read(telemetry, 'LapLastLapTime') || 0,
-          };
+          out.currentLap = this._read(telemetry, 'LapCurrentLapTime') || 0;
+          out.bestLap = this._read(telemetry, 'LapBestLapTime') || 0;
+          const lastLap = this._read(telemetry, 'LapLastLapTime') || 0;
+          if (lastLap > 0) {
+            out.lastLap = lastLap;
+          } else {
+            // iRacing no publicó lastLap (vuelta inválida). Caemos a la suma
+            // de los 24 micro-sectores del cruce de meta anterior.
+            const sum = this._sumLapFromSectors(this._lastLapMicroSectors);
+            if (sum != null && sum > 0) {
+              out.lastLap = sum;
+              out.lastLapInvalid = true;
+            }
+          }
         }
       } catch (_) {}
     }
-    return { currentLap: 0, bestLap: 0, lastLap: 0 };
+    return out;
+  }
+
+  // Suma los 24 micro-sectores de una vuelta completa. Devuelve null si falta
+  // algún sector. Solo consideramos válida una vuelta con todos los 24.
+  _sumLapFromSectors(arr) {
+    if (!arr || arr.length !== 24) return null;
+    let sum = 0;
+    for (let i = 0; i < 24; i++) {
+      const v = arr[i];
+      if (v == null || !isFinite(v) || v <= 0) return null;
+      sum += v;
+    }
+    return sum;
   }
 
   // Devuelve temperatura, presión y desgaste de los 4 neumáticos.
   // Estructura: { LF: { tempL, tempM, tempR, press, wearL, wearM, wearR }, RF, LR, RR }
   // L/M/R = zonas inner/center/outer de la banda de rodamiento
+  // Nota: las keys nativas de iRacing son LFtempCL/CM/CR (no LFtempL) y la
+  // presión es LFcoldPressure (en kPa, valor actual en vivo).
   getTyres() {
     const empty = (t = 75, p = 165, w = 0.1) => ({
       tempL: t, tempM: t, tempR: t, press: p,
@@ -499,37 +532,37 @@ class IrsdkClient {
         if (telemetry) {
           return {
             LF: {
-              tempL: this._read(telemetry, 'LFtempL') ?? null,
-              tempM: this._read(telemetry, 'LFtempM') ?? null,
-              tempR: this._read(telemetry, 'LFtempR') ?? null,
-              press: this._read(telemetry, 'LFpress') ?? null,
+              tempL: this._read(telemetry, 'LFtempCL') ?? null,
+              tempM: this._read(telemetry, 'LFtempCM') ?? null,
+              tempR: this._read(telemetry, 'LFtempCR') ?? null,
+              press: this._read(telemetry, 'LFcoldPressure') ?? null,
               wearL: this._read(telemetry, 'LFwearL') ?? null,
               wearM: this._read(telemetry, 'LFwearM') ?? null,
               wearR: this._read(telemetry, 'LFwearR') ?? null,
             },
             RF: {
-              tempL: this._read(telemetry, 'RFtempL') ?? null,
-              tempM: this._read(telemetry, 'RFtempM') ?? null,
-              tempR: this._read(telemetry, 'RFtempR') ?? null,
-              press: this._read(telemetry, 'RFpress') ?? null,
+              tempL: this._read(telemetry, 'RFtempCL') ?? null,
+              tempM: this._read(telemetry, 'RFtempCM') ?? null,
+              tempR: this._read(telemetry, 'RFtempCR') ?? null,
+              press: this._read(telemetry, 'RFcoldPressure') ?? null,
               wearL: this._read(telemetry, 'RFwearL') ?? null,
               wearM: this._read(telemetry, 'RFwearM') ?? null,
               wearR: this._read(telemetry, 'RFwearR') ?? null,
             },
             LR: {
-              tempL: this._read(telemetry, 'LRtempL') ?? null,
-              tempM: this._read(telemetry, 'LRtempM') ?? null,
-              tempR: this._read(telemetry, 'LRtempR') ?? null,
-              press: this._read(telemetry, 'LRpress') ?? null,
+              tempL: this._read(telemetry, 'LRtempCL') ?? null,
+              tempM: this._read(telemetry, 'LRtempCM') ?? null,
+              tempR: this._read(telemetry, 'LRtempCR') ?? null,
+              press: this._read(telemetry, 'LRcoldPressure') ?? null,
               wearL: this._read(telemetry, 'LRwearL') ?? null,
               wearM: this._read(telemetry, 'LRwearM') ?? null,
               wearR: this._read(telemetry, 'LRwearR') ?? null,
             },
             RR: {
-              tempL: this._read(telemetry, 'RRtempL') ?? null,
-              tempM: this._read(telemetry, 'RRtempM') ?? null,
-              tempR: this._read(telemetry, 'RRtempR') ?? null,
-              press: this._read(telemetry, 'RRpress') ?? null,
+              tempL: this._read(telemetry, 'RRtempCL') ?? null,
+              tempM: this._read(telemetry, 'RRtempCM') ?? null,
+              tempR: this._read(telemetry, 'RRtempCR') ?? null,
+              press: this._read(telemetry, 'RRcoldPressure') ?? null,
               wearL: this._read(telemetry, 'RRwearL') ?? null,
               wearM: this._read(telemetry, 'RRwearM') ?? null,
               wearR: this._read(telemetry, 'RRwearR') ?? null,
@@ -546,9 +579,338 @@ class IrsdkClient {
     };
   }
 
+  // Devuelve el relative (leaderboard) con todos los pilotos de la clase del player.
+  // Estructura:
+  //   {
+  //     playerIdx, playerCarClass, totalInClass, totalOverall,
+  //     drivers: [
+  //       { carIdx, position, classPosition, name, abbrev,
+  //         carNumber, irating, licString, licColor, licSubLevel,
+  //         carClassId, carClassShort, carClassColor,
+  //         gapToPlayer, lapCompleted, lapDistPct, onTrack, onPit, out,
+  //         estLapTime, lastLapTime, bestLapTime, isPlayer, isLeader,
+  //         isFastest, sessionFlags
+  //       }, ...
+  //     ],
+  //     session: { type, time, timeRemain, lapsTotal, lapCurrent, lapsMax }
+  //   }
+  //
+  // IMPORTANTE: en este wrapper (irsdk-node) los arrays CarIdx* a veces vienen
+  // como escalares (valor del player) en vez de arrays por piloto. Usamos
+  // _readCarIdxArray() que normaliza a array del tamaño de driverInfo.
+  getRelative() {
+    const empty = () => ({
+      playerIdx: -1,
+      playerCarClass: -1,
+      totalInClass: 0,
+      totalOverall: 0,
+      drivers: [],
+      session: { type: "Practice", time: 0, timeRemain: 0, lapsTotal: 0, lapCurrent: 0, lapsMax: 0 },
+    });
+
+    if (this.sdk && this._connected) {
+      try {
+        const telemetry = this.sdk.getTelemetry();
+        const driverInfo = this.sdk.getDriverInfo();
+        if (telemetry && driverInfo && driverInfo.Drivers && driverInfo.Drivers.length > 0) {
+          const n = driverInfo.Drivers.length;
+          const playerIdx = this._read(telemetry, 'PlayerCarIdx') ?? 0;
+          // Si por alguna razón el array viene vacío, fallback
+          const playerDriver = driverInfo.Drivers.find((d) => d.CarIdx === playerIdx) || driverInfo.Drivers[0];
+          const playerRealClass = playerDriver ? playerDriver.CarClassID : 0;
+
+          // Arrays CarIdx* (normalizados a tamaño n)
+          const positions = this._readCarIdxArray(telemetry, 'CarIdxPosition', n, playerIdx);
+          const classPositions = this._readCarIdxArray(telemetry, 'CarIdxClassPosition', n, playerIdx);
+          const lapCompleted = this._readCarIdxArray(telemetry, 'CarIdxLapCompleted', n, playerIdx);
+          const lapDistPct = this._readCarIdxArray(telemetry, 'CarIdxLapDistPct', n, playerIdx);
+          const trackSurface = this._readCarIdxArray(telemetry, 'CarIdxTrackSurface', n, playerIdx);
+          const onPitRoad = this._readCarIdxArray(telemetry, 'CarIdxOnPitRoad', n, playerIdx);
+          const estTime = this._readCarIdxArray(telemetry, 'CarIdxEstTime', n, playerIdx);
+          const lastLapTime = this._readCarIdxArray(telemetry, 'CarIdxLastLapTime', n, playerIdx);
+          const bestLapTime = this._readCarIdxArray(telemetry, 'CarIdxBestLapTime', n, playerIdx);
+          const bestLapNum = this._readCarIdxArray(telemetry, 'CarIdxBestLapNum', n, playerIdx);
+          const sessionFlagsArr = this._readCarIdxArray(telemetry, 'CarIdxSessionFlags', n, playerIdx);
+
+          // Best lap del player (clase) para detectar "fastest"
+          let bestLapInClass = Infinity;
+          for (let i = 0; i < n; i++) {
+            const d = driverInfo.Drivers[i];
+            if (d.CarClassID !== playerRealClass) continue;
+            const bl = bestLapTime[i];
+            if (bl > 0 && bl < bestLapInClass) bestLapInClass = bl;
+          }
+
+          // Construir lista de drivers de la clase del player
+          const drivers = [];
+          for (let i = 0; i < n; i++) {
+            const d = driverInfo.Drivers[i];
+            if (d.CarClassID !== playerRealClass) continue;
+            if (d.CarIsPaceCar === 1) continue;
+            const pos = positions[i] ?? 0;
+            const cpos = classPositions[i] ?? 0;
+            // Sin posición válida → no está en el mundo. No lo mostramos.
+            // Excepción: el player siempre se muestra aunque no tenga pos aún.
+            if (pos <= 0 && i !== playerIdx) continue;
+            const surface = trackSurface[i] ?? 0;
+            const onPit = !!onPitRoad[i];
+            const onTrack = surface === 2;
+            const inPitStall = surface === 1;
+            const out = surface === 0 || (pos > 0 && lapCompleted[i] === lapCompleted[playerIdx] - 10);
+
+            // Gap al player. F2Time es tiempo al leader; si no está,
+            // proyectamos desde estTime + lapCompleted.
+            const f2 = this._read(telemetry, 'CarIdxF2Time') ?? null;
+            const f2Arr = this._readCarIdxArray(telemetry, 'CarIdxF2Time', n, playerIdx);
+            let gapToPlayer = null;
+            if (Array.isArray(f2) && f2.length > 1 && f2[playerIdx] != null && f2[playerIdx] > 0) {
+              gapToPlayer = f2[i] - f2[playerIdx];
+            } else if (f2Arr[playerIdx] != null && f2Arr[playerIdx] > 0) {
+              gapToPlayer = f2Arr[i] - f2Arr[playerIdx];
+            } else {
+              const myEst = estTime[playerIdx] || 0;
+              const otherEst = estTime[i] || 0;
+              if (myEst > 0 && otherEst > 0) {
+                const myTotal = lapCompleted[playerIdx] * myEst + lapDistPct[playerIdx] * myEst;
+                const otherTotal = lapCompleted[i] * otherEst + lapDistPct[i] * otherEst;
+                gapToPlayer = otherTotal - myTotal;
+              }
+            }
+
+            drivers.push({
+              carIdx: i,
+              position: pos,
+              classPosition: cpos,
+              name: d.UserName || d.CarScreenName || "Driver",
+              abbrev: d.AbbrevName || null,
+              initials: d.Initials || null,
+              carNumber: d.CarNumber || "",
+              teamName: d.TeamName || "",
+              irating: d.IRating || 0,
+              licString: d.LicString || "",
+              licColor: d.LicColor || 0,
+              licLevel: d.LicLevel || 0,
+              licSubLevel: d.LicSubLevel || 0,
+              carClassId: d.CarClassID,
+              carClassShort: d.CarClassShortName || "",
+              carClassColor: d.CarClassColor || 0,
+              gapToPlayer,
+              lapCompleted: lapCompleted[i] || 0,
+              lapDistPct: lapDistPct[i] || 0,
+              onTrack,
+              onPit: onPit || inPitStall,
+              out,
+              estLapTime: estTime[i] || 0,
+              lastLapTime: lastLapTime[i] || 0,
+              bestLapTime: bestLapTime[i] || 0,
+              bestLapNum: bestLapNum[i] || 0,
+              isFastest: bestLapTime[i] > 0 && Math.abs(bestLapTime[i] - bestLapInClass) < 0.001,
+              sessionFlags: sessionFlagsArr[i] || 0,
+            });
+          }
+
+          // Total overall (todos los drivers con pos > 0)
+          let totalOverall = 0;
+          for (let i = 0; i < n; i++) {
+            if (positions[i] > 0) totalOverall++;
+          }
+          const totalInClass = drivers.length;
+
+          // Ordenar por classPosition ascendente
+          drivers.sort((a, b) => (a.classPosition || 99) - (b.classPosition || 99));
+
+          // Asignar classPosition correlativa dentro de los drivers visibles
+          // (porque a veces iRacing no la publica en practice)
+          for (let k = 0; k < drivers.length; k++) {
+            if (!drivers[k].classPosition) drivers[k].classPosition = k + 1;
+          }
+
+          // Info de sesión
+          const session = this._getSessionInfo();
+
+          return {
+            playerIdx,
+            playerCarClass: playerRealClass,
+            totalInClass,
+            totalOverall,
+            drivers,
+            session,
+          };
+        }
+      } catch (err) {
+        // ignore
+      }
+    }
+    return empty();
+  }
+
+  // Normaliza una variable CarIdx* a un array de tamaño n.
+  // irsdk-node a veces la expone como escalar (valor del player) en vez de
+  // array. En ese caso replicamos el escalar en el índice del player y
+  // devolvemos un array con 0/null en el resto.
+  _readCarIdxArray(telemetry, key, n, playerIdx = -1) {
+    const raw = this._read(telemetry, key);
+    if (Array.isArray(raw) && raw.length > 1) {
+      // Si el array es más corto que n, lo rellenamos
+      if (raw.length < n) {
+        const out = new Array(n).fill(0);
+        for (let i = 0; i < raw.length; i++) out[i] = raw[i];
+        return out;
+      }
+      return raw;
+    }
+    // Vino escalar: armamos array con el valor solo en el índice del player
+    const out = new Array(n).fill(0);
+    if (playerIdx >= 0 && playerIdx < n && raw != null) {
+      out[playerIdx] = raw;
+    }
+    return out;
+  }
+
+          // Construir lista de drivers de la clase del player
+          const drivers = [];
+          for (let i = 0; i < driverInfo.Drivers.length; i++) {
+            const d = driverInfo.Drivers[i];
+            if (d.CarClassID !== playerRealClass) continue;
+            if (d.CarIsPaceCar === 1) continue;
+            // Filter out AI pace car / ghost cars
+            const pos = positions[i] ?? 0;
+            const cpos = classPositions[i] ?? 0;
+            if (pos <= 0) continue;
+            const surface = trackSurface[i] ?? 0;
+            const onPit = !!onPitRoad[i];
+            // En iRacing surface: 0 = not in world, 1 = in pit stall, 2 = on track, 3 = off track
+            const onTrack = surface === 2;
+            const inPitStall = surface === 1;
+            const out = surface === 0 || (pos > 0 && lapCompleted[i] === lapCompleted[playerIdx] - 10); // heurística OUT
+
+            // Delta al player. Usamos CarIdxF2Time si está disponible (tiempo al leader),
+            // si no, proyectamos desde LapDistPct + estTime.
+            const f2 = this._read(telemetry, 'CarIdxF2Time') || [];
+            let gapToPlayer = null;
+            if (f2[i] != null && f2[playerIdx] != null && f2[playerIdx] > 0) {
+              // F2Time es tiempo al leader. Gap al player = F2Time[i] - F2Time[playerIdx].
+              // Si F2Time[i] < F2Time[playerIdx] => está adelante (gap negativo).
+              gapToPlayer = f2[i] - f2[playerIdx];
+            } else {
+              // Fallback: proyección. Estimar el tiempo de cada piloto al
+              // completar la vuelta = estTime (si está), o bestLapTime.
+              // gap = (estTime - playerEstTime) si están en la misma vuelta
+              // Si no, ajustar por la diferencia de vueltas.
+              const myEst = estTime[playerIdx] || 0;
+              const otherEst = estTime[i] || 0;
+              if (myEst > 0 && otherEst > 0) {
+                // Estimar posición por "tiempo total": laps * est + pct * est
+                const myTotal = lapCompleted[playerIdx] * myEst + lapDistPct[playerIdx] * myEst;
+                const otherTotal = lapCompleted[i] * otherEst + lapDistPct[i] * otherEst;
+                gapToPlayer = otherTotal - myTotal;
+              }
+            }
+
+            drivers.push({
+              carIdx: i,
+              position: pos,
+              classPosition: cpos,
+              name: d.UserName || d.CarScreenName || "Driver",
+              abbrev: d.AbbrevName || null,
+              initials: d.Initials || null,
+              carNumber: d.CarNumber || "",
+              teamName: d.TeamName || "",
+              irating: d.IRating || 0,
+              licString: d.LicString || "",
+              licColor: d.LicColor || 0,
+              licLevel: d.LicLevel || 0,
+              licSubLevel: d.LicSubLevel || 0,
+              carClassId: d.CarClassID,
+              carClassShort: d.CarClassShortName || "",
+              carClassColor: d.CarClassColor || 0,
+              gapToPlayer,
+              lapCompleted: lapCompleted[i] || 0,
+              lapDistPct: lapDistPct[i] || 0,
+              onTrack,
+              onPit: onPit || inPitStall,
+              out,
+              estLapTime: estTime[i] || 0,
+              lastLapTime: lastLapTime[i] || 0,
+              bestLapTime: bestLapTime[i] || 0,
+              bestLapNum: bestLapNum[i] || 0,
+              isFastest: bestLapTime[i] > 0 && Math.abs(bestLapTime[i] - bestLapInClass) < 0.001,
+              sessionFlags: sessionFlagsArr[i] || 0,
+            });
+          }
+
+          // Total overall
+          let totalOverall = 0;
+          for (let i = 0; i < positions.length; i++) {
+            if (positions[i] > 0) totalOverall++;
+          }
+          const totalInClass = drivers.length;
+
+          // Info de sesión
+          const session = this._getSessionInfo();
+
+          return {
+            playerIdx,
+            playerCarClass: playerRealClass,
+            totalInClass,
+            totalOverall,
+            drivers,
+            session,
+          };
+        }
+      } catch (err) {
+        // ignore
+      }
+    }
+
+    return empty();
+  }
+
+  _getSessionInfo() {
+    const session = {
+      type: "Practice",
+      time: 0,
+      timeRemain: 0,
+      lapsTotal: 0,
+      lapCurrent: 0,
+      lapsMax: 0,
+    };
+    if (this.sdk && this._connected) {
+      // Telemetría (no falla por YAML)
+      try {
+        const tel = this.sdk.getTelemetry();
+        if (tel) {
+          session.time = this._read(tel, 'SessionTime') || 0;
+          session.timeRemain = this._read(tel, 'SessionTimeRemain') || 0;
+          session.lapCurrent = this._read(tel, 'Lap') || 0;
+        }
+      } catch (_) {}
+      // SessionData puede tirar excepción por YAML malformado;
+      // lo aíslamos en su propio try para que la telemetría siga funcionando.
+      try {
+        const sd = this.sdk.getSessionData();
+        if (sd) {
+          session.type = sd.SessionType || "Practice";
+          session.lapsTotal = parseInt(sd.SessionLapsTotal || "0", 10) || 0;
+          if (sd.SessionTimeLimit) {
+            const t = parseFloat(sd.SessionTimeLimit);
+            if (t > 0) session.timeRemain = Math.max(0, t - session.time);
+          }
+        }
+      } catch (_) {}
+    }
+    return session;
+  }
+
   getDeltaBest() {
     // Lee directo de la memoria compartida para tener el delta en vivo
     // aunque el SDK no haya emitido nuevos frames (ej. auto frenado).
+    //
+    // Importante: NO usamos getSessionData() porque su YAML puede estar
+    // malformado (p.ej. cuando un piloto tiene "Level: 0" sin indentación
+    // correcta en un campo de driver) y eso rompe toda la lectura.
+    // LapDeltaToBestLap / LapDeltaToBestLap_DD vienen de la telemetría
+    // y son vs tu mejor vuelta personal — funciona en Practice, Qual y Race.
     if (this.sdk && this._connected) {
       try {
         const telemetry = this.sdk.getTelemetry();
@@ -559,41 +921,23 @@ class IrsdkClient {
           const speed = this._read(telemetry, 'Speed') || 0;
           const lapDistPct = this._read(telemetry, 'LapDistPct') || 0;
 
-          // Detectar tipo de sesión del SessionInfo (cacheado)
-          let sessionType = this._cachedSessionType || 'Practice';
-          try {
-            const session = this.sdk.getSessionData();
-            if (session) {
-              sessionType = (session.SessionType || session.SessionName || 'Practice');
-              this._cachedSessionType = sessionType;
-            }
-          } catch (_) {}
-
-          const isRace = /race/i.test(sessionType);
-          const isQual = /qual/i.test(sessionType);
-
-          // Por defecto usamos LapDeltaToBestLap en todos los modos
-          // (vs tu mejor vuelta personal). El usuario puede cambiar esto
-          // modificando la lógica abajo si prefiere otra referencia.
-          let lapDeltaToBest, lapDeltaRate;
-          if (isQual) {
-            // Qualy: vs tu all-time best
+          // Misma cascada que en _updateCache: Best → SessionBest → Optimal
+          let lapDeltaToBest = 0;
+          let lapDeltaRate = 0;
+          if (this._read(telemetry, 'LapDeltaToBestLap_OK')) {
             lapDeltaToBest = this._read(telemetry, 'LapDeltaToBestLap') || 0;
             lapDeltaRate = this._read(telemetry, 'LapDeltaToBestLap_DD') || 0;
-          } else if (isRace) {
-            // Carrera: vs tu mejor vuelta personal (más útil para mejorar tu propio ritmo)
-            lapDeltaToBest = this._read(telemetry, 'LapDeltaToBestLap') || 0;
-            lapDeltaRate = this._read(telemetry, 'LapDeltaToBestLap_DD') || 0;
-          } else {
-            // Práctica: vs tu mejor vuelta personal
-            lapDeltaToBest = this._read(telemetry, 'LapDeltaToBestLap') || 0;
-            lapDeltaRate = this._read(telemetry, 'LapDeltaToBestLap_DD') || 0;
+          } else if (this._read(telemetry, 'LapDeltaToSessionBestLap_OK')) {
+            lapDeltaToBest = this._read(telemetry, 'LapDeltaToSessionBestLap') || 0;
+            lapDeltaRate = this._read(telemetry, 'LapDeltaToSessionBestLap_DD') || 0;
+          } else if (this._read(telemetry, 'LapDeltaToOptimalLap_OK')) {
+            lapDeltaToBest = this._read(telemetry, 'LapDeltaToOptimalLap') || 0;
+            lapDeltaRate = this._read(telemetry, 'LapDeltaToOptimalLap_DD') || 0;
           }
 
           const delta = this._computeDelta({ lap, bestLap, currentLap, lapDeltaToBest, deltaRate: lapDeltaRate, speed, lapDistPct });
           this._cachedData.delta = delta;
           this._cachedData.lap = lap;
-          this._cachedData.sessionType = sessionType;
         }
       } catch (_) {}
     }
