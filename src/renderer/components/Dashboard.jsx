@@ -169,11 +169,11 @@ export function Dashboard() {
       {/* HEADER */}
       <header className="h-12 border-b border-border bg-card/40 flex items-center px-4 gap-3 shrink-0">
         <div className="flex items-center gap-2">
-          <Gauge className="size-4 text-primary" />
+          <img src="./logo.png" alt="Fly Overlays" className="h-7 w-7 rounded-md object-contain" />
           <span className="font-bold tracking-tight text-sm">FLY OVERLAYS</span>
         </div>
         <div className="flex-1" />
-        <span className="text-xs text-muted-foreground">v0.1.0</span>
+        <span className="text-xs text-muted-foreground">v{APP_VERSION}</span>
       </header>
 
       {/* MAIN */}
