@@ -115,20 +115,33 @@ class OverlayManager {
 
   _injectSettings(win, settings = {}) {
     if (win.isDestroyed()) return;
-    const setProp = (k, v) => `s.setProperty('${k}','${v}');`;
-    const lines = [];
-    if (settings.barHeight != null) lines.push(setProp('--bar-height', settings.barHeight + 'px'));
-    if (settings.valueFontSize != null) lines.push(setProp('--value-font-size', settings.valueFontSize + 'px'));
-    if (settings.valueMinWidth != null) lines.push(setProp('--value-min-width', settings.valueMinWidth + 'px'));
-    if (settings.valuePaddingX != null) lines.push(setProp('--value-padding-x', settings.valuePaddingX + 'px'));
-    if (settings.valuePaddingY != null) lines.push(setProp('--value-padding-y', settings.valuePaddingY + 'px'));
-    if (settings.gap != null) lines.push(setProp('--overlay-gap', settings.gap + 'px'));
-    if (settings.barWidthPercent != null) lines.push(setProp('--bar-width', settings.barWidthPercent + '%'));
-    if (settings.headerFontSize != null) lines.push(setProp('--header-font-size', settings.headerFontSize + 'px'));
-    if (settings.timeColumnWidth != null) lines.push(setProp('--time-col-width', settings.timeColumnWidth + 'px'));
-    if (settings.subBarHeight != null) lines.push(setProp('--sub-bar-height', settings.subBarHeight + 'px'));
-    const js = `(function(){const s=document.documentElement.style;${lines.join('')}})();`;
-    win.webContents.executeJavaScript(js).catch(() => {});
+    const decls = [];
+    if (settings.barHeight != null) decls.push(`--bar-height: ${settings.barHeight}px`);
+    if (settings.valueFontSize != null) decls.push(`--value-font-size: ${settings.valueFontSize}px`);
+    if (settings.valueMinWidth != null) decls.push(`--value-min-width: ${settings.valueMinWidth}px`);
+    if (settings.valuePaddingX != null) decls.push(`--value-padding-x: ${settings.valuePaddingX}px`);
+    if (settings.valuePaddingY != null) decls.push(`--value-padding-y: ${settings.valuePaddingY}px`);
+    if (settings.gap != null) decls.push(`--overlay-gap: ${settings.gap}px`);
+    if (settings.barWidthPercent != null) decls.push(`--bar-width: ${settings.barWidthPercent}%`);
+    if (settings.headerFontSize != null) decls.push(`--header-font-size: ${settings.headerFontSize}px`);
+    if (settings.timeColumnWidth != null) decls.push(`--time-col-width: ${settings.timeColumnWidth}px`);
+    if (settings.subBarHeight != null) decls.push(`--sub-bar-height: ${settings.subBarHeight}px`);
+    if (decls.length === 0) return;
+    const css = decls.join('; ');
+    const js = `
+      (function() {
+        let el = document.getElementById('__fly_overlay_settings__');
+        if (!el) {
+          el = document.createElement('style');
+          el.id = '__fly_overlay_settings__';
+          document.head.appendChild(el);
+        }
+        el.textContent = ':root { ${css} }';
+      })();
+    `;
+    win.webContents.executeJavaScript(js).catch((err) => {
+      console.error('[overlay-manager] _injectSettings failed:', err, 'css:', css);
+    });
   }
 
   getWindow(id) {
@@ -188,29 +201,9 @@ class OverlayManager {
       win.loadFile(path.join(__dirname, `../../dist/${meta.entry}`));
     }
 
-    // Inyectar settings como CSS vars + data-attr al <body> para que el componente los lea
+    // Inyectar settings como CSS vars al cargar la ventana
     const applySettingsToDom = () => {
-      if (win.isDestroyed()) return;
-      const settings = ov.settings || {};
-      const cssVars = [];
-      if (settings.barHeight != null) cssVars.push(`--bar-height: ${settings.barHeight}px`);
-      if (settings.valueFontSize != null) cssVars.push(`--value-font-size: ${settings.valueFontSize}px`);
-      if (settings.valueMinWidth != null) cssVars.push(`--value-min-width: ${settings.valueMinWidth}px`);
-      if (settings.valuePaddingX != null) cssVars.push(`--value-padding-x: ${settings.valuePaddingX}px`);
-      if (settings.valuePaddingY != null) cssVars.push(`--value-padding-y: ${settings.valuePaddingY}px`);
-      if (settings.gap != null) cssVars.push(`--overlay-gap: ${settings.gap}px`);
-      if (settings.barWidthPercent != null) cssVars.push(`--bar-width: ${settings.barWidthPercent}%`);
-      if (settings.headerFontSize != null) cssVars.push(`--header-font-size: ${settings.headerFontSize}px`);
-      if (settings.timeColumnWidth != null) cssVars.push(`--time-col-width: ${settings.timeColumnWidth}px`);
-      if (settings.subBarHeight != null) cssVars.push(`--sub-bar-height: ${settings.subBarHeight}px`);
-      const css = cssVars.join('; ');
-      const js = `
-        (function() {
-          const s = document.documentElement.style;
-          ${cssVars.map(v => `s.setProperty('${v.split(':')[0].trim()}', '${v.split(':').slice(1).join(':').trim()}');`).join('\n          ')}
-        })();
-      `;
-      win.webContents.executeJavaScript(js).catch(() => {});
+      this._injectSettings(win, ov.settings);
     };
     win.webContents.on('did-finish-load', applySettingsToDom);
     // Persistir bounds en cada move/resize (debounced)

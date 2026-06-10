@@ -10,6 +10,7 @@ import { OVERLAY_META } from "../overlay-catalog.js";
 import { Button } from "./ui/button.jsx";
 import { Switch } from "./ui/switch.jsx";
 import { Slider } from "./ui/slider.jsx";
+const MemoSlider = React.memo(Slider);
 import { VerticalSlider } from "./ui/vertical-slider.jsx";
 import { useToast } from "./ui/toast.jsx";
 import { ErrorBoundary } from "./ui/error-boundary.jsx";
@@ -135,16 +136,16 @@ export function Dashboard() {
   const handleSettingChange = async (id, key, value) => {
     const ov = config.overlays[id] || {};
     const prevSettings = ov.settings || {};
-    await window.fly.setOverlay(id, {
-      settings: { ...prevSettings, [key]: value },
-    });
+    const nextSettings = { ...prevSettings, [key]: value };
+    // Update optimista local para que la UI reaccione al instante
     setConfig((c) => c ? {
       ...c,
       overlays: {
         ...c.overlays,
-        [id]: { ...c.overlays[id], settings: { ...prevSettings, [key]: value } },
+        [id]: { ...c.overlays[id], settings: nextSettings },
       },
     } : c);
+    await window.fly.setOverlay(id, { settings: nextSettings });
   };
 
   const handleReset = async (id) => {
@@ -361,7 +362,7 @@ export function Dashboard() {
             {/* APPEARANCE SETTINGS */}
             <AppearanceSettings
               overlayId={selectedId}
-              overlayType={meta?.entry}
+              overlayKey={selectedId}
               settings={ov.settings || {}}
               onChange={handleSettingChange}
             />
@@ -615,49 +616,83 @@ function TimeLite({ label, time, className }) {
 }
 
 // === APPEARANCE SETTINGS (per overlay) ===
-function AppearanceSettings({ overlayId, overlayType, settings = {}, onChange }) {
-  const isDelta = overlayType === "delta.html";
-  const isSectors = overlayType === "sectors.html";
-  if (!isDelta && !isSectors) return null;
 
-  const Field = ({ label, suffix, children }) => (
-    <div className="space-y-1">
-      <div className="flex items-center justify-between">
-        <span className="text-[11px] text-muted-foreground">{label}</span>
-        <span className="text-[10px] font-mono text-muted-foreground">{suffix}</span>
-      </div>
-      {children}
+const SettingField = ({ label, suffix, children }) => (
+  <div className="space-y-1">
+    <div className="flex items-center justify-between">
+      <span className="text-[11px] text-muted-foreground">{label}</span>
+      <span className="text-[10px] font-mono text-muted-foreground">{suffix}</span>
+    </div>
+    {children}
+  </div>
+);
+
+// NumSliderField es un componente independiente (definido fuera de AppearanceSettings)
+// y memorizado con React.memo, así no se re-renderiza cuando cambia otro setting.
+// Solo se resyncea con el `value` externo cuando cambia el `initKey` (overlayId+k)
+// o cuando `value` cambia por algo externo a este control.
+const NumSliderField = React.memo(function NumSliderField({ overlayId, k, min, max, step, unit, value, onChange }) {
+  const initial = value != null ? value : min;
+  const [local, setLocal] = useState(initial);
+  const lastInitKey = React.useRef(`${overlayId}::${k}`);
+  const lastValueRef = React.useRef(value);
+  const initKey = `${overlayId}::${k}`;
+  if (lastInitKey.current !== initKey) {
+    lastInitKey.current = initKey;
+    setLocal(initial);
+    lastValueRef.current = value;
+  } else if (value !== lastValueRef.current) {
+    lastValueRef.current = value;
+    setLocal(initial);
+  }
+  return (
+    <SettingField label={k} suffix={`${local}${unit || ""}`}>
+      <MemoSlider
+        value={[local]}
+        min={min}
+        max={max}
+        step={step || 1}
+        onValueChange={(arr) => {
+          setLocal(arr[0]);
+          onChange(overlayId, k, arr[0]);
+        }}
+      />
+    </SettingField>
+  );
+});
+
+const ToggleField = React.memo(function ToggleField({ overlayId, k, label, value, onChange }) {
+  const initial = value !== false;
+  const [local, setLocal] = useState(initial);
+  const lastInitKey = React.useRef(`${overlayId}::${k}`);
+  const lastValueRef = React.useRef(value);
+  const initKey = `${overlayId}::${k}`;
+  if (lastInitKey.current !== initKey) {
+    lastInitKey.current = initKey;
+    setLocal(initial);
+    lastValueRef.current = value;
+  } else if (value !== lastValueRef.current) {
+    lastValueRef.current = value;
+    setLocal(initial);
+  }
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-[11px] text-muted-foreground">{label}</span>
+      <Switch
+        checked={local}
+        onCheckedChange={(val) => {
+          setLocal(val);
+          onChange(overlayId, k, val);
+        }}
+      />
     </div>
   );
+});
 
-  const NumSlider = ({ k, min, max, step = 1, unit = "" }) => {
-    const v = settings[k];
-    const display = v != null ? v : "—";
-    return (
-      <Field label={k} suffix={`${display}${unit}`}>
-        <Slider
-          value={[v != null ? v : min]}
-          min={min}
-          max={max}
-          step={step}
-          onValueChange={(arr) => onChange(overlayId, k, arr[0])}
-        />
-      </Field>
-    );
-  };
-
-  const Toggle = ({ k, label }) => {
-    const v = settings[k];
-    return (
-      <div className="flex items-center justify-between">
-        <span className="text-[11px] text-muted-foreground">{label}</span>
-        <Switch
-          checked={v !== false}
-          onCheckedChange={(val) => onChange(overlayId, k, val)}
-        />
-      </div>
-    );
-  };
+function AppearanceSettings({ overlayId, overlayKey, settings = {}, onChange }) {
+  const isDelta = overlayKey === "delta";
+  const isSectors = overlayKey === "sectors";
+  if (!isDelta && !isSectors) return null;
 
   return (
     <div className="pt-2 border-t border-border space-y-3">
@@ -667,26 +702,26 @@ function AppearanceSettings({ overlayId, overlayType, settings = {}, onChange })
 
       {isDelta && (
         <>
-          <Toggle k="showBar" label="Mostrar barra" />
-          <Toggle k="showNumber" label="Mostrar número" />
-          <NumSlider k="barHeight" min={4} max={32} step={1} unit="px" />
-          <NumSlider k="barWidthPercent" min={50} max={100} step={1} unit="%" />
-          <NumSlider k="valueFontSize" min={14} max={56} step={1} unit="px" />
-          <NumSlider k="valueMinWidth" min={60} max={200} step={2} unit="px" />
-          <NumSlider k="valuePaddingX" min={4} max={32} step={1} unit="px" />
-          <NumSlider k="valuePaddingY" min={2} max={20} step={1} unit="px" />
-          <NumSlider k="gap" min={0} max={32} step={1} unit="px" />
+          <ToggleField overlayId={overlayId} k="showBar" label="Mostrar barra" value={settings.showBar} onChange={onChange} />
+          <ToggleField overlayId={overlayId} k="showNumber" label="Mostrar número" value={settings.showNumber} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} k="barHeight" min={4} max={32} step={1} unit="px" value={settings.barHeight} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} k="barWidthPercent" min={50} max={100} step={1} unit="%" value={settings.barWidthPercent} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} k="valueFontSize" min={14} max={56} step={1} unit="px" value={settings.valueFontSize} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} k="valueMinWidth" min={60} max={200} step={2} unit="px" value={settings.valueMinWidth} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} k="valuePaddingX" min={4} max={32} step={1} unit="px" value={settings.valuePaddingX} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} k="valuePaddingY" min={2} max={20} step={1} unit="px" value={settings.valuePaddingY} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} k="gap" min={0} max={32} step={1} unit="px" value={settings.gap} onChange={onChange} />
         </>
       )}
 
       {isSectors && (
         <>
-          <Toggle k="showHeader" label="Mostrar header" />
-          <Toggle k="showSubBars" label="Mostrar sub-sectores" />
-          <NumSlider k="headerFontSize" min={8} max={18} step={1} unit="px" />
-          <NumSlider k="valueFontSize" min={10} max={28} step={1} unit="px" />
-          <NumSlider k="timeColumnWidth" min={32} max={120} step={2} unit="px" />
-          <NumSlider k="subBarHeight" min={12} max={64} step={1} unit="px" />
+          <ToggleField overlayId={overlayId} k="showHeader" label="Mostrar header" value={settings.showHeader} onChange={onChange} />
+          <ToggleField overlayId={overlayId} k="showSubBars" label="Mostrar sub-sectores" value={settings.showSubBars} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} k="headerFontSize" min={8} max={18} step={1} unit="px" value={settings.headerFontSize} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} k="valueFontSize" min={10} max={28} step={1} unit="px" value={settings.valueFontSize} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} k="timeColumnWidth" min={32} max={120} step={2} unit="px" value={settings.timeColumnWidth} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} k="subBarHeight" min={12} max={64} step={1} unit="px" value={settings.subBarHeight} onChange={onChange} />
         </>
       )}
     </div>
