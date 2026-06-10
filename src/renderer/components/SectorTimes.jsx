@@ -40,7 +40,17 @@ function sumOf(arr) {
   return arr.reduce((acc, v) => acc + (v != null && isFinite(v) ? v : 0), 0);
 }
 
-export function SectorTimes({ previewMode = false, injectedTelemetry = null }) {
+export function SectorTimes({ previewMode = false, injectedTelemetry = null, settings = {} }) {
+  // Settings con defaults
+  const cfg = {
+    headerFontSize: 10,
+    valueFontSize: 15,
+    timeColumnWidth: 64,
+    subBarHeight: 28,
+    showHeader: true,
+    showSubBars: true,
+    ...settings,
+  };
   const [telemetry, setTelemetry] = useState({
     connected: false,
     onTrack: false,
@@ -213,16 +223,18 @@ export function SectorTimes({ previewMode = false, injectedTelemetry = null }) {
             }}
           >
             {/* HEADER con tiempos */}
-            <div className="grid grid-cols-2 gap-x-4 gap-y-1 p-3 pb-2">
-              <LapTimeRow label="Current" time={currentLap} accent="text-white" />
-              <LapTimeRow label="Best" time={bestSum} accent="" />
-              <LapTimeRow label="Last" time={lastSum} accent="text-white/80" />
-              <LapTimeRow
-                label="Record"
-                time={bestSum > 0 ? bestSum : null}
-                accent="text-purple-300"
-              />
-            </div>
+            {cfg.showHeader && (
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 p-3 pb-2">
+                <LapTimeRow label="Current" time={currentLap} accent="text-white" />
+                <LapTimeRow label="Best" time={bestSum} accent="" />
+                <LapTimeRow label="Last" time={lastSum} accent="text-white/80" />
+                <LapTimeRow
+                  label="Record"
+                  time={bestSum > 0 ? bestSum : null}
+                  accent="text-purple-300"
+                />
+              </div>
+            )}
 
             {/* Separador sutil */}
             <div
@@ -231,7 +243,8 @@ export function SectorTimes({ previewMode = false, injectedTelemetry = null }) {
             />
 
             {/* BODY: 3 sectores en una sola línea, cada uno con 8 subsecciones */}
-            <div className="p-3 pt-2 flex gap-3">
+            {cfg.showSubBars && (
+              <div className="p-3 pt-2 flex gap-3">
               {[0, 1, 2].map((sectorIdx) => (
                 <SectorColumn
                   key={sectorIdx}
@@ -239,7 +252,8 @@ export function SectorTimes({ previewMode = false, injectedTelemetry = null }) {
                   sectors={sectors}
                 />
               ))}
-            </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -252,12 +266,15 @@ function LapTimeRow({ label, time, accent }) {
   const colorStyle = accent === "" ? { color: "var(--color-text)" } : undefined;
   return (
     <div className="flex items-baseline gap-2">
-      <span className="text-[10px] font-bold uppercase tracking-widest text-white/40 w-16">
+      <span
+        className="font-bold uppercase tracking-widest text-white/40"
+        style={{ fontSize: 'var(--header-font-size, 10px)', width: 'var(--time-col-width, 64px)' }}
+      >
         {label}
       </span>
       <span
-        className={`text-[15px] font-mono tnum font-semibold ${accent}`}
-        style={colorStyle}
+        className={`font-mono tnum font-semibold ${accent}`}
+        style={{ ...colorStyle, fontSize: 'var(--value-font-size, 15px)' }}
       >
         {time != null && time > 0 ? formatLapTime(time) : "——.———"}
       </span>
@@ -285,8 +302,9 @@ function SectorColumn({ index, sectors }) {
           return (
             <div
               key={i}
-              className="flex-1 h-7 rounded-sm transition-all duration-150"
+              className="flex-1 rounded-sm transition-all duration-150"
               style={{
+                height: 'var(--sub-bar-height, 28px)',
                 background: TONE_COLORS[tone],
                 boxShadow: TONE_GLOW[tone],
                 minWidth: 0,

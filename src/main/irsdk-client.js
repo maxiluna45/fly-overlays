@@ -22,11 +22,12 @@ class IrsdkClient {
     // === Sector tracking ===
     // 3 sectores principales, cada uno dividido en 8 micro-sectores
     // 3 × 8 = 24 micro-sectores totales
-    // Splits distribuidos cada 1/24 de la vuelta (~4.17% cada uno)
-    // S1: 4.17% al 29.17% (8 sub-secs)
-    // S2: 33.33% al 62.50% (8 sub-secs)
-    // S3: 66.67% al 95.83% (8 sub-secs)
-    this._splitPcts = Array.from({ length: 23 }, (_, i) => (i + 1) / 24);
+    // Splits distribuidos cada 1/25 de la vuelta (4% cada uno)
+    // El último split (24/25 = 96%) marca el fin del micro-sector 23.
+    // S1: 4% al 28% (8 sub-secs)
+    // S2: 32% al 60% (8 sub-secs)
+    // S3: 64% al 96% (8 sub-secs)
+    this._splitPcts = Array.from({ length: 24 }, (_, i) => (i + 1) / 25);
     this._lastLapPct = 0;        // LapDistPct del frame anterior (para detectar cruces)
     this._lastSplitTime = 0;     // currentLap al cruzar el último split
     this._currentMicroSectors = new Array(24).fill(null); // 3 micro × 3 sectores
@@ -36,12 +37,8 @@ class IrsdkClient {
     this._lastLapNumberForSectors = null;
     // Estado para el cálculo de delta en vivo
     this._lastSplitDelta = null;
-    this._lastSplitTime = 0;
     this._lastDeltaCurrentLap = 0;
-    // 24 splits para dividir la vuelta en 24 micro-sectores
-    // Distribuidos: 7 en S1 (0-33%), 8 en S2 (33-66%), 8 en S3 (66-100%)
-    // ...es decir, 7 splits intermedios, uno cada 1/8 de la vuelta
-    this._splitPcts = Array.from({ length: 23 }, (_, i) => (i + 1) / 24);
+    // _splitPcts ya fue inicializado arriba (24 splits cada 1/25)
   }
 
   async start() {
@@ -349,14 +346,8 @@ class IrsdkClient {
     this._lastLapNumberForSectors = lap;
 
     if (lapChanged) {
-      // El micro-sector 8 es el último (entre el split 88.8% y la meta)
-      // Lo llenamos siempre que tengamos un valor razonable
-      const lastMicroTime = currentLap - this._lastSplitTime;
-      if (lastMicroTime > 0 && lastMicroTime < 300) {
-        this._currentMicroSectors[8] = lastMicroTime;
-      }
-
-      // Guardamos la última vuelta completa
+      // Guardamos la última vuelta completa (los 24 micro-sectores ya se
+      // llenaron por cruce de splits; el último se llena al cruzar 24/25)
       this._lastLapMicroSectors = [...this._currentMicroSectors];
 
       // Actualizamos bestLapMicroSectors si alguno es record
@@ -373,7 +364,7 @@ class IrsdkClient {
       this._currentMicroSectors = new Array(24).fill(null);
     }
 
-    // Detección de cruce de splits (6 intermedios)
+    // Detección de cruce de splits (24 intermedios, 1/25, 2/25, …, 24/25)
     for (let i = 0; i < this._splitPcts.length; i++) {
       const splitPct = this._splitPcts[i];
       if (

@@ -2,15 +2,38 @@ const { app } = require('electron');
 const fs = require('fs');
 const path = require('path');
 
+const OVERLAY_DEFAULT_SETTINGS = {
+  delta: {
+    barHeight: 12,         // alto de la barra horizontal (en pixels)
+    barWidthPercent: 92,    // % del ancho del overlay que ocupa la barra
+    valueFontSize: 28,      // tamaño del número debajo de la barra
+    valueMinWidth: 110,     // ancho mínimo del contenedor del número
+    valuePaddingX: 16,      // padding horizontal del número
+    valuePaddingY: 6,       // padding vertical del número
+    gap: 12,                // espacio entre la barra y el número
+    showNumber: true,       // mostrar/ocultar el número
+    showBar: true,          // mostrar/ocultar la barra
+  },
+  sectors: {
+    headerFontSize: 10,     // tamaño de "CURRENT" / "BEST" / etc.
+    valueFontSize: 15,      // tamaño de los tiempos (1:30.234)
+    timeColumnWidth: 64,     // ancho de la columna de label
+    subBarHeight: 28,       // alto de cada sub-barra de micro-sector
+    showHeader: true,        // mostrar/ocultar el header de tiempos
+    showSubBars: true,       // mostrar/ocultar los cuadritos de sub-sectores
+  },
+};
+
 const DEFAULTS = {
   overlays: {
     delta: {
       enabled: true,
-      x: null, // null = auto-center
+      x: null,
       y: null,
       width: 600,
       height: 120,
       opacity: 0.8,
+      settings: { ...OVERLAY_DEFAULT_SETTINGS.delta },
     },
     sectors: {
       enabled: false,
@@ -19,6 +42,7 @@ const DEFAULTS = {
       width: 600,
       height: 160,
       opacity: 0.8,
+      settings: { ...OVERLAY_DEFAULT_SETTINGS.sectors },
     },
   },
   hotkeys: {

@@ -106,8 +106,29 @@ class OverlayManager {
           height: updates.height ?? win.getBounds().height,
         });
       }
+      if (updates.settings) {
+        this._injectSettings(win, this.config.getOverlay(id).settings);
+      }
     }
     return this.config.getOverlay(id);
+  }
+
+  _injectSettings(win, settings = {}) {
+    if (win.isDestroyed()) return;
+    const setProp = (k, v) => `s.setProperty('${k}','${v}');`;
+    const lines = [];
+    if (settings.barHeight != null) lines.push(setProp('--bar-height', settings.barHeight + 'px'));
+    if (settings.valueFontSize != null) lines.push(setProp('--value-font-size', settings.valueFontSize + 'px'));
+    if (settings.valueMinWidth != null) lines.push(setProp('--value-min-width', settings.valueMinWidth + 'px'));
+    if (settings.valuePaddingX != null) lines.push(setProp('--value-padding-x', settings.valuePaddingX + 'px'));
+    if (settings.valuePaddingY != null) lines.push(setProp('--value-padding-y', settings.valuePaddingY + 'px'));
+    if (settings.gap != null) lines.push(setProp('--overlay-gap', settings.gap + 'px'));
+    if (settings.barWidthPercent != null) lines.push(setProp('--bar-width', settings.barWidthPercent + '%'));
+    if (settings.headerFontSize != null) lines.push(setProp('--header-font-size', settings.headerFontSize + 'px'));
+    if (settings.timeColumnWidth != null) lines.push(setProp('--time-col-width', settings.timeColumnWidth + 'px'));
+    if (settings.subBarHeight != null) lines.push(setProp('--sub-bar-height', settings.subBarHeight + 'px'));
+    const js = `(function(){const s=document.documentElement.style;${lines.join('')}})();`;
+    win.webContents.executeJavaScript(js).catch(() => {});
   }
 
   getWindow(id) {
@@ -167,6 +188,31 @@ class OverlayManager {
       win.loadFile(path.join(__dirname, `../../dist/${meta.entry}`));
     }
 
+    // Inyectar settings como CSS vars + data-attr al <body> para que el componente los lea
+    const applySettingsToDom = () => {
+      if (win.isDestroyed()) return;
+      const settings = ov.settings || {};
+      const cssVars = [];
+      if (settings.barHeight != null) cssVars.push(`--bar-height: ${settings.barHeight}px`);
+      if (settings.valueFontSize != null) cssVars.push(`--value-font-size: ${settings.valueFontSize}px`);
+      if (settings.valueMinWidth != null) cssVars.push(`--value-min-width: ${settings.valueMinWidth}px`);
+      if (settings.valuePaddingX != null) cssVars.push(`--value-padding-x: ${settings.valuePaddingX}px`);
+      if (settings.valuePaddingY != null) cssVars.push(`--value-padding-y: ${settings.valuePaddingY}px`);
+      if (settings.gap != null) cssVars.push(`--overlay-gap: ${settings.gap}px`);
+      if (settings.barWidthPercent != null) cssVars.push(`--bar-width: ${settings.barWidthPercent}%`);
+      if (settings.headerFontSize != null) cssVars.push(`--header-font-size: ${settings.headerFontSize}px`);
+      if (settings.timeColumnWidth != null) cssVars.push(`--time-col-width: ${settings.timeColumnWidth}px`);
+      if (settings.subBarHeight != null) cssVars.push(`--sub-bar-height: ${settings.subBarHeight}px`);
+      const css = cssVars.join('; ');
+      const js = `
+        (function() {
+          const s = document.documentElement.style;
+          ${cssVars.map(v => `s.setProperty('${v.split(':')[0].trim()}', '${v.split(':').slice(1).join(':').trim()}');`).join('\n          ')}
+        })();
+      `;
+      win.webContents.executeJavaScript(js).catch(() => {});
+    };
+    win.webContents.on('did-finish-load', applySettingsToDom);
     // Persistir bounds en cada move/resize (debounced)
     let saveTimer = null;
     const saveBounds = () => {

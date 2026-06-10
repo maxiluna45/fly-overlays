@@ -9,7 +9,20 @@ function formatDelta(seconds) {
   return `${sign}${Math.abs(seconds).toFixed(2)}`;
 }
 
-export function DeltaBar({ previewMode = false, injectedTelemetry = null }) {
+export function DeltaBar({ previewMode = false, injectedTelemetry = null, settings = {} }) {
+  // Settings con defaults (vienen de config o se sobreescriben)
+  const cfg = {
+    barHeight: 12,
+    barWidthPercent: 92,
+    valueFontSize: 28,
+    valueMinWidth: 110,
+    valuePaddingX: 16,
+    valuePaddingY: 6,
+    gap: 12,
+    showNumber: true,
+    showBar: true,
+    ...settings,
+  };
   const [telemetry, setTelemetry] = useState({
     connected: false,
     delta: 0,
@@ -245,52 +258,67 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null }) {
             position: "relative",
           }}
         >
-          <div className="w-full h-full flex flex-col items-center justify-center gap-3">
-            <div className="relative w-[92%] h-3 rounded-sm overflow-hidden">
+          <div
+            className="w-full h-full flex flex-col items-center justify-center"
+            style={{ gap: `${cfg.gap}px` }}
+          >
+            {cfg.showBar && (
               <div
-                className="absolute inset-0 rounded-sm border border-white/10"
-                style={{ background: "rgba(255,255,255,0.06)", backdropFilter: "blur(8px)" }}
-              />
-              <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-px bg-white/30 z-10" />
-              {showBar && !isNear && (
-                <div
-                  className="absolute top-0 bottom-0"
-                  style={
-                    isGaining
-                      ? {
-                          left: "50%",
-                          width: `${fillPercent}%`,
-                          background: `linear-gradient(90deg, ${fillColor} 0%, ${fillColor} 80%, transparent 100%)`,
-                          boxShadow: `0 0 12px ${fillColor}`,
-                        }
-                      : {
-                          right: "50%",
-                          width: `${fillPercent}%`,
-                          background: `linear-gradient(270deg, ${fillColor} 0%, ${fillColor} 80%, transparent 100%)`,
-                          boxShadow: `0 0 12px ${fillColor}`,
-                        }
-                  }
-                />
-              )}
-            </div>
-
-            <div
-              className="rounded-md border border-white/15 inline-flex items-center justify-center"
-              style={{
-                background: "rgba(0, 0, 0, 0.85)",
-                boxShadow: "0 4px 20px rgba(0,0,0,0.7), 0 0 0 1px rgba(0,0,0,0.6) inset",
-                backdropFilter: "blur(12px)",
-                padding: "6px 16px",
-                minWidth: "110px",
-              }}
-            >
-              <span
-                className="text-[28px] font-bold tnum tracking-tight leading-none"
-                style={{ color: valueColor, textShadow: valueGlow, opacity: showBar ? 1 : 0.45 }}
+                className="relative rounded-sm overflow-hidden"
+                style={{ width: `${cfg.barWidthPercent}%`, height: `${cfg.barHeight}px` }}
               >
-                {showBar ? formatDelta(renderDelta) : "+0.00"}
-              </span>
-            </div>
+                <div
+                  className="absolute inset-0 rounded-sm border border-white/10"
+                  style={{ background: "rgba(255,255,255,0.06)", backdropFilter: "blur(8px)" }}
+                />
+                <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-px bg-white/30 z-10" />
+                {showBar && !isNear && (
+                  <div
+                    className="absolute top-0 bottom-0"
+                    style={
+                      isGaining
+                        ? {
+                            left: "50%",
+                            width: `${fillPercent}%`,
+                            background: `linear-gradient(90deg, ${fillColor} 0%, ${fillColor} 80%, transparent 100%)`,
+                            boxShadow: `0 0 12px ${fillColor}`,
+                          }
+                        : {
+                            right: "50%",
+                            width: `${fillPercent}%`,
+                            background: `linear-gradient(270deg, ${fillColor} 0%, ${fillColor} 80%, transparent 100%)`,
+                            boxShadow: `0 0 12px ${fillColor}`,
+                          }
+                    }
+                  />
+                )}
+              </div>
+            )}
+
+            {cfg.showNumber && (
+              <div
+                className="rounded-md border border-white/15 inline-flex items-center justify-center"
+                style={{
+                  background: "rgba(0, 0, 0, 0.85)",
+                  boxShadow: "0 4px 20px rgba(0,0,0,0.7), 0 0 0 1px rgba(0,0,0,0.6) inset",
+                  backdropFilter: "blur(12px)",
+                  padding: `${cfg.valuePaddingY}px ${cfg.valuePaddingX}px`,
+                  minWidth: `${cfg.valueMinWidth}px`,
+                }}
+              >
+                <span
+                  className="font-bold tnum tracking-tight leading-none"
+                  style={{
+                    color: valueColor,
+                    textShadow: valueGlow,
+                    fontSize: `${cfg.valueFontSize}px`,
+                    opacity: showBar ? 1 : 0.45,
+                  }}
+                >
+                  {showBar ? formatDelta(renderDelta) : "+0.00"}
+                </span>
+              </div>
+            )}
           </div>
         </div>
       </div>

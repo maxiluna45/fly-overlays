@@ -132,6 +132,21 @@ export function Dashboard() {
     await load();
   };
 
+  const handleSettingChange = async (id, key, value) => {
+    const ov = config.overlays[id] || {};
+    const prevSettings = ov.settings || {};
+    await window.fly.setOverlay(id, {
+      settings: { ...prevSettings, [key]: value },
+    });
+    setConfig((c) => c ? {
+      ...c,
+      overlays: {
+        ...c.overlays,
+        [id]: { ...c.overlays[id], settings: { ...prevSettings, [key]: value } },
+      },
+    } : c);
+  };
+
   const handleReset = async (id) => {
     await window.fly.setOverlay(id, { x: null, y: null, width: 600, height: 120, opacity: 0.8 });
     await load();
@@ -342,6 +357,14 @@ export function Dashboard() {
                 Reset posición
               </Button>
             </div>
+
+            {/* APPEARANCE SETTINGS */}
+            <AppearanceSettings
+              overlayId={selectedId}
+              overlayType={meta?.entry}
+              settings={ov.settings || {}}
+              onChange={handleSettingChange}
+            />
           </div>
         </aside>
       </div>
@@ -587,6 +610,85 @@ function TimeLite({ label, time, className }) {
       <span className={`text-[15px] font-mono tnum font-semibold ${className}`}>
         {time != null && time > 0 ? formatLapTimeLite(time) : "——.———"}
       </span>
+    </div>
+  );
+}
+
+// === APPEARANCE SETTINGS (per overlay) ===
+function AppearanceSettings({ overlayId, overlayType, settings = {}, onChange }) {
+  const isDelta = overlayType === "delta.html";
+  const isSectors = overlayType === "sectors.html";
+  if (!isDelta && !isSectors) return null;
+
+  const Field = ({ label, suffix, children }) => (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] text-muted-foreground">{label}</span>
+        <span className="text-[10px] font-mono text-muted-foreground">{suffix}</span>
+      </div>
+      {children}
+    </div>
+  );
+
+  const NumSlider = ({ k, min, max, step = 1, unit = "" }) => {
+    const v = settings[k];
+    const display = v != null ? v : "—";
+    return (
+      <Field label={k} suffix={`${display}${unit}`}>
+        <Slider
+          value={[v != null ? v : min]}
+          min={min}
+          max={max}
+          step={step}
+          onValueChange={(arr) => onChange(overlayId, k, arr[0])}
+        />
+      </Field>
+    );
+  };
+
+  const Toggle = ({ k, label }) => {
+    const v = settings[k];
+    return (
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] text-muted-foreground">{label}</span>
+        <Switch
+          checked={v !== false}
+          onCheckedChange={(val) => onChange(overlayId, k, val)}
+        />
+      </div>
+    );
+  };
+
+  return (
+    <div className="pt-2 border-t border-border space-y-3">
+      <div className="text-[10px] uppercase tracking-widest text-muted-foreground/70 font-bold">
+        Apariencia
+      </div>
+
+      {isDelta && (
+        <>
+          <Toggle k="showBar" label="Mostrar barra" />
+          <Toggle k="showNumber" label="Mostrar número" />
+          <NumSlider k="barHeight" min={4} max={32} step={1} unit="px" />
+          <NumSlider k="barWidthPercent" min={50} max={100} step={1} unit="%" />
+          <NumSlider k="valueFontSize" min={14} max={56} step={1} unit="px" />
+          <NumSlider k="valueMinWidth" min={60} max={200} step={2} unit="px" />
+          <NumSlider k="valuePaddingX" min={4} max={32} step={1} unit="px" />
+          <NumSlider k="valuePaddingY" min={2} max={20} step={1} unit="px" />
+          <NumSlider k="gap" min={0} max={32} step={1} unit="px" />
+        </>
+      )}
+
+      {isSectors && (
+        <>
+          <Toggle k="showHeader" label="Mostrar header" />
+          <Toggle k="showSubBars" label="Mostrar sub-sectores" />
+          <NumSlider k="headerFontSize" min={8} max={18} step={1} unit="px" />
+          <NumSlider k="valueFontSize" min={10} max={28} step={1} unit="px" />
+          <NumSlider k="timeColumnWidth" min={32} max={120} step={2} unit="px" />
+          <NumSlider k="subBarHeight" min={12} max={64} step={1} unit="px" />
+        </>
+      )}
     </div>
   );
 }
