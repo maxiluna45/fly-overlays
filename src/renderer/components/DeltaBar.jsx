@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { EditCorners } from "./ui/edit-corners.jsx";
 
 const BASE_W = 600;
 const BASE_H = 120;
@@ -32,7 +33,6 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null, settin
   });
 
   const [unlocked, setUnlocked] = useState(false);
-  const [scale, setScale] = useState(1);
   const containerRef = useRef(null);
 
   const targetRef = useRef(0);
@@ -74,24 +74,7 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null, settin
   }, []);
 
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const update = () => {
-      const w = el.clientWidth;
-      const h = el.clientHeight;
-      if (w === 0 || h === 0) return;
-      const s = Math.min(w / BASE_W, h / BASE_H);
-      setScale(s);
-    };
-    update();
-    let ro = null;
-    try {
-      ro = new ResizeObserver(update);
-      ro.observe(el);
-    } catch (_) {
-      // ResizeObserver no disponible
-    }
-    return () => { if (ro) ro.disconnect(); };
+    // Layout 100% responsivo — no necesitamos observer.
   }, []);
 
   useEffect(() => {
@@ -182,31 +165,7 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null, settin
       {/* EDIT MODE: solo esquinas tipo "L" + handles */}
       {unlocked && (
         <>
-          {/* Esquinas minimalistas: líneas tipo "L" */}
-          {[
-            { pos: "top-0 left-0", borders: "border-l-2 border-t-2", corners: "top-0 left-0" },
-            { pos: "top-0 right-0", borders: "border-r-2 border-t-2", corners: "top-0 right-0" },
-            { pos: "bottom-0 left-0", borders: "border-l-2 border-b-2", corners: "bottom-0 left-0" },
-            { pos: "bottom-0 right-0", borders: "border-r-2 border-b-2", corners: "bottom-0 right-0" },
-          ].map((c, i) => {
-            const [vAlign, hAlign] = c.pos.split(" ");
-            const isTop = vAlign === "top-0";
-            const isLeft = hAlign === "left-0";
-            return (
-              <div
-                key={i}
-                className={`absolute ${c.borders} border-accent pointer-events-none z-30`}
-                style={{
-                  width: "16px",
-                  height: "16px",
-                  top: isTop ? 0 : "auto",
-                  bottom: !isTop ? 0 : "auto",
-                  left: isLeft ? 0 : "auto",
-                  right: !isLeft ? 0 : "auto",
-                }}
-              />
-            );
-          })}
+          <EditCorners />
 
           {/* Handles invisibles de resize en las 4 esquinas (área más grande para que sea fácil agarrarlos) */}
           {[
@@ -249,19 +208,7 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null, settin
         className="absolute inset-0 flex items-center justify-center"
         style={{ pointerEvents: "none" }}
       >
-        <div
-          style={{
-            width: BASE_W,
-            height: BASE_H,
-            transform: `scale(${scale})`,
-            transformOrigin: "center center",
-            position: "relative",
-          }}
-        >
-          <div
-            className="w-full h-full flex flex-col items-center justify-center"
-            style={{ gap: `${cfg.gap}px` }}
-          >
+        <div className="w-full h-full flex flex-col items-center justify-center" style={{ gap: `${cfg.gap}px` }}>
             {cfg.showBar && (
               <div
                 className="relative rounded-sm overflow-hidden"
@@ -322,6 +269,5 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null, settin
           </div>
         </div>
       </div>
-    </div>
   );
 }

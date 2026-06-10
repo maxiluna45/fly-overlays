@@ -485,6 +485,67 @@ class IrsdkClient {
     return { currentLap: 0, bestLap: 0, lastLap: 0 };
   }
 
+  // Devuelve temperatura, presión y desgaste de los 4 neumáticos.
+  // Estructura: { LF: { tempL, tempM, tempR, press, wearL, wearM, wearR }, RF, LR, RR }
+  // L/M/R = zonas inner/center/outer de la banda de rodamiento
+  getTyres() {
+    const empty = (t = 75, p = 165, w = 0.1) => ({
+      tempL: t, tempM: t, tempR: t, press: p,
+      wearL: w, wearM: w, wearR: w,
+    });
+    if (this.sdk && this._connected) {
+      try {
+        const telemetry = this.sdk.getTelemetry();
+        if (telemetry) {
+          return {
+            LF: {
+              tempL: this._read(telemetry, 'LFtempL') ?? null,
+              tempM: this._read(telemetry, 'LFtempM') ?? null,
+              tempR: this._read(telemetry, 'LFtempR') ?? null,
+              press: this._read(telemetry, 'LFpress') ?? null,
+              wearL: this._read(telemetry, 'LFwearL') ?? null,
+              wearM: this._read(telemetry, 'LFwearM') ?? null,
+              wearR: this._read(telemetry, 'LFwearR') ?? null,
+            },
+            RF: {
+              tempL: this._read(telemetry, 'RFtempL') ?? null,
+              tempM: this._read(telemetry, 'RFtempM') ?? null,
+              tempR: this._read(telemetry, 'RFtempR') ?? null,
+              press: this._read(telemetry, 'RFpress') ?? null,
+              wearL: this._read(telemetry, 'RFwearL') ?? null,
+              wearM: this._read(telemetry, 'RFwearM') ?? null,
+              wearR: this._read(telemetry, 'RFwearR') ?? null,
+            },
+            LR: {
+              tempL: this._read(telemetry, 'LRtempL') ?? null,
+              tempM: this._read(telemetry, 'LRtempM') ?? null,
+              tempR: this._read(telemetry, 'LRtempR') ?? null,
+              press: this._read(telemetry, 'LRpress') ?? null,
+              wearL: this._read(telemetry, 'LRwearL') ?? null,
+              wearM: this._read(telemetry, 'LRwearM') ?? null,
+              wearR: this._read(telemetry, 'LRwearR') ?? null,
+            },
+            RR: {
+              tempL: this._read(telemetry, 'RRtempL') ?? null,
+              tempM: this._read(telemetry, 'RRtempM') ?? null,
+              tempR: this._read(telemetry, 'RRtempR') ?? null,
+              press: this._read(telemetry, 'RRpress') ?? null,
+              wearL: this._read(telemetry, 'RRwearL') ?? null,
+              wearM: this._read(telemetry, 'RRwearM') ?? null,
+              wearR: this._read(telemetry, 'RRwearR') ?? null,
+            },
+          };
+        }
+      } catch (_) {}
+    }
+    return {
+      LF: empty(70, 160, 0.05),
+      RF: empty(72, 162, 0.05),
+      LR: empty(80, 170, 0.05),
+      RR: empty(82, 172, 0.05),
+    };
+  }
+
   getDeltaBest() {
     // Lee directo de la memoria compartida para tener el delta en vivo
     // aunque el SDK no haya emitido nuevos frames (ej. auto frenado).

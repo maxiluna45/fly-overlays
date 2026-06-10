@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { EditCorners } from "./ui/edit-corners.jsx";
 
 const BASE_W = 600;
 const BASE_H = 160;
@@ -157,30 +158,7 @@ export function SectorTimes({ previewMode = false, injectedTelemetry = null, set
       style={unlocked ? { WebkitAppRegion: "drag" } : undefined}
     >
       {/* Esquinas "L" en edit mode */}
-      {unlocked &&
-        [
-          { top: 0, left: 0, br: false, bl: true, tr: false, tl: true },
-          { top: 0, right: 0, br: false, bl: false, tr: true, tl: true },
-          { bottom: 0, left: 0, br: true, bl: false, tr: false, tl: true },
-          { bottom: 0, right: 0, br: true, bl: true, tr: true, tl: false },
-        ].map((c, i) => (
-          <div
-            key={i}
-            className="absolute pointer-events-none z-30"
-            style={{
-              width: "16px",
-              height: "16px",
-              top: c.top || "auto",
-              bottom: c.bottom || "auto",
-              left: c.left ?? "auto",
-              right: c.right ?? "auto",
-              borderTop: c.tl || c.tr ? "2px solid #7dd3fc" : "none",
-              borderBottom: c.bl || c.br ? "2px solid #7dd3fc" : "none",
-              borderLeft: c.tl || c.bl ? "2px solid #7dd3fc" : "none",
-              borderRight: c.tr || c.br ? "2px solid #7dd3fc" : "none",
-            }}
-          />
-        ))}
+      {unlocked && <EditCorners />}
 
       {telemetry.preview && (
         <div

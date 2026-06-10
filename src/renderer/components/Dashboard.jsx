@@ -16,7 +16,7 @@ import { useToast } from "./ui/toast.jsx";
 import { ErrorBoundary } from "./ui/error-boundary.jsx";
 
 // Por ahora solo el delta bar está implementado
-const IMPLEMENTED = ["delta", "sectors"];
+const IMPLEMENTED = ["delta", "sectors", "tyres"];
 
 function formatBytes(bps) {
   if (!bps || !isFinite(bps)) return "0 B";
@@ -250,6 +250,11 @@ export function Dashboard() {
                 {selectedId === "sectors" && (
                   <ErrorBoundary resetKey={selectedId}>
                     <SectorLite />
+                  </ErrorBoundary>
+                )}
+                {selectedId === "tyres" && (
+                  <ErrorBoundary resetKey={selectedId}>
+                    <TyresLite />
                   </ErrorBoundary>
                 )}
               </div>
@@ -615,6 +620,101 @@ function TimeLite({ label, time, className }) {
   );
 }
 
+// === TYRES Lite (preview para el dashboard) ===
+function TyresLite() {
+  const [telemetry, setTelemetry] = useState({ connected: false, onTrack: false, preview: false, tyres: null });
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.fly) return;
+    if (typeof window.fly.onTelemetry !== "function") return;
+    const unsub = window.fly.onTelemetry((data) => {
+      setTelemetry((prev) => ({ ...prev, ...data }));
+    });
+    return unsub;
+  }, []);
+
+  const tone = (c) => {
+    if (c == null) return { rgb: "120, 130, 145" };
+    if (c < 50) return { rgb: "59, 130, 246" };
+    if (c < 70) return { rgb: "34, 197, 94" };
+    if (c < 95) return { rgb: "234, 179, 8" };
+    if (c < 115) return { rgb: "249, 115, 22" };
+    return { rgb: "239, 68, 68" };
+  };
+
+  const tyres = telemetry.tyres || {
+    LF: { tempL: 70, tempM: 75, tempR: 72, press: 160 },
+    RF: { tempL: 72, tempM: 77, tempR: 74, press: 162 },
+    LR: { tempL: 80, tempM: 85, tempR: 82, press: 170 },
+    RR: { tempL: 82, tempM: 87, tempR: 84, press: 172 },
+  };
+
+  return (
+    <div className="w-full h-full grid grid-cols-2 gap-2 p-3">
+      {["LF", "RF", "LR", "RR"].map((id) => {
+        const t = tyres[id] || {};
+        const tL = tone(t.tempL);
+        const tM = tone(t.tempM);
+        const tR = tone(t.tempR);
+        return (
+          <div
+            key={id}
+            className="rounded-lg border border-white/10 flex flex-col overflow-hidden p-2"
+            style={{ background: "linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.01) 100%)" }}
+          >
+            <div className="flex items-center justify-between text-[8px] font-mono font-bold mb-1">
+              <span className="uppercase tracking-widest text-white/40">{id}</span>
+              {t.press != null && (
+                <span
+                  style={{
+                    color: t.press < 155 ? "rgba(59,130,246,1)"
+                          : t.press > 175 ? "rgba(239,68,68,1)"
+                          : "rgba(34,197,94,1)",
+                  }}
+                >
+                  {Math.round(t.press)}
+                </span>
+              )}
+            </div>
+            <div className="flex-1 flex items-stretch justify-center" style={{ gap: "2px" }}>
+              {[
+                { l: "I", c: t.tempL, rgb: tL.rgb, w: 12 },
+                { l: "C", c: t.tempM, rgb: tM.rgb, w: 16, primary: true },
+                { l: "O", c: t.tempR, rgb: tR.rgb, w: 12 },
+              ].map((b, i) => (
+                <div key={i} className="flex flex-col items-center">
+                  <div className="text-[7px] font-bold font-mono mb-0.5 text-white/40">{b.l}</div>
+                  <div
+                    className="flex-1 rounded-sm relative overflow-hidden flex items-center justify-center"
+                    style={{
+                      width: `${b.w}px`,
+                      background: `linear-gradient(180deg, rgba(${b.rgb}, 1) 0%, rgba(${b.rgb}, 0.7) 100%)`,
+                      boxShadow: `0 0 4px rgba(${b.rgb}, 0.5)`,
+                      border: `1px solid rgba(${b.rgb}, 0.9)`,
+                    }}
+                  >
+                    <span
+                      className="font-mono font-bold leading-none"
+                      style={{
+                        fontSize: b.primary ? "11px" : "9px",
+                        color: "white",
+                        textShadow: "0 1px 2px rgba(0,0,0,0.95)",
+                        lineHeight: 1,
+                      }}
+                    >
+                      {b.c != null ? Math.round(b.c) : "—"}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // === APPEARANCE SETTINGS (per overlay) ===
 
 const SettingField = ({ label, suffix, children }) => (
@@ -627,11 +727,57 @@ const SettingField = ({ label, suffix, children }) => (
   </div>
 );
 
+// Diccionario de labels legibles para los settings de cada overlay.
+// Si la key no está, se muestra la key original (camelCase).
+const SETTING_LABELS = {
+  delta: {
+    showBar: "Mostrar barra",
+    showNumber: "Mostrar número",
+    barHeight: "Alto de la barra",
+    barWidthPercent: "Ancho de la barra",
+    valueFontSize: "Tamaño del número",
+    valueMinWidth: "Ancho mínimo del número",
+    valuePaddingX: "Padding horizontal del número",
+    valuePaddingY: "Padding vertical del número",
+    gap: "Espacio entre barra y número",
+  },
+  sectors: {
+    showHeader: "Mostrar header",
+    showSubBars: "Mostrar sub-sectores",
+    headerFontSize: "Tamaño del header",
+    valueFontSize: "Tamaño de los tiempos",
+    timeColumnWidth: "Ancho columna label",
+    subBarHeight: "Alto de sub-barra",
+  },
+  tyres: {
+    showNumbers: "Mostrar números",
+    showPressure: "Mostrar presión",
+    showWear: "Mostrar desgaste",
+    compactMode: "Modo compacto (solo colores)",
+    tempFontSize: "Tamaño números temperatura",
+    pressFontSize: "Tamaño número de presión",
+    wearFontSize: "Tamaño % desgaste",
+    headerFontSize: "Tamaño del header",
+    bandWidth: "Ancho banda lateral",
+    primaryBandWidth: "Ancho banda central",
+    bandGap: "Separación entre bandas",
+    cellSize: "Tamaño de celda",
+    cellMaxWidth: "Ancho máximo de celda",
+    gap: "Espacio entre celdas",
+    borderRadius: "Radio de las celdas",
+    pressureUnit: "Unidad de presión",
+  },
+};
+
+function labelFor(overlayKey, k) {
+  return SETTING_LABELS[overlayKey]?.[k] || k;
+}
+
 // NumSliderField es un componente independiente (definido fuera de AppearanceSettings)
 // y memorizado con React.memo, así no se re-renderiza cuando cambia otro setting.
 // Solo se resyncea con el `value` externo cuando cambia el `initKey` (overlayId+k)
 // o cuando `value` cambia por algo externo a este control.
-const NumSliderField = React.memo(function NumSliderField({ overlayId, k, min, max, step, unit, value, onChange }) {
+const NumSliderField = React.memo(function NumSliderField({ overlayId, overlayKey, k, min, max, step, unit, value, onChange }) {
   const initial = value != null ? value : min;
   const [local, setLocal] = useState(initial);
   const lastInitKey = React.useRef(`${overlayId}::${k}`);
@@ -646,7 +792,7 @@ const NumSliderField = React.memo(function NumSliderField({ overlayId, k, min, m
     setLocal(initial);
   }
   return (
-    <SettingField label={k} suffix={`${local}${unit || ""}`}>
+    <SettingField label={labelFor(overlayKey, k)} suffix={`${local}${unit || ""}`}>
       <MemoSlider
         value={[local]}
         min={min}
@@ -661,7 +807,7 @@ const NumSliderField = React.memo(function NumSliderField({ overlayId, k, min, m
   );
 });
 
-const ToggleField = React.memo(function ToggleField({ overlayId, k, label, value, onChange }) {
+const ToggleField = React.memo(function ToggleField({ overlayId, overlayKey, k, label, value, onChange }) {
   const initial = value !== false;
   const [local, setLocal] = useState(initial);
   const lastInitKey = React.useRef(`${overlayId}::${k}`);
@@ -677,7 +823,7 @@ const ToggleField = React.memo(function ToggleField({ overlayId, k, label, value
   }
   return (
     <div className="flex items-center justify-between">
-      <span className="text-[11px] text-muted-foreground">{label}</span>
+      <span className="text-[11px] text-muted-foreground">{label || labelFor(overlayKey, k)}</span>
       <Switch
         checked={local}
         onCheckedChange={(val) => {
@@ -692,7 +838,8 @@ const ToggleField = React.memo(function ToggleField({ overlayId, k, label, value
 function AppearanceSettings({ overlayId, overlayKey, settings = {}, onChange }) {
   const isDelta = overlayKey === "delta";
   const isSectors = overlayKey === "sectors";
-  if (!isDelta && !isSectors) return null;
+  const isTyres = overlayKey === "tyres";
+  if (!isDelta && !isSectors && !isTyres) return null;
 
   return (
     <div className="pt-2 border-t border-border space-y-3">
@@ -702,26 +849,67 @@ function AppearanceSettings({ overlayId, overlayKey, settings = {}, onChange }) 
 
       {isDelta && (
         <>
-          <ToggleField overlayId={overlayId} k="showBar" label="Mostrar barra" value={settings.showBar} onChange={onChange} />
-          <ToggleField overlayId={overlayId} k="showNumber" label="Mostrar número" value={settings.showNumber} onChange={onChange} />
-          <NumSliderField overlayId={overlayId} k="barHeight" min={4} max={32} step={1} unit="px" value={settings.barHeight} onChange={onChange} />
-          <NumSliderField overlayId={overlayId} k="barWidthPercent" min={50} max={100} step={1} unit="%" value={settings.barWidthPercent} onChange={onChange} />
-          <NumSliderField overlayId={overlayId} k="valueFontSize" min={14} max={56} step={1} unit="px" value={settings.valueFontSize} onChange={onChange} />
-          <NumSliderField overlayId={overlayId} k="valueMinWidth" min={60} max={200} step={2} unit="px" value={settings.valueMinWidth} onChange={onChange} />
-          <NumSliderField overlayId={overlayId} k="valuePaddingX" min={4} max={32} step={1} unit="px" value={settings.valuePaddingX} onChange={onChange} />
-          <NumSliderField overlayId={overlayId} k="valuePaddingY" min={2} max={20} step={1} unit="px" value={settings.valuePaddingY} onChange={onChange} />
-          <NumSliderField overlayId={overlayId} k="gap" min={0} max={32} step={1} unit="px" value={settings.gap} onChange={onChange} />
+          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showBar" value={settings.showBar} onChange={onChange} />
+          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showNumber" value={settings.showNumber} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="barHeight" min={4} max={32} step={1} unit="px" value={settings.barHeight} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="barWidthPercent" min={50} max={100} step={1} unit="%" value={settings.barWidthPercent} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="valueFontSize" min={14} max={56} step={1} unit="px" value={settings.valueFontSize} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="valueMinWidth" min={60} max={200} step={2} unit="px" value={settings.valueMinWidth} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="valuePaddingX" min={4} max={32} step={1} unit="px" value={settings.valuePaddingX} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="valuePaddingY" min={2} max={20} step={1} unit="px" value={settings.valuePaddingY} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="gap" min={0} max={32} step={1} unit="px" value={settings.gap} onChange={onChange} />
         </>
       )}
 
       {isSectors && (
         <>
-          <ToggleField overlayId={overlayId} k="showHeader" label="Mostrar header" value={settings.showHeader} onChange={onChange} />
-          <ToggleField overlayId={overlayId} k="showSubBars" label="Mostrar sub-sectores" value={settings.showSubBars} onChange={onChange} />
-          <NumSliderField overlayId={overlayId} k="headerFontSize" min={8} max={18} step={1} unit="px" value={settings.headerFontSize} onChange={onChange} />
-          <NumSliderField overlayId={overlayId} k="valueFontSize" min={10} max={28} step={1} unit="px" value={settings.valueFontSize} onChange={onChange} />
-          <NumSliderField overlayId={overlayId} k="timeColumnWidth" min={32} max={120} step={2} unit="px" value={settings.timeColumnWidth} onChange={onChange} />
-          <NumSliderField overlayId={overlayId} k="subBarHeight" min={12} max={64} step={1} unit="px" value={settings.subBarHeight} onChange={onChange} />
+          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showHeader" value={settings.showHeader} onChange={onChange} />
+          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showSubBars" value={settings.showSubBars} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="headerFontSize" min={8} max={18} step={1} unit="px" value={settings.headerFontSize} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="valueFontSize" min={10} max={28} step={1} unit="px" value={settings.valueFontSize} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="timeColumnWidth" min={32} max={120} step={2} unit="px" value={settings.timeColumnWidth} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="subBarHeight" min={12} max={64} step={1} unit="px" value={settings.subBarHeight} onChange={onChange} />
+        </>
+      )}
+
+      {isTyres && (
+        <>
+          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showNumbers" value={settings.showNumbers} onChange={onChange} />
+          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showPressure" value={settings.showPressure} onChange={onChange} />
+          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showWear" value={settings.showWear} onChange={onChange} />
+          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="compactMode" value={settings.compactMode} onChange={onChange} />
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] text-muted-foreground">Unidad de presión</span>
+            <div className="flex border border-border rounded-md overflow-hidden">
+              {["kPa", "psi"].map((u) => (
+                <button
+                  key={u}
+                  type="button"
+                  className="px-2.5 py-1 text-[10px] font-mono font-bold transition-colors hover:bg-white/5"
+                  style={{
+                    background: (settings.pressureUnit || "kPa") === u ? "rgba(125, 211, 252, 0.15)" : "transparent",
+                    color: (settings.pressureUnit || "kPa") === u ? "rgb(125, 211, 252)" : "rgba(255,255,255,0.5)",
+                    borderRight: u === "kPa" ? "1px solid rgba(255,255,255,0.08)" : "none",
+                    cursor: "pointer",
+                  }}
+                  onClick={() => onChange(overlayId, "pressureUnit", u)}
+                >
+                  {u}
+                </button>
+              ))}
+            </div>
+          </div>
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="tempFontSize" min={10} max={32} step={1} unit="px" value={settings.tempFontSize} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="pressFontSize" min={8} max={20} step={1} unit="px" value={settings.pressFontSize} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="wearFontSize" min={7} max={16} step={1} unit="px" value={settings.wearFontSize} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="headerFontSize" min={8} max={18} step={1} unit="px" value={settings.headerFontSize} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="bandWidth" min={6} max={24} step={1} unit="px" value={settings.bandWidth} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="primaryBandWidth" min={8} max={32} step={1} unit="px" value={settings.primaryBandWidth} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="bandGap" min={0} max={16} step={1} unit="px" value={settings.bandGap} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="cellSize" min={80} max={200} step={5} unit="px" value={settings.cellSize} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="cellMaxWidth" min={100} max={300} step={10} unit="px" value={settings.cellMaxWidth} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="gap" min={0} max={24} step={1} unit="px" value={settings.gap} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="borderRadius" min={0} max={24} step={1} unit="px" value={settings.borderRadius} onChange={onChange} />
         </>
       )}
     </div>

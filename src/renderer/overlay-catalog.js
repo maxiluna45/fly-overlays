@@ -1,4 +1,4 @@
-import { Gauge, Layers } from "lucide-react";
+import { Gauge, Layers, CircleDot } from "lucide-react";
 
 export const OVERLAY_META = {
   delta: {
@@ -10,5 +10,10 @@ export const OVERLAY_META = {
     name: "Sector Times",
     description: "Micro-sectores vs vuelta anterior y best",
     icon: Layers,
+  },
+  tyres: {
+    name: "Tyres",
+    description: "Temperatura y presión de neumáticos",
+    icon: CircleDot,
   },
 };

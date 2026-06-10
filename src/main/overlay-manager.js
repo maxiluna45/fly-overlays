@@ -22,6 +22,13 @@ const REGISTRY = {
     minWidth: 320,
     minHeight: 140,
   },
+  tyres: {
+    name: 'Tyres',
+    description: 'Temperatura y presión de neumáticos',
+    entry: 'tyres.html',
+    minWidth: 400,
+    minHeight: 280,
+  },
 };
 
 class OverlayManager {
@@ -126,6 +133,8 @@ class OverlayManager {
     if (settings.headerFontSize != null) decls.push(`--header-font-size: ${settings.headerFontSize}px`);
     if (settings.timeColumnWidth != null) decls.push(`--time-col-width: ${settings.timeColumnWidth}px`);
     if (settings.subBarHeight != null) decls.push(`--sub-bar-height: ${settings.subBarHeight}px`);
+    if (settings.cellSize != null) decls.push(`--tyre-cell-size: ${settings.cellSize}px`);
+    if (settings.borderRadius != null) decls.push(`--tyre-border-radius: ${settings.borderRadius}px`);
     if (decls.length === 0) return;
     const css = decls.join('; ');
     const js = `

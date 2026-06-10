@@ -22,6 +22,25 @@ const OVERLAY_DEFAULT_SETTINGS = {
     showHeader: true,        // mostrar/ocultar el header de tiempos
     showSubBars: true,       // mostrar/ocultar los cuadritos de sub-sectores
   },
+  tyres: {
+    showTemp: true,          // alias de showNumbers (compat)
+    showNumbers: true,       // mostrar números de temperatura
+    showPressure: true,      // mostrar presión
+    showWear: true,          // mostrar indicador de desgaste
+    compactMode: false,      // modo compacto: solo colores, sin números
+    cellSize: 130,           // tamaño máximo de cada celda de neumático
+    cellMaxWidth: 160,       // ancho máximo de cada celda (deja blanco alrededor si sobra)
+    gap: 10,                 // espacio entre celdas
+    borderRadius: 14,        // radio de las celdas
+    tempFontSize: 15,        // tamaño de números de temperatura (en px)
+    pressFontSize: 10,       // tamaño del número de presión (en px)
+    wearFontSize: 9,         // tamaño del % de desgaste (en px)
+    headerFontSize: 10,      // tamaño del header global (AVG/MIN/MAX)
+    bandWidth: 14,           // ancho de las bandas laterales (I/O) en px
+    primaryBandWidth: 18,    // ancho de la banda central (C) en px
+    bandGap: 2,              // separación entre bandas (en px)
+    pressureUnit: "kPa",     // "kPa" o "psi"
+  },
 };
 
 const DEFAULTS = {
@@ -43,6 +62,15 @@ const DEFAULTS = {
       height: 160,
       opacity: 0.8,
       settings: { ...OVERLAY_DEFAULT_SETTINGS.sectors },
+    },
+    tyres: {
+      enabled: false,
+      x: null,
+      y: null,
+      width: 600,
+      height: 320,
+      opacity: 0.85,
+      settings: { ...OVERLAY_DEFAULT_SETTINGS.tyres },
     },
   },
   hotkeys: {
