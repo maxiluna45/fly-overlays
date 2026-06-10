@@ -1,6 +1,6 @@
 {
   "name": "fly-overlays",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "iRacing overlays built with Electron + React",
   "author": "maxiluna45",
   "main": "src/main/main.js",
