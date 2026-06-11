@@ -39,6 +39,27 @@ class IrsdkClient {
     this._lastSplitDelta = null;
     this._lastDeltaCurrentLap = 0;
     // _splitPcts ya fue inicializado arriba (24 splits cada 1/25)
+
+    // === Tyre cache para smoothing ===
+    // iRacing publica tyre temps con muy baja frecuencia (1 Hz aprox) y a
+    // veces con saltos grandes. Para que el overlay se sienta "vivo",
+    // interpolamos linealmente entre el último valor conocido y el nuevo
+    // durante una ventana de tiempo. Cada celda guarda { value, lastUpdate }.
+    // freshness: 1.0 = recién actualizado, 0.0 = muy viejo (>10s sin update).
+    this._tyreCache = this._initTyreCache();
+  }
+
+  _initTyreCache() {
+    const mk = () => ({
+      tempL: { value: null, lastUpdate: 0 },
+      tempM: { value: null, lastUpdate: 0 },
+      tempR: { value: null, lastUpdate: 0 },
+      press: { value: null, lastUpdate: 0 },
+      wearL: { value: null, lastUpdate: 0 },
+      wearM: { value: null, lastUpdate: 0 },
+      wearR: { value: null, lastUpdate: 0 },
+    });
+    return { LF: mk(), RF: mk(), LR: mk(), RR: mk() };
   }
 
   async start() {
@@ -447,8 +468,13 @@ class IrsdkClient {
     if (entry === undefined || entry === null) return null;
     const raw = entry.value;
     if (raw === undefined || raw === null) return null;
+    // iRacing expone escalares como arrays de length 1 (ej: Speed → [40.3],
+    // PlayerCarIdx → [48]), y arrays por piloto con length 60+ (CarIdxPosition).
+    // El wrapper irsdk-node preserva esto vía copyTelemData.
+    // Si es array de length 1, devolvemos el escalar (caso normal: Lap, Speed,
+    // PlayerCarIdx, etc). Si es length > 1, devolvemos el array entero.
     if (Array.isArray(raw)) {
-      return raw.length === 1 ? raw[0] : raw[0];
+      return raw.length <= 1 ? raw[0] : raw;
     }
     return raw;
   }
@@ -481,6 +507,7 @@ class IrsdkClient {
     const out = { currentLap: 0, bestLap: 0, lastLap: 0, lastLapInvalid: false };
     if (this.sdk && this._connected) {
       try {
+        this.sdk.waitForData(0);
         const telemetry = this.sdk.getTelemetry();
         if (telemetry) {
           out.currentLap = this._read(telemetry, 'LapCurrentLapTime') || 0;
@@ -517,65 +544,83 @@ class IrsdkClient {
   }
 
   // Devuelve temperatura, presión y desgaste de los 4 neumáticos.
-  // Estructura: { LF: { tempL, tempM, tempR, press, wearL, wearM, wearR }, RF, LR, RR }
-  // L/M/R = zonas inner/center/outer de la banda de rodamiento
-  // Nota: las keys nativas de iRacing son LFtempCL/CM/CR (no LFtempL) y la
-  // presión es LFcoldPressure (en kPa, valor actual en vivo).
+  // Estructura: { LF: { tempL, tempM, tempR, press, wearL, wearM, wearR,
+  //                     freshTemp, freshPress, freshWear }, RF, LR, RR }
+  // L/M/R = zonas inner/center/outer de la banda de rodamiento.
+  //
+  // NOTA IMPORTANTE: iRacing publica tyre temps con muy baja frecuencia
+  // (1 Hz o menos) y a veces con gaps grandes. La presión (LFcoldPressure)
+  // y el wear (LFwear*) son valores "fríos" del garage, no en vivo.
+  // Para que el overlay se sienta vivo, esta función:
+  //   1. Mantiene un cache del último valor conocido por celda.
+  //   2. Cuando el sim publica un valor nuevo, lo guarda con timestamp.
+  //   3. Devuelve siempre el último valor + un flag "fresh*" indicando
+  //      cuántos segundos pasaron desde la última actualización.
+  // La UI puede usar `freshTemp` para mostrar un indicador visual
+  // ("LIVE" si <2s, "—" si >10s).
   getTyres() {
-    const empty = (t = 75, p = 165, w = 0.1) => ({
-      tempL: t, tempM: t, tempR: t, press: p,
-      wearL: w, wearM: w, wearR: w,
-    });
+    const buildCell = (pos, keys) => {
+      const cache = this._tyreCache[pos];
+      return {
+        tempL: cache.tempL.value,
+        tempM: cache.tempM.value,
+        tempR: cache.tempR.value,
+        press: cache.press.value,
+        wearL: cache.wearL.value,
+        wearM: cache.wearM.value,
+        wearR: cache.wearR.value,
+        // Age en segundos (null si nunca hubo dato)
+        freshTemp: cache.tempM.lastUpdate ? (Date.now() - cache.tempM.lastUpdate) / 1000 : null,
+        freshPress: cache.press.lastUpdate ? (Date.now() - cache.press.lastUpdate) / 1000 : null,
+        freshWear: cache.wearM.lastUpdate ? (Date.now() - cache.wearM.lastUpdate) / 1000 : null,
+      };
+    };
+
     if (this.sdk && this._connected) {
       try {
+        this.sdk.waitForData(0);
         const telemetry = this.sdk.getTelemetry();
         if (telemetry) {
+          const now = Date.now();
+          // Actualizar cache solo si el sim publicó un valor NUEVO (distinto
+          // del último conocido). Esto evita "pisar" el cache con valores
+          // idénticos que llegan con cada tick.
+          const update = (slot, key, raw) => {
+            if (raw == null || !isFinite(raw)) return;
+            const cell = this._tyreCache[slot][key];
+            // Solo actualizamos si el valor cambió o si pasaron >5s (el sim
+            // a veces re-publica el mismo valor, lo tomamos como refresh).
+            if (cell.value === null || Math.abs((cell.value ?? 0) - raw) > 0.01 || (now - cell.lastUpdate) > 5000) {
+              cell.value = raw;
+              cell.lastUpdate = now;
+            }
+          };
+
+          // Para cada rueda, leer del sim y mergear al cache
+          for (const [pos, prefix] of [['LF', 'LF'], ['RF', 'RF'], ['LR', 'LR'], ['RR', 'RR']]) {
+            update(pos, 'tempL', this._read(telemetry, `${prefix}tempCL`));
+            update(pos, 'tempM', this._read(telemetry, `${prefix}tempCM`));
+            update(pos, 'tempR', this._read(telemetry, `${prefix}tempCR`));
+            update(pos, 'press', this._read(telemetry, `${prefix}coldPressure`));
+            update(pos, 'wearL', this._read(telemetry, `${prefix}wearL`));
+            update(pos, 'wearM', this._read(telemetry, `${prefix}wearM`));
+            update(pos, 'wearR', this._read(telemetry, `${prefix}wearR`));
+          }
+
           return {
-            LF: {
-              tempL: this._read(telemetry, 'LFtempCL') ?? null,
-              tempM: this._read(telemetry, 'LFtempCM') ?? null,
-              tempR: this._read(telemetry, 'LFtempCR') ?? null,
-              press: this._read(telemetry, 'LFcoldPressure') ?? null,
-              wearL: this._read(telemetry, 'LFwearL') ?? null,
-              wearM: this._read(telemetry, 'LFwearM') ?? null,
-              wearR: this._read(telemetry, 'LFwearR') ?? null,
-            },
-            RF: {
-              tempL: this._read(telemetry, 'RFtempCL') ?? null,
-              tempM: this._read(telemetry, 'RFtempCM') ?? null,
-              tempR: this._read(telemetry, 'RFtempCR') ?? null,
-              press: this._read(telemetry, 'RFcoldPressure') ?? null,
-              wearL: this._read(telemetry, 'RFwearL') ?? null,
-              wearM: this._read(telemetry, 'RFwearM') ?? null,
-              wearR: this._read(telemetry, 'RFwearR') ?? null,
-            },
-            LR: {
-              tempL: this._read(telemetry, 'LRtempCL') ?? null,
-              tempM: this._read(telemetry, 'LRtempCM') ?? null,
-              tempR: this._read(telemetry, 'LRtempCR') ?? null,
-              press: this._read(telemetry, 'LRcoldPressure') ?? null,
-              wearL: this._read(telemetry, 'LRwearL') ?? null,
-              wearM: this._read(telemetry, 'LRwearM') ?? null,
-              wearR: this._read(telemetry, 'LRwearR') ?? null,
-            },
-            RR: {
-              tempL: this._read(telemetry, 'RRtempCL') ?? null,
-              tempM: this._read(telemetry, 'RRtempCM') ?? null,
-              tempR: this._read(telemetry, 'RRtempCR') ?? null,
-              press: this._read(telemetry, 'RRcoldPressure') ?? null,
-              wearL: this._read(telemetry, 'RRwearL') ?? null,
-              wearM: this._read(telemetry, 'RRwearM') ?? null,
-              wearR: this._read(telemetry, 'RRwearR') ?? null,
-            },
+            LF: buildCell('LF'),
+            RF: buildCell('RF'),
+            LR: buildCell('LR'),
+            RR: buildCell('RR'),
           };
         }
       } catch (_) {}
     }
     return {
-      LF: empty(70, 160, 0.05),
-      RF: empty(72, 162, 0.05),
-      LR: empty(80, 170, 0.05),
-      RR: empty(82, 172, 0.05),
+      LF: buildCell('LF'),
+      RF: buildCell('RF'),
+      LR: buildCell('LR'),
+      RR: buildCell('RR'),
     };
   }
 
@@ -610,6 +655,7 @@ class IrsdkClient {
 
     if (this.sdk && this._connected) {
       try {
+        this.sdk.waitForData(0);
         const telemetry = this.sdk.getTelemetry();
         const driverInfo = this.sdk.getDriverInfo();
         if (telemetry && driverInfo && driverInfo.Drivers && driverInfo.Drivers.length > 0) {
@@ -641,7 +687,15 @@ class IrsdkClient {
             if (bl > 0 && bl < bestLapInClass) bestLapInClass = bl;
           }
 
-          // Construir lista de drivers de la clase del player
+          // Construir lista de drivers de la clase del player.
+          // Filtro: solo mostrar drivers activos según CarIdxTrackSurface.
+          //   surface === -1 → slot inactivo (no mostrar, salvo player)
+          //   surface === 0  → not in world / disconnected (no mostrar, salvo player)
+          //   surface === 1  → in pit stall (mostrar con tag PIT)
+          //   surface === 2  → on track (mostrar normal)
+          //   surface === 3  → off track (mostrar con tag OFF)
+          // Sin esto, el SDK reporta 25+ posiciones > 0 pero solo 3 autos
+          // están realmente en pista; el resto son "fantasmas" de slots viejos.
           const drivers = [];
           for (let i = 0; i < n; i++) {
             const d = driverInfo.Drivers[i];
@@ -649,14 +703,18 @@ class IrsdkClient {
             if (d.CarIsPaceCar === 1) continue;
             const pos = positions[i] ?? 0;
             const cpos = classPositions[i] ?? 0;
-            // Sin posición válida → no está en el mundo. No lo mostramos.
-            // Excepción: el player siempre se muestra aunque no tenga pos aún.
-            if (pos <= 0 && i !== playerIdx) continue;
-            const surface = trackSurface[i] ?? 0;
+            const surface = trackSurface[i] ?? -1;
             const onPit = !!onPitRoad[i];
+            const isPlayer = i === playerIdx;
+            // Filtrar slots inactivos o "not in world" (fantasmas).
+            // El player se muestra siempre (puede tener surface=-1 transitorio).
+            if (!isPlayer && (surface === -1 || surface === 0)) continue;
+
+            // Estados
             const onTrack = surface === 2;
             const inPitStall = surface === 1;
-            const out = surface === 0 || (pos > 0 && lapCompleted[i] === lapCompleted[playerIdx] - 10);
+            const offTrack = surface === 3;
+            const out = surface === -1 || surface === 0;
 
             // Gap al player. F2Time es tiempo al leader; si no está,
             // proyectamos desde estTime + lapCompleted.
@@ -699,6 +757,7 @@ class IrsdkClient {
               lapDistPct: lapDistPct[i] || 0,
               onTrack,
               onPit: onPit || inPitStall,
+              offTrack,
               out,
               estLapTime: estTime[i] || 0,
               lastLapTime: lastLapTime[i] || 0,
@@ -709,10 +768,11 @@ class IrsdkClient {
             });
           }
 
-          // Total overall (todos los drivers con pos > 0)
+          // Total overall (solo slots con trackSurface válido)
           let totalOverall = 0;
           for (let i = 0; i < n; i++) {
-            if (positions[i] > 0) totalOverall++;
+            const s = trackSurface[i] ?? -1;
+            if (s !== -1 && s !== 0) totalOverall++;
           }
           const totalInClass = drivers.length;
 
@@ -767,105 +827,6 @@ class IrsdkClient {
     return out;
   }
 
-          // Construir lista de drivers de la clase del player
-          const drivers = [];
-          for (let i = 0; i < driverInfo.Drivers.length; i++) {
-            const d = driverInfo.Drivers[i];
-            if (d.CarClassID !== playerRealClass) continue;
-            if (d.CarIsPaceCar === 1) continue;
-            // Filter out AI pace car / ghost cars
-            const pos = positions[i] ?? 0;
-            const cpos = classPositions[i] ?? 0;
-            if (pos <= 0) continue;
-            const surface = trackSurface[i] ?? 0;
-            const onPit = !!onPitRoad[i];
-            // En iRacing surface: 0 = not in world, 1 = in pit stall, 2 = on track, 3 = off track
-            const onTrack = surface === 2;
-            const inPitStall = surface === 1;
-            const out = surface === 0 || (pos > 0 && lapCompleted[i] === lapCompleted[playerIdx] - 10); // heurística OUT
-
-            // Delta al player. Usamos CarIdxF2Time si está disponible (tiempo al leader),
-            // si no, proyectamos desde LapDistPct + estTime.
-            const f2 = this._read(telemetry, 'CarIdxF2Time') || [];
-            let gapToPlayer = null;
-            if (f2[i] != null && f2[playerIdx] != null && f2[playerIdx] > 0) {
-              // F2Time es tiempo al leader. Gap al player = F2Time[i] - F2Time[playerIdx].
-              // Si F2Time[i] < F2Time[playerIdx] => está adelante (gap negativo).
-              gapToPlayer = f2[i] - f2[playerIdx];
-            } else {
-              // Fallback: proyección. Estimar el tiempo de cada piloto al
-              // completar la vuelta = estTime (si está), o bestLapTime.
-              // gap = (estTime - playerEstTime) si están en la misma vuelta
-              // Si no, ajustar por la diferencia de vueltas.
-              const myEst = estTime[playerIdx] || 0;
-              const otherEst = estTime[i] || 0;
-              if (myEst > 0 && otherEst > 0) {
-                // Estimar posición por "tiempo total": laps * est + pct * est
-                const myTotal = lapCompleted[playerIdx] * myEst + lapDistPct[playerIdx] * myEst;
-                const otherTotal = lapCompleted[i] * otherEst + lapDistPct[i] * otherEst;
-                gapToPlayer = otherTotal - myTotal;
-              }
-            }
-
-            drivers.push({
-              carIdx: i,
-              position: pos,
-              classPosition: cpos,
-              name: d.UserName || d.CarScreenName || "Driver",
-              abbrev: d.AbbrevName || null,
-              initials: d.Initials || null,
-              carNumber: d.CarNumber || "",
-              teamName: d.TeamName || "",
-              irating: d.IRating || 0,
-              licString: d.LicString || "",
-              licColor: d.LicColor || 0,
-              licLevel: d.LicLevel || 0,
-              licSubLevel: d.LicSubLevel || 0,
-              carClassId: d.CarClassID,
-              carClassShort: d.CarClassShortName || "",
-              carClassColor: d.CarClassColor || 0,
-              gapToPlayer,
-              lapCompleted: lapCompleted[i] || 0,
-              lapDistPct: lapDistPct[i] || 0,
-              onTrack,
-              onPit: onPit || inPitStall,
-              out,
-              estLapTime: estTime[i] || 0,
-              lastLapTime: lastLapTime[i] || 0,
-              bestLapTime: bestLapTime[i] || 0,
-              bestLapNum: bestLapNum[i] || 0,
-              isFastest: bestLapTime[i] > 0 && Math.abs(bestLapTime[i] - bestLapInClass) < 0.001,
-              sessionFlags: sessionFlagsArr[i] || 0,
-            });
-          }
-
-          // Total overall
-          let totalOverall = 0;
-          for (let i = 0; i < positions.length; i++) {
-            if (positions[i] > 0) totalOverall++;
-          }
-          const totalInClass = drivers.length;
-
-          // Info de sesión
-          const session = this._getSessionInfo();
-
-          return {
-            playerIdx,
-            playerCarClass: playerRealClass,
-            totalInClass,
-            totalOverall,
-            drivers,
-            session,
-          };
-        }
-      } catch (err) {
-        // ignore
-      }
-    }
-
-    return empty();
-  }
-
   _getSessionInfo() {
     const session = {
       type: "Practice",
@@ -878,6 +839,7 @@ class IrsdkClient {
     if (this.sdk && this._connected) {
       // Telemetría (no falla por YAML)
       try {
+        this.sdk.waitForData(0);
         const tel = this.sdk.getTelemetry();
         if (tel) {
           session.time = this._read(tel, 'SessionTime') || 0;
@@ -913,6 +875,7 @@ class IrsdkClient {
     // y son vs tu mejor vuelta personal — funciona en Practice, Qual y Race.
     if (this.sdk && this._connected) {
       try {
+        this.sdk.waitForData(0);
         const telemetry = this.sdk.getTelemetry();
         if (telemetry) {
           const lap = this._read(telemetry, 'Lap') || 0;

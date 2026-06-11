@@ -301,12 +301,21 @@ export function Relative({ previewMode = false, injectedTelemetry = null, settin
                       OUT
                     </span>
                   )}
-                  {d.onPit && !d.out && (
+                  {d.onPit && !d.out && !d.offTrack && (
                     <span
                       className="text-[8px] font-bold tracking-widest px-1.5 py-0.5 rounded"
                       style={{ background: "rgba(255, 165, 0, 0.2)", color: "rgb(255, 165, 0)" }}
                     >
                       PIT
+                    </span>
+                  )}
+                  {d.offTrack && (
+                    <span
+                      className="text-[8px] font-bold tracking-widest px-1.5 py-0.5 rounded"
+                      style={{ background: "rgba(239, 68, 68, 0.2)", color: "rgb(239, 68, 68)" }}
+                      title="Fuera de pista"
+                    >
+                      OFF
                     </span>
                   )}
 

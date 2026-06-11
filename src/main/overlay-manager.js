@@ -76,6 +76,29 @@ class OverlayManager {
     }
   }
 
+  // Muestra todos los overlays que estén enabled en config.
+  // Útil como recovery: si al abrir la app los overlays no aparecen
+  // (por ejemplo porque quedaron en un estado raro de Electron, o el
+  // alwaysOnTop se perdió), F6 los fuerza a aparecer y los trae al frente.
+  forceShowAll() {
+    const data = this.config.get();
+    let count = 0;
+    for (const [id, ov] of Object.entries(data.overlays)) {
+      if (!ov.enabled) continue;
+      // Si la ventana ya existe, mostrarla y traerla al frente
+      const win = this.windows.get(id);
+      if (win && !win.isDestroyed()) {
+        win.show();
+        win.moveTop();
+        count++;
+      } else {
+        // Si no existe (ej: nunca se creó), crearla
+        if (this._create(id)) count++;
+      }
+    }
+    return count;
+  }
+
   toggle(id) {
     const enabled = this.config.toggleOverlay(id);
     if (enabled) {

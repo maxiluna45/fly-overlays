@@ -212,10 +212,20 @@ function emptyTyres() {
 //   Encima: el número grande de la temp de la franja (con su color)
 //   Debajo: la presión + wear en formato compacto
 function TyreCell({ id, tyre, cfg, targetPress, pressUnit = "kPa", convertPress = (x) => x }) {
-  const { tempL, tempM, tempR, press, wearL, wearM, wearR } = tyre || {};
+  const { tempL, tempM, tempR, press, wearL, wearM, wearR, freshTemp, freshPress, freshWear } = tyre || {};
   const toneL = tempTone(tempL);
   const toneM = tempTone(tempM);
   const toneR = tempTone(tempR);
+
+  // Opacidad basada en freshness de temperatura.
+  // < 2s  = recién actualizado, opacidad 1.0
+  // 2-10s = un poco viejo, opacidad 0.7
+  // > 10s = stale, opacidad 0.35
+  const tempOpacity =
+    freshTemp == null ? 0.35 :
+    freshTemp < 2 ? 1.0 :
+    freshTemp < 10 ? 0.7 :
+    0.35;
 
   const wearAvg = (
     (Number.isFinite(wearL) ? wearL : 1) +
@@ -225,25 +235,56 @@ function TyreCell({ id, tyre, cfg, targetPress, pressUnit = "kPa", convertPress 
   const freshness = Number.isFinite(wearAvg) ? Math.max(0, 1 - wearAvg) : 1;
   const pressInfo = pressTone(press, targetPress);
 
+  // Indicador "LIVE/STALE" para mostrar en header
+  const isLive = freshTemp != null && freshTemp < 5;
+  const isStale = freshTemp == null || freshTemp > 10;
+
   return (
     <div
       className="relative flex flex-col overflow-hidden"
       style={{
         borderRadius: `${cfg.borderRadius}px`,
         background: "linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.01) 100%)",
-        border: "1px solid rgba(255,255,255,0.06)",
+        border: `1px solid ${isStale ? "rgba(255,255,255,0.04)" : "rgba(255,255,255,0.06)"}`,
         minWidth: 0,
         minHeight: 0,
       }}
     >
-      {/* Header de la celda: posición + wear% */}
+      {/* Header de la celda: posición + freshness indicator + wear% */}
       <div
         className="flex items-center justify-between pt-1.5 text-[8px] font-mono font-bold"
         style={{ maxWidth: `${cfg.cellMaxWidth || 160}px`, margin: "0 auto", width: "100%" }}
       >
-        <span className="uppercase tracking-widest text-white/40">
-          {TYRE_LABELS[id].pos}
-        </span>
+        <div className="flex items-center gap-1">
+          <span className="uppercase tracking-widest text-white/40">
+            {TYRE_LABELS[id].pos}
+          </span>
+          {/* Indicador LIVE/STALE muy chico al costado del label */}
+          {isLive && (
+            <span
+              className="text-[7px] font-bold tracking-wider px-1 rounded-sm"
+              style={{
+                color: "rgba(34, 197, 94, 1)",
+                background: "rgba(34, 197, 94, 0.12)",
+              }}
+              title={`Actualizado hace ${freshTemp.toFixed(1)}s`}
+            >
+              LIVE
+            </span>
+          )}
+          {isStale && (
+            <span
+              className="text-[7px] font-bold tracking-wider px-1 rounded-sm"
+              style={{
+                color: "rgba(255, 255, 255, 0.4)",
+                background: "rgba(255, 255, 255, 0.05)",
+              }}
+              title={freshTemp == null ? "Sin datos del simulador" : `Último update hace ${freshTemp.toFixed(0)}s`}
+            >
+              STALE
+            </span>
+          )}
+        </div>
         {cfg.showWear && (
           <span
             style={{
@@ -274,8 +315,14 @@ function TyreCell({ id, tyre, cfg, targetPress, pressUnit = "kPa", convertPress 
           : { l: "O", c: tempR, t: toneR };
         return (
           <div
-            className="flex-1 flex items-stretch justify-center py-1.5"
-            style={{ gap: `${cfg.bandGap ?? 2}px`, maxWidth: `${cfg.cellMaxWidth || 160}px`, margin: "0 auto", width: "100%" }}
+            className="flex-1 flex items-stretch justify-center py-1.5 transition-opacity duration-300"
+            style={{
+              gap: `${cfg.bandGap ?? 2}px`,
+              maxWidth: `${cfg.cellMaxWidth || 160}px`,
+              margin: "0 auto",
+              width: "100%",
+              opacity: tempOpacity,
+            }}
           >
             <Band label={left.l} temp={left.c} tone={left.t} cfg={cfg} position="left" />
             <Band label="C" temp={tempM} tone={toneM} cfg={cfg} primary />
@@ -284,7 +331,7 @@ function TyreCell({ id, tyre, cfg, targetPress, pressUnit = "kPa", convertPress 
         );
       })()}
 
-      {/* Footer: presión */}
+      {/* Footer: presión (target del garage, no en vivo) */}
       {cfg.showPressure && (
         <div className="flex items-center justify-between px-2.5 pb-1.5">
           <div className="flex items-center gap-1.5">
@@ -312,6 +359,17 @@ function TyreCell({ id, tyre, cfg, targetPress, pressUnit = "kPa", convertPress 
               {press != null ? Math.round(convertPress(press)) : "—"} {pressUnit}
             </span>
           </div>
+          {/* Label "SET" para aclarar que es el target del garage, no en vivo */}
+          <span
+            className="text-[7px] font-bold tracking-widest px-1 rounded-sm uppercase"
+            style={{
+              color: "rgba(255, 255, 255, 0.4)",
+              background: "rgba(255, 255, 255, 0.05)",
+            }}
+            title="Presión objetivo del setup (no se actualiza en vivo)"
+          >
+            SET
+          </span>
         </div>
       )}
     </div>

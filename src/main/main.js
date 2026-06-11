@@ -194,6 +194,10 @@ app.whenReady().then(() => {
     }
   });
   globalShortcut.register(config.hotkeys.openPanel, toggleDashboard);
+  globalShortcut.register('F6', () => {
+    const n = overlayManager.forceShowAll();
+    console.log(`[main] F6: forzando aparición de ${n} overlay(s)`);
+  });
   globalShortcut.register('F9', () => {
     const enabled = irsdk.togglePreview();
     console.log(`[main] preview mode: ${enabled ? 'ON' : 'OFF'}`);
