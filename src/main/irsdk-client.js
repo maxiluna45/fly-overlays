@@ -352,23 +352,59 @@ class IrsdkClient {
     const isQual = /qual/i.test(sessionType);
     const isPractice = !isRace && !isQual;
 
-    // Cascada de deltas como FALLBACK. El cálculo principal (en _computeDelta)
-    // es nuestro: currentLap - bestLap * lapDistPct, siempre vs tu best real.
-    // Esta cascada solo se usa en la primera vuelta (cuando bestLap == -1)
-    // para mostrar un delta vs vuelta óptima en lo que completás la primera.
-    let lapDeltaToBest = 0;
+    // Selección de la fuente de delta (mismo criterio que benofficial2 / bo2):
+    //   - Qualify:  vs tu all-time best personal (LapDeltaToBestLap)
+    //   - Race:     primeras 2 vueltas vs LastLap de la sesión;
+    //               después vs SessionBest (best clean de la sesión)
+    //   - Practice: vs SessionBest (best clean de la sesión, sector-aware)
+    //
+    // ¿Por qué? iRacing ya calcula este delta de forma sector-aware (sabe
+    // dónde están los splits y en qué sector estás), y lo actualiza a 60 Hz.
+    // Eso es lo que da la sensación de "real-time" del bo2. Hacer una
+    // proyección nuestra con `currentLap - bestLap * lapDistPct` es preciso
+    // matemáticamente, pero asume pace uniforme por sector — al ojo se ve
+    // "calculado por sector" en vez de vivo.
+    //
+    // La única razón por la que la implementación original del bo2 se quedaba
+    // en 0.00 en práctica era porque usaba `LapDeltaToBestLap` (best personal,
+    // que vale -1 hasta que completes una vuelta) en lugar de
+    // `LapDeltaToSessionBestLap` (best de la sesión, disponible apenas vos u
+    // otro completa una vuelta limpia).
+    //
+    // Usamos `null` como sentinel para distinguir "iRacing aún no tiene un
+    // delta válido" de "iRacing devolvió exactamente 0 (estás empatando)".
+    let lapDeltaToBest = null;
     let lapDeltaRate = 0;
-    if (isQual || isRace || isPractice) {
+    if (isQual) {
       if (this._read(telemetry, 'LapDeltaToBestLap_OK')) {
-        lapDeltaToBest = this._read(telemetry, 'LapDeltaToBestLap') || 0;
+        lapDeltaToBest = this._read(telemetry, 'LapDeltaToBestLap');
         lapDeltaRate = this._read(telemetry, 'LapDeltaToBestLap_DD') || 0;
-      } else if (this._read(telemetry, 'LapDeltaToSessionBestLap_OK')) {
-        lapDeltaToBest = this._read(telemetry, 'LapDeltaToSessionBestLap') || 0;
-        lapDeltaRate = this._read(telemetry, 'LapDeltaToSessionBestLap_DD') || 0;
-      } else if (this._read(telemetry, 'LapDeltaToOptimalLap_OK')) {
-        lapDeltaToBest = this._read(telemetry, 'LapDeltaToOptimalLap') || 0;
-        lapDeltaRate = this._read(telemetry, 'LapDeltaToOptimalLap_DD') || 0;
       }
+    } else if (isRace) {
+      // Carreras: las primeras vueltas (1-2) no suelen tener un SessionBest
+      // todavía, así que caemos al LastLap. Después, SessionBest.
+      if (lap <= 2) {
+        if (this._read(telemetry, 'LapDeltaToSessionLastLap_OK')) {
+          lapDeltaToBest = this._read(telemetry, 'LapDeltaToSessionLastLap');
+          lapDeltaRate = this._read(telemetry, 'LapDeltaToSessionLastLap_DD') || 0;
+        } else if (this._read(telemetry, 'LapDeltaToSessionBestLap_OK')) {
+          lapDeltaToBest = this._read(telemetry, 'LapDeltaToSessionBestLap');
+          lapDeltaRate = this._read(telemetry, 'LapDeltaToSessionBestLap_DD') || 0;
+        }
+      } else if (this._read(telemetry, 'LapDeltaToSessionBestLap_OK')) {
+        lapDeltaToBest = this._read(telemetry, 'LapDeltaToSessionBestLap');
+        lapDeltaRate = this._read(telemetry, 'LapDeltaToSessionBestLap_DD') || 0;
+      }
+    } else if (isPractice) {
+      if (this._read(telemetry, 'LapDeltaToSessionBestLap_OK')) {
+        lapDeltaToBest = this._read(telemetry, 'LapDeltaToSessionBestLap');
+        lapDeltaRate = this._read(telemetry, 'LapDeltaToSessionBestLap_DD') || 0;
+      }
+    }
+    // Último recurso: OptimalLap (best teórico de la suma de mejores sectores).
+    if (lapDeltaToBest == null && this._read(telemetry, 'LapDeltaToOptimalLap_OK')) {
+      lapDeltaToBest = this._read(telemetry, 'LapDeltaToOptimalLap');
+      lapDeltaRate = this._read(telemetry, 'LapDeltaToOptimalLap_DD') || 0;
     }
 
     // Detectar cruces de splits y meta
@@ -377,7 +413,7 @@ class IrsdkClient {
     this._cachedData = {
       // Preservamos los campos pesados seteados por ticks anteriores
       ...this._cachedData,
-      delta: this._computeDelta({ lap, bestLap, currentLap, lapDeltaToBest, deltaRate: lapDeltaRate, speed, lapDistPct }),
+      delta: this._computeDelta({ lap, bestLap, currentLap, lapDeltaToBest, deltaRate: lapDeltaRate, speed, lapDistPct, sessionType, isRace, isQual, isPractice }),
       lap,
       speed,
       onTrack: typeof speed === 'number' && speed > 0.5,
@@ -484,15 +520,33 @@ class IrsdkClient {
     };
   }
 
-  _computeDelta({ lap, bestLap, currentLap, lapDeltaToBest, deltaRate, speed, lapDistPct }) {
-    // ESTRATEGIA PRINCIPAL: calcular el delta nosotros mismos contra tu best
-    // personal. Fórmula exacta en cualquier punto de la vuelta:
-    //   delta = currentLap - (bestLap * lapDistPct)
+  _computeDelta({ lap, bestLap, currentLap, lapDeltaToBest, deltaRate, speed, lapDistPct, sessionType, isRace, isQual, isPractice }) {
+    // ESTRATEGIA (bo2 official): usar el delta oficial del sim, ya calculado
+    // sector-aware y actualizado a 60 Hz. Es lo que muestra el iRacing en la
+    // pantalla de timing, así que "se siente" real-time.
     //
-    // ¿Por qué? iRacing reporta LapDeltaToBestLap intermitente en multi-
-    // jugador y a veces lo confunde con el delta vs vuelta óptima. Calculando
-    // nosotros mismos siempre comparamos contra tu mejor vuelta real,
-    // desde la primera hasta la última, sin depender de flags _OK.
+    // El caller ya eligió la variable correcta según el modo y solo nos pasa
+    // un valor si el flag _OK correspondiente estaba en true:
+    //   - Qual:  LapDeltaToBestLap
+    //   - Race:  LapDeltaToSessionLastLap (lap 1-2) / LapDeltaToSessionBestLap (lap 3+)
+    //   - Pract: LapDeltaToSessionBestLap
+    //
+    // `null` significa "ninguna fuente dio un valor válido" (todavía no
+    // cruzaste el primer split de la primera vuelta). `0` es válido y
+    // significa "estás empatando al best en este punto".
+    if (
+      lapDeltaToBest != null &&
+      isFinite(lapDeltaToBest) &&
+      Math.abs(lapDeltaToBest) < 1000
+    ) {
+      return lapDeltaToBest;
+    }
+
+    // FALLBACK: el sim no tiene un delta "vivo" todavía (recién saliste a
+    // pista, no cruzaste ningún split, etc.). Proyectamos desde la mejor
+    // vuelta conocida para tener un número coherente en vez de 0.00.
+    // Es menos preciso que el del sim, pero solo se ve en el primer
+    // fragmento de la primera vuelta de práctica/carrera.
     if (
       bestLap != null && bestLap > 0 &&
       currentLap != null && currentLap > 0 &&
@@ -501,11 +555,7 @@ class IrsdkClient {
       return currentLap - (bestLap * lapDistPct);
     }
 
-    // FALLBACK (primera vuelta, sin best personal): usar el delta del sim
-    // (cascada Best → SessionBest → Optimal, ya armada por el caller).
-    // Si el sim tampoco tiene nada válido, devolvemos 0.
-    if (lapDeltaToBest == null) return 0;
-    return lapDeltaToBest;
+    return 0;
   }
 
   _read(telemetry, key) {
@@ -969,8 +1019,9 @@ class IrsdkClient {
     // Importante: NO usamos getSessionData() porque su YAML puede estar
     // malformado (p.ej. cuando un piloto tiene "Level: 0" sin indentación
     // correcta en un campo de driver) y eso rompe toda la lectura.
-    // LapDeltaToBestLap / LapDeltaToBestLap_DD vienen de la telemetría
-    // y son vs tu mejor vuelta personal — funciona en Practice, Qual y Race.
+    //
+    // Misma lógica bo2 que _updateCache: elegimos la variable de delta
+    // según tipo de sesión y vuelta actual.
     if (this.sdk && this._connected) {
       try {
         this.sdk.waitForData(0);
@@ -982,21 +1033,43 @@ class IrsdkClient {
           const speed = this._read(telemetry, 'Speed') || 0;
           const lapDistPct = this._read(telemetry, 'LapDistPct') || 0;
 
-          // Misma cascada que en _updateCache: Best → SessionBest → Optimal
-          let lapDeltaToBest = 0;
+          const sessionType = this._cachedSessionType || 'Practice';
+          const isRace = /race/i.test(sessionType);
+          const isQual = /qual/i.test(sessionType);
+          const isPractice = !isRace && !isQual;
+
+          let lapDeltaToBest = null;
           let lapDeltaRate = 0;
-          if (this._read(telemetry, 'LapDeltaToBestLap_OK')) {
-            lapDeltaToBest = this._read(telemetry, 'LapDeltaToBestLap') || 0;
-            lapDeltaRate = this._read(telemetry, 'LapDeltaToBestLap_DD') || 0;
-          } else if (this._read(telemetry, 'LapDeltaToSessionBestLap_OK')) {
-            lapDeltaToBest = this._read(telemetry, 'LapDeltaToSessionBestLap') || 0;
-            lapDeltaRate = this._read(telemetry, 'LapDeltaToSessionBestLap_DD') || 0;
-          } else if (this._read(telemetry, 'LapDeltaToOptimalLap_OK')) {
-            lapDeltaToBest = this._read(telemetry, 'LapDeltaToOptimalLap') || 0;
+          if (isQual) {
+            if (this._read(telemetry, 'LapDeltaToBestLap_OK')) {
+              lapDeltaToBest = this._read(telemetry, 'LapDeltaToBestLap');
+              lapDeltaRate = this._read(telemetry, 'LapDeltaToBestLap_DD') || 0;
+            }
+          } else if (isRace) {
+            if (lap <= 2) {
+              if (this._read(telemetry, 'LapDeltaToSessionLastLap_OK')) {
+                lapDeltaToBest = this._read(telemetry, 'LapDeltaToSessionLastLap');
+                lapDeltaRate = this._read(telemetry, 'LapDeltaToSessionLastLap_DD') || 0;
+              } else if (this._read(telemetry, 'LapDeltaToSessionBestLap_OK')) {
+                lapDeltaToBest = this._read(telemetry, 'LapDeltaToSessionBestLap');
+                lapDeltaRate = this._read(telemetry, 'LapDeltaToSessionBestLap_DD') || 0;
+              }
+            } else if (this._read(telemetry, 'LapDeltaToSessionBestLap_OK')) {
+              lapDeltaToBest = this._read(telemetry, 'LapDeltaToSessionBestLap');
+              lapDeltaRate = this._read(telemetry, 'LapDeltaToSessionBestLap_DD') || 0;
+            }
+          } else if (isPractice) {
+            if (this._read(telemetry, 'LapDeltaToSessionBestLap_OK')) {
+              lapDeltaToBest = this._read(telemetry, 'LapDeltaToSessionBestLap');
+              lapDeltaRate = this._read(telemetry, 'LapDeltaToSessionBestLap_DD') || 0;
+            }
+          }
+          if (lapDeltaToBest == null && this._read(telemetry, 'LapDeltaToOptimalLap_OK')) {
+            lapDeltaToBest = this._read(telemetry, 'LapDeltaToOptimalLap');
             lapDeltaRate = this._read(telemetry, 'LapDeltaToOptimalLap_DD') || 0;
           }
 
-          const delta = this._computeDelta({ lap, bestLap, currentLap, lapDeltaToBest, deltaRate: lapDeltaRate, speed, lapDistPct });
+          const delta = this._computeDelta({ lap, bestLap, currentLap, lapDeltaToBest, deltaRate: lapDeltaRate, speed, lapDistPct, sessionType, isRace, isQual, isPractice });
           this._cachedData.delta = delta;
           this._cachedData.lap = lap;
         }
