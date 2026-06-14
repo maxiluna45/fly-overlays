@@ -397,6 +397,8 @@ function DeltaBarLite() {
     return unsub;
   }, []);
 
+  // DeltaBarLite no usa campos pesados, no se suscribe al canal heavy.
+
   const targetRef = useRefSafe(0);
   const displayRef = useRefSafe(0);
   const [renderDelta, setRenderDelta] = useState(0);
@@ -407,10 +409,15 @@ function DeltaBarLite() {
   }, [telemetry.delta]);
 
   useEffect(() => {
+    const lastSetValueRef = { current: 0 };
     const tick = () => {
       const diff = targetRef.current - displayRef.current;
-      displayRef.current += diff * 0.22;
-      setRenderDelta(displayRef.current);
+      const next = displayRef.current + diff * 0.22;
+      displayRef.current = next;
+      if (Math.abs(next - lastSetValueRef.current) >= 0.005) {
+        lastSetValueRef.current = next;
+        setRenderDelta(next);
+      }
       rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
@@ -543,6 +550,14 @@ function SectorLite() {
           best: Array.isArray(data.sectors.best) ? data.sectors.best : new Array(24).fill(null),
         });
       }
+    });
+    return unsub;
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.fly) return;
+    if (typeof window.fly.onTelemetryHeavy !== "function") return;
+    const unsub = window.fly.onTelemetryHeavy((data) => {
       if (data.lapTimes) {
         setLapTimes(data.lapTimes);
       }
@@ -591,7 +606,7 @@ function SectorLite() {
                   return (
                     <div
                       key={i}
-                      className="flex-1 h-7 rounded-sm transition-all duration-150"
+                      className="flex-1 h-7 rounded-sm transition-colors duration-150"
                       style={{
                         background: SECTOR_TONE_LITE[tone],
                         boxShadow: SECTOR_GLOW_LITE[tone],
@@ -629,6 +644,17 @@ function TyresLite() {
     if (typeof window.fly.onTelemetry !== "function") return;
     const unsub = window.fly.onTelemetry((data) => {
       setTelemetry((prev) => ({ ...prev, ...data }));
+    });
+    return unsub;
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.fly) return;
+    if (typeof window.fly.onTelemetryHeavy !== "function") return;
+    const unsub = window.fly.onTelemetryHeavy((data) => {
+      if (data.tyres) {
+        setTelemetry((prev) => ({ ...prev, tyres: data.tyres }));
+      }
     });
     return unsub;
   }, []);

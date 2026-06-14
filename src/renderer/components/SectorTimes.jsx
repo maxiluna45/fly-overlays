@@ -103,23 +103,19 @@ export function SectorTimes({ previewMode = false, injectedTelemetry = null, set
     } catch (_) {}
   }, []);
 
+  // Canal pesado: lapTimes (los sectores viajan por el canal rápido porque
+  // cambian al cruzar splits, que es event-driven y debe verse al instante).
   useEffect(() => {
+    if (injectedTelemetry) return;
     if (typeof window === "undefined" || !window.fly) return;
-    if (typeof window.fly.onTelemetry !== "function") return;
-    const unsub = window.fly.onTelemetry((data) => {
-      if (data.sectors) {
-        setSectors({
-          current: Array.isArray(data.sectors.current) ? data.sectors.current : new Array(TOTAL_SUBS).fill(null),
-          last: Array.isArray(data.sectors.last) ? data.sectors.last : new Array(TOTAL_SUBS).fill(null),
-          best: Array.isArray(data.sectors.best) ? data.sectors.best : new Array(TOTAL_SUBS).fill(null),
-        });
-      }
-      if (data.lapTimes) {
-        setLapTimes(data.lapTimes);
-      }
-    });
-    return unsub;
-  }, []);
+    if (typeof window.fly.onTelemetryHeavy !== "function") return;
+    try {
+      const unsub = window.fly.onTelemetryHeavy((data) => {
+        if (data.lapTimes) setLapTimes(data.lapTimes);
+      });
+      return unsub;
+    } catch (_) {}
+  }, [injectedTelemetry]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -301,7 +297,7 @@ function SectorColumn({ index, sectors }) {
           return (
             <div
               key={i}
-              className="flex-1 rounded-sm transition-all duration-150"
+              className="flex-1 rounded-sm transition-colors duration-150"
               style={{
                 height: 'var(--sub-bar-height, 28px)',
                 background: TONE_COLORS[tone],

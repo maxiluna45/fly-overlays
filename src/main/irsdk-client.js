@@ -8,7 +8,8 @@ class IrsdkClient {
     this.sdk = null;
     this._connected = false;
     this._loopRunning = false;
-    this._listeners = new Set();
+    this._lightListeners = new Set();
+    this._heavyListeners = new Set();
     this._mockTimer = null;
     this._mockStart = 0;
     this._previewMode = false; // preview mode = datos sintéticos sin iRacing
@@ -47,6 +48,14 @@ class IrsdkClient {
     // durante una ventana de tiempo. Cada celda guarda { value, lastUpdate }.
     // freshness: 1.0 = recién actualizado, 0.0 = muy viejo (>10s sin update).
     this._tyreCache = this._initTyreCache();
+
+    // === Throttling de getters pesados ===
+    // getLapTimes/getTyres/getRelative hacen muchas llamadas al SDK nativo
+    // y trabajo de CPU. No necesitan correr a 60 Hz. Los throttlamos para
+    // no saturar el main process ni el IPC.
+    this._lastLapTimesUpdate = 0;
+    this._lastTyresUpdate = 0;
+    this._lastRelativeUpdate = 0;
   }
 
   _initTyreCache() {
@@ -94,7 +103,9 @@ class IrsdkClient {
     this._currentMicroSectors = new Array(24).fill(null);
     this._lastLapPct = 0;
     this._lastSplitTime = 0;
-    this._emit(); // emitir connected=false para que la UI se entere
+    this._cachedData = {};
+    this._emitLight(); // emitir connected=false y resetear heavy
+    this._emitHeavy();
     // Volver a conectar al iRacing real
     if (this._loopRunning) this._connect();
   }
@@ -176,7 +187,8 @@ class IrsdkClient {
         });
       }
 
-      this._emit();
+      this._cachedData.sectors = this.getSectors();
+      this._emitLight();
     }, 50);
   }
 
@@ -265,7 +277,7 @@ class IrsdkClient {
         this._connected = true;
       }
       this._updateCache();
-      this._emit();
+      // _updateCache ya emite light + heavy (cuando corresponde)
       setImmediate(() => this._loop());
     } else {
       // waitForData=false puede significar dos cosas:
@@ -286,7 +298,7 @@ class IrsdkClient {
         if (this._connected) {
           console.log(`[irsdk][pid:${process.pid}] Sin datos (¿en menú?), esperando...`);
           this._connected = false;
-          this._emit();
+          this._emitLight();
         }
         setImmediate(() => this._loop());
       }
@@ -304,7 +316,9 @@ class IrsdkClient {
       try { this.sdk.stopSDK(); } catch (_) {}
       this.sdk = null;
     }
-    this._emit();
+    this._cachedData = {};
+    this._emitLight();
+    this._emitHeavy();
     this._scheduleReconnect();
   }
 
@@ -361,6 +375,8 @@ class IrsdkClient {
     this._updateSectors({ lap, lapDistPct, currentLap, sessionTime });
 
     this._cachedData = {
+      // Preservamos los campos pesados seteados por ticks anteriores
+      ...this._cachedData,
       delta: this._computeDelta({ lap, bestLap, currentLap, lapDeltaToBest, deltaRate: lapDeltaRate, speed, lapDistPct }),
       lap,
       speed,
@@ -368,6 +384,36 @@ class IrsdkClient {
       session: session?.SessionNum,
       sessionType,
     };
+
+    // Sectors: barato de armar (sólo copia de arrays), lo actualizamos siempre.
+    this._cachedData.sectors = this.getSectors();
+
+    // Canal rápido: emitimos light data a 60 Hz.
+    this._emitLight();
+
+    // Getters pesados: throttled. En vez de llamarse a 60 Hz, se llaman
+    // cada 500ms / 1000ms. Reducen ~60× las llamadas al SDK nativo y el
+    // trabajo de CPU del main process. El canal pesado sólo se emite cuando
+    // algún campo pesado efectivamente cambió — no mandamos 60 veces/seg el
+    // mismo payload de tyres/relative.
+    const now = Date.now();
+    let heavyChanged = false;
+    if (now - this._lastLapTimesUpdate > 500) {
+      this._lastLapTimesUpdate = now;
+      this._cachedData.lapTimes = this.getLapTimes();
+      heavyChanged = true;
+    }
+    if (now - this._lastTyresUpdate > 1000) {
+      this._lastTyresUpdate = now;
+      this._cachedData.tyres = this.getTyres();
+      heavyChanged = true;
+    }
+    if (now - this._lastRelativeUpdate > 1000) {
+      this._lastRelativeUpdate = now;
+      this._cachedData.relative = this.getRelative();
+      heavyChanged = true;
+    }
+    if (heavyChanged) this._emitHeavy();
   }
 
   _updateSectors({ lap, lapDistPct, currentLap, sessionTime }) {
@@ -479,9 +525,61 @@ class IrsdkClient {
     return raw;
   }
 
+  _buildLightPayload() {
+    return {
+      connected: this._connected,
+      delta: this._cachedData.delta ?? 0,
+      lap: this._cachedData.lap ?? 0,
+      speed: this._cachedData.speed ?? 0,
+      onTrack: this._cachedData.onTrack ?? false,
+      preview: this._cachedData.preview ?? false,
+      session: this._cachedData.session,
+      sessionType: this._cachedData.sessionType,
+      // Sectors: arrays pequeños (24 floats × 3) que ya se actualizan cada tick.
+      // Los mandamos por el canal rápido para que el overlay de sectores vea
+      // el cruce de splits al instante.
+      sectors: this._cachedData.sectors ?? { current: new Array(9).fill(null), last: new Array(9).fill(null), best: new Array(9).fill(null) },
+    };
+  }
+
+  _buildHeavyPayload() {
+    return {
+      lapTimes: this._cachedData.lapTimes ?? { currentLap: 0, bestLap: 0, lastLap: 0, lastLapInvalid: false },
+      tyres: this._cachedData.tyres ?? this._emptyTyresPayload(),
+      relative: this._cachedData.relative ?? this._emptyRelativePayload(),
+    };
+  }
+
+  _emitLight() {
+    const payload = this._buildLightPayload();
+    for (const cb of this._lightListeners) cb(payload);
+  }
+
+  _emitHeavy() {
+    const payload = this._buildHeavyPayload();
+    for (const cb of this._heavyListeners) cb(payload);
+  }
+
+  // Mantenido por compatibilidad con código viejo; en desuso.
   _emit() {
-    const payload = { ...this._cachedData, connected: this._connected };
-    for (const cb of this._listeners) cb(payload);
+    this._emitLight();
+    this._emitHeavy();
+  }
+
+  _emptyTyresPayload() {
+    const mk = () => ({ tempL: null, tempM: null, tempR: null, press: null, wearL: null, wearM: null, wearR: null, freshTemp: null, freshPress: null, freshWear: null });
+    return { LF: mk(), RF: mk(), LR: mk(), RR: mk() };
+  }
+
+  _emptyRelativePayload() {
+    return {
+      playerIdx: -1,
+      playerCarClass: -1,
+      totalInClass: 0,
+      totalOverall: 0,
+      drivers: [],
+      session: { type: "Practice", time: 0, timeRemain: 0, lapsTotal: 0, lapCurrent: 0, lapsMax: 0 },
+    };
   }
 
   isConnected() {
@@ -912,9 +1010,15 @@ class IrsdkClient {
   }
 
   onUpdate(cb) {
-    this._listeners.add(cb);
-    cb({ ...this._cachedData, connected: this._connected });
-    return () => this._listeners.delete(cb);
+    this._lightListeners.add(cb);
+    cb(this._buildLightPayload());
+    return () => this._lightListeners.delete(cb);
+  }
+
+  onHeavyUpdate(cb) {
+    this._heavyListeners.add(cb);
+    cb(this._buildHeavyPayload());
+    return () => this._heavyListeners.delete(cb);
   }
 
   stop() {

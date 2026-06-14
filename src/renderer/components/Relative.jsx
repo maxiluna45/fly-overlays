@@ -71,7 +71,7 @@ function classLicenseAbbrev(licString) {
 }
 
 export function Relative({ previewMode = false, injectedTelemetry = null, settings = {} }) {
-  const cfg = {
+  const cfg = useMemo(() => ({
     showIRating: true,
     showLicense: true,
     showLaps: true,
@@ -81,7 +81,7 @@ export function Relative({ previewMode = false, injectedTelemetry = null, settin
     rowHeight: 28,
     fontSize: 11,
     ...settings,
-  };
+  }), [settings]);
 
   const [telemetry, setTelemetry] = useState({
     connected: false,
@@ -105,6 +105,22 @@ export function Relative({ previewMode = false, injectedTelemetry = null, settin
     } catch (_) {}
   }, [injectedTelemetry]);
 
+  // Canal pesado: relative (~1 Hz). El resto (connected, onTrack, preview)
+  // llega por el canal rápido en el effect de arriba.
+  useEffect(() => {
+    if (injectedTelemetry) return;
+    if (typeof window === "undefined" || !window.fly) return;
+    if (typeof window.fly.onTelemetryHeavy !== "function") return;
+    try {
+      const unsub = window.fly.onTelemetryHeavy((data) => {
+        if (data.relative) {
+          setTelemetry((prev) => ({ ...prev, relative: data.relative }));
+        }
+      });
+      return unsub;
+    } catch (_) {}
+  }, [injectedTelemetry]);
+
   useEffect(() => {
     if (typeof window === "undefined" || !window.fly) return;
     if (typeof window.fly.onLockState !== "function") return;
@@ -122,24 +138,30 @@ export function Relative({ previewMode = false, injectedTelemetry = null, settin
   const drivers = relative?.drivers || [];
   const session = relative?.session || { type: "Practice", time: 0, timeRemain: 0, lapCurrent: 0, lapsTotal: 0 };
 
-  // Ordenar por posición de clase
-  const sorted = [...drivers].sort((a, b) => a.classPosition - b.classPosition);
-  // Encontrar al player en la lista ordenada
   const playerIdx = relative?.playerIdx ?? -1;
+
+  // Ordenar por posición de clase. Memoizado: sólo se reordena si cambia
+  // el array de drivers (≈ 1 Hz) o el playerIdx.
+  const sorted = useMemo(() => {
+    return [...drivers].sort((a, b) => a.classPosition - b.classPosition);
+  }, [drivers]);
+
+  // Encontrar al player en la lista ordenada
   const playerRowIdx = sorted.findIndex((d) => d.carIdx === playerIdx);
 
   // Si hay player, mostrar N arriba + N abajo (centrado en player)
-  let visibleDrivers = sorted;
-  if (playerRowIdx >= 0 && cfg.maxRows > 0) {
-    const before = Math.floor(cfg.maxRows / 2);
-    const after = cfg.maxRows - before - 1;
-    const start = Math.max(0, playerRowIdx - before);
-    const end = Math.min(sorted.length, start + cfg.maxRows);
-    const adjustedStart = Math.max(0, end - cfg.maxRows);
-    visibleDrivers = sorted.slice(adjustedStart, end);
-  } else if (cfg.maxRows > 0) {
-    visibleDrivers = sorted.slice(0, cfg.maxRows);
-  }
+  const visibleDrivers = useMemo(() => {
+    if (playerRowIdx >= 0 && cfg.maxRows > 0) {
+      const before = Math.floor(cfg.maxRows / 2);
+      const after = cfg.maxRows - before - 1;
+      const start = Math.max(0, playerRowIdx - before);
+      const end = Math.min(sorted.length, start + cfg.maxRows);
+      const adjustedStart = Math.max(0, end - cfg.maxRows);
+      return sorted.slice(adjustedStart, end);
+    }
+    if (cfg.maxRows > 0) return sorted.slice(0, cfg.maxRows);
+    return sorted;
+  }, [sorted, playerRowIdx, cfg.maxRows]);
 
   return (
     <div
@@ -214,129 +236,15 @@ export function Relative({ previewMode = false, injectedTelemetry = null, settin
 
           {/* Lista de pilotos */}
           <div className="flex-1 overflow-hidden flex flex-col">
-            {visibleDrivers.map((d, i) => {
-              const isPlayer = d.carIdx === playerIdx;
-              const isLeader = d.classPosition === 1;
-              const rowBg = isPlayer
-                ? "rgba(255,255,255,0.18)"
-                : isLeader
-                ? "rgba(125, 211, 252, 0.12)"
-                : i % 2 === 0
-                ? "rgba(255,255,255,0.02)"
-                : "rgba(255,255,255,0.05)";
-              const posColor = isLeader
-                ? "rgb(125, 211, 252)"
-                : "rgba(255,255,255,0.6)";
-
-              return (
-                <div
-                  key={d.carIdx}
-                  className="flex items-center px-2 gap-2"
-                  style={{
-                    background: rowBg,
-                    height: `${cfg.rowHeight}px`,
-                    borderLeft: `3px solid ${isPlayer ? "rgb(255,255,255)" : isLeader ? "rgb(125, 211, 252)" : "transparent"}`,
-                    fontSize: `${cfg.fontSize}px`,
-                    color: "white",
-                  }}
-                >
-                  {/* Posición de clase */}
-                  <span
-                    className="font-mono font-bold w-4 text-right"
-                    style={{ color: posColor }}
-                  >
-                    {d.classPosition}
-                  </span>
-
-                  {/* Tag de licencia con iR */}
-                  {cfg.showLicense && (
-                    <div
-                      className="flex items-center justify-center rounded-sm font-mono font-bold text-[9px] flex-shrink-0"
-                      style={{
-                        background: licColorToCss(d.licColor),
-                        color: d.licColor >= 4 ? "white" : "black",
-                        width: cfg.showIRating ? 38 : 18,
-                        height: "16px",
-                        gap: "2px",
-                      }}
-                    >
-                      {cfg.showIRating ? (
-                        <>
-                          <span>{d.licLevel}</span>
-                          <span style={{ opacity: 0.6 }}>·</span>
-                          <span>{Math.round((d.irating || 0) / 1000)}k</span>
-                        </>
-                      ) : (
-                        <span>{d.licLevel}</span>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Car number */}
-                  {cfg.showCarNumber && d.carNumber && (
-                    <span
-                      className="font-mono font-bold text-[10px] flex-shrink-0"
-                      style={{ color: "rgba(255,255,255,0.7)" }}
-                    >
-                      {d.carNumber}
-                    </span>
-                  )}
-
-                  {/* Nombre */}
-                  <span
-                    className="flex-1 truncate font-medium"
-                    style={{
-                      color: isPlayer ? "white" : d.out ? "rgba(255,255,68,0.5)" : "white",
-                    }}
-                  >
-                    {d.name}
-                  </span>
-
-                  {/* Status indicator */}
-                  {d.out && (
-                    <span
-                      className="text-[8px] font-bold tracking-widest px-1.5 py-0.5 rounded"
-                      style={{ background: "rgba(255, 200, 0, 0.2)", color: "rgb(255, 200, 0)" }}
-                    >
-                      OUT
-                    </span>
-                  )}
-                  {d.onPit && !d.out && !d.offTrack && (
-                    <span
-                      className="text-[8px] font-bold tracking-widest px-1.5 py-0.5 rounded"
-                      style={{ background: "rgba(255, 165, 0, 0.2)", color: "rgb(255, 165, 0)" }}
-                    >
-                      PIT
-                    </span>
-                  )}
-                  {d.offTrack && (
-                    <span
-                      className="text-[8px] font-bold tracking-widest px-1.5 py-0.5 rounded"
-                      style={{ background: "rgba(239, 68, 68, 0.2)", color: "rgb(239, 68, 68)" }}
-                      title="Fuera de pista"
-                    >
-                      OFF
-                    </span>
-                  )}
-
-                  {/* Gap al player */}
-                  <span
-                    className="font-mono font-bold text-[11px] flex-shrink-0 min-w-[50px] text-right"
-                    style={{
-                      color: isPlayer
-                        ? "rgba(255,255,255,0.5)"
-                        : (d.gapToPlayer ?? 0) < 0
-                        ? "rgb(34, 197, 94)"
-                        : (d.gapToPlayer ?? 0) > 0
-                        ? "rgb(239, 68, 68)"
-                        : "rgba(255,255,255,0.5)",
-                    }}
-                  >
-                    {isPlayer ? "—" : formatGap(d.gapToPlayer)}
-                  </span>
-                </div>
-              );
-            })}
+            {visibleDrivers.map((d, i) => (
+              <DriverRow
+                key={d.carIdx}
+                driver={d}
+                index={i}
+                isPlayer={d.carIdx === playerIdx}
+                cfg={cfg}
+              />
+            ))}
             {visibleDrivers.length === 0 && (
               <div
                 className="flex-1 flex items-center justify-center text-[10px]"
@@ -351,3 +259,147 @@ export function Relative({ previewMode = false, injectedTelemetry = null, settin
     </div>
   );
 }
+
+// Fila memoizada: sólo se re-renderiza si cambian los campos que afectan lo
+// que se ve (posición, gap, status, isPlayer). La cfg ya viene memoizada
+// desde el padre. Sin esta memo, en un re-render del padre a 60 Hz el JSX
+// de 12+ filas se reconstruye aunque ningún piloto haya cambiado.
+const DriverRow = React.memo(function DriverRow({ driver, index, isPlayer, cfg }) {
+  const d = driver;
+  const isLeader = d.classPosition === 1;
+  const rowBg = isPlayer
+    ? "rgba(255,255,255,0.18)"
+    : isLeader
+    ? "rgba(125, 211, 252, 0.12)"
+    : index % 2 === 0
+    ? "rgba(255,255,255,0.02)"
+    : "rgba(255,255,255,0.05)";
+  const posColor = isLeader
+    ? "rgb(125, 211, 252)"
+    : "rgba(255,255,255,0.6)";
+
+  return (
+    <div
+      className="flex items-center px-2 gap-2"
+      style={{
+        background: rowBg,
+        height: `${cfg.rowHeight}px`,
+        borderLeft: `3px solid ${isPlayer ? "rgb(255,255,255)" : isLeader ? "rgb(125, 211, 252)" : "transparent"}`,
+        fontSize: `${cfg.fontSize}px`,
+        color: "white",
+      }}
+    >
+      {/* Posición de clase */}
+      <span
+        className="font-mono font-bold w-4 text-right"
+        style={{ color: posColor }}
+      >
+        {d.classPosition}
+      </span>
+
+      {/* Tag de licencia con iR */}
+      {cfg.showLicense && (
+        <div
+          className="flex items-center justify-center rounded-sm font-mono font-bold text-[9px] flex-shrink-0"
+          style={{
+            background: licColorToCss(d.licColor),
+            color: d.licColor >= 4 ? "white" : "black",
+            width: cfg.showIRating ? 38 : 18,
+            height: "16px",
+            gap: "2px",
+          }}
+        >
+          {cfg.showIRating ? (
+            <>
+              <span>{d.licLevel}</span>
+              <span style={{ opacity: 0.6 }}>·</span>
+              <span>{Math.round((d.irating || 0) / 1000)}k</span>
+            </>
+          ) : (
+            <span>{d.licLevel}</span>
+          )}
+        </div>
+      )}
+
+      {/* Car number */}
+      {cfg.showCarNumber && d.carNumber && (
+        <span
+          className="font-mono font-bold text-[10px] flex-shrink-0"
+          style={{ color: "rgba(255,255,255,0.7)" }}
+        >
+          {d.carNumber}
+        </span>
+      )}
+
+      {/* Nombre */}
+      <span
+        className="flex-1 truncate font-medium"
+        style={{
+          color: isPlayer ? "white" : d.out ? "rgba(255,255,68,0.5)" : "white",
+        }}
+      >
+        {d.name}
+      </span>
+
+      {/* Status indicator */}
+      {d.out && (
+        <span
+          className="text-[8px] font-bold tracking-widest px-1.5 py-0.5 rounded"
+          style={{ background: "rgba(255, 200, 0, 0.2)", color: "rgb(255, 200, 0)" }}
+        >
+          OUT
+        </span>
+      )}
+      {d.onPit && !d.out && !d.offTrack && (
+        <span
+          className="text-[8px] font-bold tracking-widest px-1.5 py-0.5 rounded"
+          style={{ background: "rgba(255, 165, 0, 0.2)", color: "rgb(255, 165, 0)" }}
+        >
+          PIT
+        </span>
+      )}
+      {d.offTrack && (
+        <span
+          className="text-[8px] font-bold tracking-widest px-1.5 py-0.5 rounded"
+          style={{ background: "rgba(239, 68, 68, 0.2)", color: "rgb(239, 68, 68)" }}
+          title="Fuera de pista"
+        >
+          OFF
+        </span>
+      )}
+
+      {/* Gap al player */}
+      <span
+        className="font-mono font-bold text-[11px] flex-shrink-0 min-w-[50px] text-right"
+        style={{
+          color: isPlayer
+            ? "rgba(255,255,255,0.5)"
+            : (d.gapToPlayer ?? 0) < 0
+            ? "rgb(34, 197, 94)"
+            : (d.gapToPlayer ?? 0) > 0
+            ? "rgb(239, 68, 68)"
+            : "rgba(255,255,255,0.5)",
+        }}
+      >
+        {isPlayer ? "—" : formatGap(d.gapToPlayer)}
+      </span>
+    </div>
+  );
+}, (prev, next) => {
+  // Custom comparator: sólo re-render si cambió algo visible.
+  return (
+    prev.driver.classPosition === next.driver.classPosition &&
+    prev.driver.gapToPlayer === next.driver.gapToPlayer &&
+    prev.driver.onPit === next.driver.onPit &&
+    prev.driver.offTrack === next.driver.offTrack &&
+    prev.driver.out === next.driver.out &&
+    prev.driver.licLevel === next.driver.licLevel &&
+    prev.driver.irating === next.driver.irating &&
+    prev.driver.carNumber === next.driver.carNumber &&
+    prev.driver.name === next.driver.name &&
+    prev.driver.licColor === next.driver.licColor &&
+    prev.isPlayer === next.isPlayer &&
+    prev.index === next.index &&
+    prev.cfg === next.cfg
+  );
+});

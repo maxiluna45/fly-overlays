@@ -30,7 +30,7 @@ const TYRE_LABELS = {
 };
 
 export function Tyres({ previewMode = false, injectedTelemetry = null, settings = {} }) {
-  const cfg = {
+  const cfg = useMemo(() => ({
     showNumbers: true,
     showPressure: true,
     showWear: true,
@@ -39,7 +39,7 @@ export function Tyres({ previewMode = false, injectedTelemetry = null, settings 
     gap: 10,
     borderRadius: 14,
     ...settings,
-  };
+  }), [settings]);
 
   const [telemetry, setTelemetry] = useState({
     connected: false,
@@ -58,6 +58,22 @@ export function Tyres({ previewMode = false, injectedTelemetry = null, settings 
     try {
       const unsub = window.fly.onTelemetry((data) => {
         setTelemetry((prev) => ({ ...prev, ...data }));
+      });
+      return unsub;
+    } catch (_) {}
+  }, [injectedTelemetry]);
+
+  // Canal pesado: tyres (~1 Hz). El resto (connected, onTrack, preview)
+  // llega por el canal rápido en el effect de arriba.
+  useEffect(() => {
+    if (injectedTelemetry) return;
+    if (typeof window === "undefined" || !window.fly) return;
+    if (typeof window.fly.onTelemetryHeavy !== "function") return;
+    try {
+      const unsub = window.fly.onTelemetryHeavy((data) => {
+        if (data.tyres) {
+          setTelemetry((prev) => ({ ...prev, tyres: data.tyres }));
+        }
       });
       return unsub;
     } catch (_) {}
@@ -89,18 +105,28 @@ export function Tyres({ previewMode = false, injectedTelemetry = null, settings 
   const convertPress = (kpa) => usePsi ? kpa * KPA_TO_PSI : kpa;
   const pressUnit = usePsi ? "psi" : "kPa";
 
-  // Stats globales
-  const allTemps = [];
-  for (const id of ["LF", "RF", "LR", "RR"]) {
-    const t = tyres[id];
-    if (!t) continue;
-    if (t.tempL != null) allTemps.push(t.tempL);
-    if (t.tempM != null) allTemps.push(t.tempM);
-    if (t.tempR != null) allTemps.push(t.tempR);
-  }
-  const avgTemp = allTemps.length > 0 ? allTemps.reduce((a, b) => a + b, 0) / allTemps.length : null;
-  const maxTemp = allTemps.length > 0 ? Math.max(...allTemps) : null;
-  const minTemp = allTemps.length > 0 ? Math.min(...allTemps) : null;
+  // Stats globales — memoizadas. Se recalculan sólo cuando cambian las tyres
+  // (canal pesado, ~1 Hz), no en cada re-render del canal rápido.
+  const tempStats = useMemo(() => {
+    const all = [];
+    for (const id of ["LF", "RF", "LR", "RR"]) {
+      const t = tyres[id];
+      if (!t) continue;
+      if (t.tempL != null) all.push(t.tempL);
+      if (t.tempM != null) all.push(t.tempM);
+      if (t.tempR != null) all.push(t.tempR);
+    }
+    if (all.length === 0) return { avg: null, min: null, max: null };
+    let sum = 0, min = all[0], max = all[0];
+    for (let i = 0; i < all.length; i++) {
+      const v = all[i];
+      sum += v;
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+    return { avg: sum / all.length, min, max };
+  }, [tyres]);
+  const { avg: avgTemp, min: minTemp, max: maxTemp } = tempStats;
 
   return (
     <div
@@ -211,7 +237,7 @@ function emptyTyres() {
 //   Cada franja se "llena" con el color de su temperatura.
 //   Encima: el número grande de la temp de la franja (con su color)
 //   Debajo: la presión + wear en formato compacto
-function TyreCell({ id, tyre, cfg, targetPress, pressUnit = "kPa", convertPress = (x) => x }) {
+const TyreCell = React.memo(function TyreCell({ id, tyre, cfg, targetPress, pressUnit = "kPa", convertPress = (x) => x }) {
   const { tempL, tempM, tempR, press, wearL, wearM, wearR, freshTemp, freshPress, freshWear } = tyre || {};
   const toneL = tempTone(tempL);
   const toneM = tempTone(tempM);
@@ -374,13 +400,29 @@ function TyreCell({ id, tyre, cfg, targetPress, pressUnit = "kPa", convertPress 
       )}
     </div>
   );
-}
+}, (prev, next) => {
+  // Custom comparator: TyreCell re-renderiza sólo si cambia algún campo
+  // visible o algún setting que afecte el render. Sin esto, el padre
+  // re-renderiza a 60 Hz del canal rápido y las 4 celdas × 3 bandas
+  // se reconstruyen en JSX aunque ningún neumático haya cambiado.
+  const p = prev.tyre, n = next.tyre;
+  if (!p || !n) return p === n;
+  return (
+    p.tempL === n.tempL && p.tempM === n.tempM && p.tempR === n.tempR &&
+    p.press === n.press &&
+    p.wearL === n.wearL && p.wearM === n.wearM && p.wearR === n.wearR &&
+    p.freshTemp === n.freshTemp &&
+    prev.targetPress === next.targetPress &&
+    prev.pressUnit === next.pressUnit &&
+    prev.cfg === next.cfg
+  );
+});
 
 // === Franja individual (Inner / Center / Outer) — VISTA DESDE ABAJO ===
 // Línea vertical coloreada con el número ADENTRO de la franja.
 // Border-radius asimétrico: las laterales curvan en sus esquinas externas
 // (lejos del centro), y el central queda plano (radio 0).
-function Band({ label, temp, tone, cfg, position = "left", primary = false }) {
+const Band = React.memo(function Band({ label, temp, tone, cfg, position = "left", primary = false }) {
   const displayTemp = temp != null && isFinite(temp) ? Math.round(temp) : null;
   const colorRgb = tone?.rgb || "120, 130, 145";
 
@@ -462,4 +504,12 @@ function Band({ label, temp, tone, cfg, position = "left", primary = false }) {
       </div>
     </div>
   );
-}
+}, (prev, next) => {
+  return (
+    prev.label === next.label &&
+    prev.temp === next.temp &&
+    prev.position === next.position &&
+    prev.primary === next.primary &&
+    prev.cfg === next.cfg
+  );
+});

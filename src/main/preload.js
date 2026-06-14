@@ -14,6 +14,11 @@ contextBridge.exposeInMainWorld('fly', {
     ipcRenderer.on('telemetry:update', listener);
     return () => ipcRenderer.removeListener('telemetry:update', listener);
   },
+  onTelemetryHeavy: (callback) => {
+    const listener = (_event, data) => callback(data);
+    ipcRenderer.on('telemetry:heavy', listener);
+    return () => ipcRenderer.removeListener('telemetry:heavy', listener);
+  },
   onLockState: (callback) => {
     const listener = (_event, data) => callback(data);
     ipcRenderer.on('overlay:lock-state', listener);

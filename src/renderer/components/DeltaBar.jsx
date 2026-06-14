@@ -78,10 +78,15 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null, settin
   }, []);
 
   useEffect(() => {
+    const lastSetValueRef = { current: 0 };
     const tick = () => {
       const diff = targetRef.current - displayRef.current;
-      displayRef.current += diff * 0.22;
-      setRenderDelta(displayRef.current);
+      const next = displayRef.current + diff * 0.22;
+      displayRef.current = next;
+      if (Math.abs(next - lastSetValueRef.current) >= 0.005) {
+        lastSetValueRef.current = next;
+        setRenderDelta(next);
+      }
       rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
@@ -216,7 +221,7 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null, settin
               >
                 <div
                   className="absolute inset-0 rounded-sm border border-white/10"
-                  style={{ background: "rgba(255,255,255,0.06)", backdropFilter: "blur(8px)" }}
+                  style={{ background: "rgba(255,255,255,0.06)" }}
                 />
                 <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-px bg-white/30 z-10" />
                 {showBar && !isNear && (
@@ -248,7 +253,6 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null, settin
                 style={{
                   background: "rgba(0, 0, 0, 0.85)",
                   boxShadow: "0 4px 20px rgba(0,0,0,0.7), 0 0 0 1px rgba(0,0,0,0.6) inset",
-                  backdropFilter: "blur(12px)",
                   padding: `${cfg.valuePaddingY}px ${cfg.valuePaddingX}px`,
                   minWidth: `${cfg.valueMinWidth}px`,
                 }}

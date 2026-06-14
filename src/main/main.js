@@ -10,7 +10,6 @@ let irsdk = null;
 let configStore = null;
 let overlayManager = null;
 let dashboardWindow = null;
-let broadcastInterval = null;
 let sendUpdate = () => {};
 let updateCheckInterval = null;
 let isQuitting = false;
@@ -86,26 +85,6 @@ function toggleDashboard() {
   }
 }
 
-function broadcastTelemetry() {
-  if (!irsdk) return;
-  const data = {
-    connected: irsdk.isConnected(),
-    delta: irsdk.getDeltaBest(),
-    lap: irsdk.getSession().lap,
-    onTrack: irsdk.isOnTrack(),
-    preview: irsdk.isPreview(),
-    sectors: irsdk.getSectors(),
-    lapTimes: irsdk.getLapTimes(),
-    tyres: irsdk.getTyres(),
-    relative: irsdk.getRelative(),
-  };
-  for (const [id, win] of overlayManager.windows.entries()) {
-    if (overlayManager.isUnlocked(id)) continue;
-    if (win.isDestroyed()) continue;
-    win.webContents.send('telemetry:update', data);
-  }
-}
-
 const { autoUpdater } = require('electron-updater');
 
 app.whenReady().then(() => {
@@ -174,6 +153,8 @@ app.whenReady().then(() => {
   irsdk = new IrsdkClient();
   irsdk.start();
 
+  // Canal rápido (60 Hz): delta, lap, onTrack, connected, preview, sectors.
+  // Lo consume el DeltaBar y el SectorTimes (necesita sectors al cruzar splits).
   irsdk.onUpdate((data) => {
     for (const [id, win] of overlayManager.windows.entries()) {
       if (overlayManager.isUnlocked(id)) continue;
@@ -182,8 +163,18 @@ app.whenReady().then(() => {
     }
   });
 
+  // Canal pesado (~1 Hz): lapTimes, tyres, relative.
+  // Se emite sólo cuando algún campo pesado cambió (gracias al dirty flag
+  // interno de IrsdkClient). Reduce ~60× el IPC payload de relative/tyres.
+  irsdk.onHeavyUpdate((data) => {
+    for (const [id, win] of overlayManager.windows.entries()) {
+      if (overlayManager.isUnlocked(id)) continue;
+      if (win.isDestroyed()) continue;
+      win.webContents.send('telemetry:heavy', data);
+    }
+  });
+
   overlayManager.createAll();
-  broadcastInterval = setInterval(broadcastTelemetry, 1000 / 60);
 
   createDashboardWindow();
 
@@ -219,7 +210,6 @@ app.on('will-quit', () => {
 });
 
 app.on('window-all-closed', () => {
-  if (broadcastInterval) clearInterval(broadcastInterval);
   if (updateCheckInterval) clearInterval(updateCheckInterval);
   if (irsdk) irsdk.stop();
   if (process.platform !== 'darwin') app.quit();
