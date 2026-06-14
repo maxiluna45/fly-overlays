@@ -3,6 +3,8 @@ const { IRacingSDK } = require('irsdk-node');
 const TIMEOUT = Math.floor((1 / 60) * 1000); // 60fps
 const MOCK_MODE = process.env.FLY_MOCK === '1';
 
+const TOTAL_SUBS = 24; // 3 sectores × 8 micro-sectores
+
 class IrsdkClient {
   constructor() {
     this.sdk = null;
@@ -188,8 +190,94 @@ class IrsdkClient {
       }
 
       this._cachedData.sectors = this.getSectors();
+      // En preview, también generamos relative fake para que el overlay in-game
+      // de Relative tenga datos y no quede en "Esperando datos...".
+      if (this._previewMode) {
+        this._cachedData.relative = this._getMockRelative(t, lap, currentLap);
+      }
       this._emitLight();
+      // En preview emitimos el heavy también para que llegue el relative mock
+      if (this._previewMode) this._emitHeavy();
     }, 50);
+  }
+
+  // Genera un payload "relative" fake pero estable para preview mode.
+  // 10 pilotos, vos en P6 con gap 0.0, todos con datos coherentes.
+  _getMockRelative(t, currentLapNum, currentLapTime) {
+    const driverNames = [
+      "Tre Blohm", "Max Josten", "Henrique Silva", "Joao Rocha", "Suleiman Himmo",
+      "Jose Ferrada", "Maximiliano Luna2", "Anders Krog", "Marc Vidal", "Park Joon",
+    ];
+    const carNumbers = ["9", "12", "10", "7", "23", "17", "62", "44", "8", "21"];
+    const licData = [
+      ["A 4.6", 5, 4.6, 5], ["D 3.4", 2, 3.4, 2], ["D 2.7", 2, 2.7, 2],
+      ["C 3.9", 3, 3.9, 3], ["R 2.1", 1, 2.1, 1], ["B 4.2", 4, 4.2, 4],
+      ["D 2.3", 2, 2.3, 2], ["D 3.7", 2, 3.7, 2], ["R 1.8", 1, 1.8, 1],
+      ["D 2.9", 2, 2.9, 2],
+    ];
+    const iratings = [14500, 1850, 2400, 3200, 1100, 6700, 1500, 2800, 1400, 1700];
+    const baseLap = 95 + (t % 7) * 0.2; // varía un poco con el tiempo
+    const playerIdx = 6;
+    const drivers = driverNames.map((name, i) => {
+      const [licString, licLevel, licSub, licColor] = licData[i];
+      const isPlayer = i === playerIdx;
+      // Gap al player (negativo = adelante, positivo = detrás, player = 0).
+      // Lo hacemos variar con t y con la posición relativa del piloto,
+      // simulando que cada uno corre a un ritmo distinto (algunos acercan,
+      // otros se alejan) para que el delta se vea vivo en preview.
+      const baseGap = (i - playerIdx) * 1.5;
+      const drift = Math.sin(t * 0.2 + i * 0.7) * 0.8;
+      const gapToPlayer = isPlayer ? 0 : baseGap + drift;
+      const lastLapTime = baseLap + (i * 0.15) + Math.sin(t + i) * 0.2;
+      return {
+        carIdx: i,
+        classPosition: i + 1,
+        position: i + 1,
+        name,
+        abbrev: null,
+        carNumber: carNumbers[i],
+        teamName: "",
+        irating: iratings[i],
+        licString,
+        licLevel,
+        licSubLevel: licSub,
+        licColor,
+        carClassId: 0,
+        carClassShort: "",
+        carClassColor: 1,
+        gapToPlayer,
+        lapCompleted: isPlayer ? currentLapNum - 1 : currentLapNum - 1,
+        lapDistPct: isPlayer ? (currentLapTime / 12) : Math.min(1, (currentLapTime + (i - playerIdx) * 0.5) / 12),
+        onTrack: true,
+        onPit: false,
+        offTrack: i === 6, // el player está OFF como en el mock del dashboard
+        out: false,
+        estLapTime: baseLap,
+        lastLapTime,
+        bestLapTime: baseLap - 1.5,
+        bestLapNum: 1,
+        isFastest: i === 0,
+        sessionFlags: 0,
+      };
+    });
+    return {
+      playerIdx,
+      playerCarClass: 0,
+      totalInClass: drivers.length,
+      totalOverall: drivers.length,
+      drivers,
+      session: {
+        type: "Practice",
+        time: t,
+        timeRemain: Math.max(0, 3600 - t),
+        timeTotal: 3600,
+        lapsTotal: 0,
+        lapCurrent: currentLapNum,
+        lapsMax: 0,
+        incidents: Math.floor(t / 30) % 4,
+        maxIncidents: 17,
+      },
+    };
   }
 
   _seedMockHistory() {
@@ -509,8 +597,8 @@ class IrsdkClient {
    */
   getSectors() {
     const fill = (v) => {
-      const out = new Array(9);
-      for (let i = 0; i < 24; i++) out[i] = v[i] != null ? v[i] : null;
+      const out = new Array(TOTAL_SUBS);
+      for (let i = 0; i < TOTAL_SUBS; i++) out[i] = v[i] != null ? v[i] : null;
       return out;
     };
     return {
@@ -588,7 +676,7 @@ class IrsdkClient {
       // Sectors: arrays pequeños (24 floats × 3) que ya se actualizan cada tick.
       // Los mandamos por el canal rápido para que el overlay de sectores vea
       // el cruce de splits al instante.
-      sectors: this._cachedData.sectors ?? { current: new Array(9).fill(null), last: new Array(9).fill(null), best: new Array(9).fill(null) },
+      sectors: this._cachedData.sectors ?? { current: new Array(TOTAL_SUBS).fill(null), last: new Array(TOTAL_SUBS).fill(null), best: new Array(TOTAL_SUBS).fill(null) },
     };
   }
 
@@ -628,7 +716,7 @@ class IrsdkClient {
       totalInClass: 0,
       totalOverall: 0,
       drivers: [],
-      session: { type: "Practice", time: 0, timeRemain: 0, lapsTotal: 0, lapCurrent: 0, lapsMax: 0 },
+      session: { type: "Practice", time: 0, timeRemain: 0, timeTotal: 0, lapsTotal: 0, lapCurrent: 0, lapsMax: 0, incidents: 0, maxIncidents: 0 },
     };
   }
 
@@ -798,7 +886,7 @@ class IrsdkClient {
       totalInClass: 0,
       totalOverall: 0,
       drivers: [],
-      session: { type: "Practice", time: 0, timeRemain: 0, lapsTotal: 0, lapCurrent: 0, lapsMax: 0 },
+      session: { type: "Practice", time: 0, timeRemain: 0, timeTotal: 0, lapsTotal: 0, lapCurrent: 0, lapsMax: 0, incidents: 0, maxIncidents: 0 },
     });
 
     if (this.sdk && this._connected) {
@@ -864,22 +952,47 @@ class IrsdkClient {
             const offTrack = surface === 3;
             const out = surface === -1 || surface === 0;
 
-            // Gap al player. F2Time es tiempo al leader; si no está,
-            // proyectamos desde estTime + lapCompleted.
+            // Gap al player (en segundos).
+            // Convención (igual a iRacing): negativo = adelante, positivo = atrás.
+            //   Adelante tuyo → fila arriba, gap con número absoluto
+            //   Atrás tuyo   → fila abajo, gap con número absoluto
+            //
+            // Fuente 1: CarIdxF2Time (tiempo detrás del leader). El wrapper
+            //   irsdk-node a veces lo expone como escalar (solo el del player),
+            //   en cuyo caso NO podemos sacar gaps de otros pilotos — caemos
+            //   a estTime.
+            // Fuente 2: CarIdxEstTime (tiempo estimado de cruce de meta). La
+            //   diferencia directa entre dos pilotos da el gap en segundos.
             const f2 = this._read(telemetry, 'CarIdxF2Time') ?? null;
-            const f2Arr = this._readCarIdxArray(telemetry, 'CarIdxF2Time', n, playerIdx);
+            const f2IsRealArray =
+              Array.isArray(f2) &&
+              f2.length > 1 &&
+              f2.some((v, idx) => idx !== playerIdx && v > 0);
+            const estRaw = this._read(telemetry, 'CarIdxEstTime') ?? null;
+            const estIsRealArray =
+              Array.isArray(estRaw) &&
+              estRaw.length > 1 &&
+              estRaw.some((v, idx) => idx !== playerIdx && v > 0);
+
             let gapToPlayer = null;
-            if (Array.isArray(f2) && f2.length > 1 && f2[playerIdx] != null && f2[playerIdx] > 0) {
+            if (f2IsRealArray && f2[playerIdx] != null && f2[playerIdx] >= 0) {
+              // Camino A: array real de F2Time
               gapToPlayer = f2[i] - f2[playerIdx];
-            } else if (f2Arr[playerIdx] != null && f2Arr[playerIdx] > 0) {
-              gapToPlayer = f2Arr[i] - f2Arr[playerIdx];
+            } else if (estIsRealArray && estRaw[playerIdx] != null && estRaw[playerIdx] > 0) {
+              // Camino B: array real de EstTime
+              gapToPlayer = estRaw[i] - estRaw[playerIdx];
             } else {
-              const myEst = estTime[playerIdx] || 0;
-              const otherEst = estTime[i] || 0;
-              if (myEst > 0 && otherEst > 0) {
-                const myTotal = lapCompleted[playerIdx] * myEst + lapDistPct[playerIdx] * myEst;
-                const otherTotal = lapCompleted[i] * otherEst + lapDistPct[i] * otherEst;
-                gapToPlayer = otherTotal - myTotal;
+              // Camino C: re-normalizar a arrays aunque hayan venido escalares,
+              //   pero descartar si el resultado es degenerado (todos ceros
+              //   salvo el índice del player).
+              const f2Arr = this._readCarIdxArray(telemetry, 'CarIdxF2Time', n, playerIdx);
+              const estArr = this._readCarIdxArray(telemetry, 'CarIdxEstTime', n, playerIdx);
+              const f2HasOthers = f2Arr.some((v, idx) => idx !== playerIdx && v > 0);
+              const estHasOthers = estArr.some((v, idx) => idx !== playerIdx && v > 0);
+              if (f2HasOthers && f2Arr[playerIdx] != null && f2Arr[playerIdx] >= 0) {
+                gapToPlayer = f2Arr[i] - f2Arr[playerIdx];
+              } else if (estHasOthers && estArr[playerIdx] != null && estArr[playerIdx] > 0) {
+                gapToPlayer = estArr[i] - estArr[playerIdx];
               }
             }
 
@@ -980,9 +1093,12 @@ class IrsdkClient {
       type: "Practice",
       time: 0,
       timeRemain: 0,
+      timeTotal: 0,
       lapsTotal: 0,
       lapCurrent: 0,
       lapsMax: 0,
+      incidents: 0,         // incidentes del player en esta sesión
+      maxIncidents: 0,      // máximo permitido (0 si no hay límite)
     };
     if (this.sdk && this._connected) {
       // Telemetría (no falla por YAML)
@@ -993,6 +1109,7 @@ class IrsdkClient {
           session.time = this._read(tel, 'SessionTime') || 0;
           session.timeRemain = this._read(tel, 'SessionTimeRemain') || 0;
           session.lapCurrent = this._read(tel, 'Lap') || 0;
+          session.incidents = this._read(tel, 'PlayerCarMyIncidentCount') || 0;
         }
       } catch (_) {}
       // SessionData puede tirar excepción por YAML malformado;
@@ -1002,12 +1119,27 @@ class IrsdkClient {
         if (sd) {
           session.type = sd.SessionType || "Practice";
           session.lapsTotal = parseInt(sd.SessionLapsTotal || "0", 10) || 0;
+          // MaxIncidents puede venir como "17", "unlimited", 0, etc.
+          if (sd.MaxIncidents != null) {
+            const m = parseInt(sd.MaxIncidents, 10);
+            if (!Number.isNaN(m) && m > 0) session.maxIncidents = m;
+          } else if (sd.SessionMaxIncidentCount != null) {
+            const m = parseInt(sd.SessionMaxIncidentCount, 10);
+            if (!Number.isNaN(m) && m > 0) session.maxIncidents = m;
+          }
           if (sd.SessionTimeLimit) {
             const t = parseFloat(sd.SessionTimeLimit);
-            if (t > 0) session.timeRemain = Math.max(0, t - session.time);
+            if (t > 0) {
+              session.timeRemain = Math.max(0, t - session.time);
+              session.timeTotal = t;
+            }
           }
         }
       } catch (_) {}
+      // Si el sim no publicó timeRemain pero sí tenemos time + timeTotal, lo derivamos
+      if (session.timeTotal > 0 && session.timeRemain === 0) {
+        session.timeRemain = Math.max(0, session.timeTotal - session.time);
+      }
     }
     return session;
   }

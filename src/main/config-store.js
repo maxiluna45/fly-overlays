@@ -42,10 +42,12 @@ const OVERLAY_DEFAULT_SETTINGS = {
     pressureUnit: "kPa",     // "kPa" o "psi"
   },
   relative: {
-    showIRating: true,       // mostrar iRating en el tag de licencia
-    showLicense: true,       // mostrar el tag de licencia (LicLevel)
+    showIRating: true,       // mostrar iRating al final de la fila
+    showLicense: true,       // mostrar el badge de licencia (LicLevel)
     showCarNumber: true,     // mostrar número del auto
-    maxRows: 12,             // máximo de pilotos visibles
+    showLaps: true,          // mostrar la caja de last lap
+    rowsAbove: 3,            // competidores arriba del player
+    rowsBelow: 3,            // competidores abajo del player
     borderRadius: 8,         // radio del contenedor
     rowHeight: 26,           // alto de cada fila
     fontSize: 11,            // tamaño de fuente base

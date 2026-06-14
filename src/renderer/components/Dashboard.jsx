@@ -7,6 +7,7 @@ import {
   Power,
 } from "lucide-react";
 import { OVERLAY_META } from "../overlay-catalog.js";
+import { Relative } from "./Relative.jsx";
 import { Button } from "./ui/button.jsx";
 import { Switch } from "./ui/switch.jsx";
 import { Slider } from "./ui/slider.jsx";
@@ -255,6 +256,11 @@ export function Dashboard() {
                 {selectedId === "tyres" && (
                   <ErrorBoundary resetKey={selectedId}>
                     <TyresLite />
+                  </ErrorBoundary>
+                )}
+                {selectedId === "relative" && (
+                  <ErrorBoundary resetKey={selectedId}>
+                    <RelativeLite />
                   </ErrorBoundary>
                 )}
               </div>
@@ -635,6 +641,78 @@ function TimeLite({ label, time, className }) {
   );
 }
 
+// === RELATIVE Lite (preview para el dashboard) ===
+// Mock data hardcodeada para que el preview muestre cómo se ve el overlay
+// real cuando no hay sesión de iRacing corriendo.
+const RELATIVE_MOCK = {
+  playerIdx: 7,
+  totalInClass: 12,
+  totalOverall: 24,
+  drivers: [
+    { carIdx: 1, classPosition: 1, name: "Tre Blohm",      carNumber: "9",  irating: 14500, licString: "A 4.6", licLevel: 5, licSubLevel: 4.6, licColor: 5, carClassColor: 1, lastLapTime: 96.7, bestLapTime: 95.1, gapToPlayer: -22.5, onTrack: true, onPit: false, offTrack: false, out: false, isFastest: true },
+    { carIdx: 2, classPosition: 2, name: "Max Josten",     carNumber: "12", irating:  1850, licString: "D 3.4", licLevel: 2, licSubLevel: 3.4, licColor: 2, carClassColor: 1, lastLapTime: 97.2, bestLapTime: 95.4, gapToPlayer: -16.0, onTrack: true, onPit: false, offTrack: false, out: false },
+    { carIdx: 3, classPosition: 3, name: "Henrique Silva", carNumber: "10", irating:  2400, licString: "D 2.7", licLevel: 2, licSubLevel: 2.7, licColor: 2, carClassColor: 1, lastLapTime: 98.4, bestLapTime: 96.2, gapToPlayer:  -3.2, onTrack: true, onPit: false, offTrack: false, out: false },
+    { carIdx: 4, classPosition: 4, name: "Joao Rocha",     carNumber: "7",  irating:  3200, licString: "C 3.9", licLevel: 3, licSubLevel: 3.9, licColor: 3, carClassColor: 1, lastLapTime: 98.9, bestLapTime: 96.5, gapToPlayer:  -1.1, onTrack: true, onPit: false, offTrack: false, out: false },
+    { carIdx: 5, classPosition: 5, name: "Suleiman Himmo", carNumber: "23", irating:  1100, licString: "R 2.1", licLevel: 1, licSubLevel: 2.1, licColor: 1, carClassColor: 1, lastLapTime: 99.3, bestLapTime: 97.1, gapToPlayer:  -0.4, onTrack: true, onPit: false, offTrack: false, out: false },
+    { carIdx: 6, classPosition: 6, name: "Jose Ferrada",   carNumber: "17", irating:  6700, licString: "B 4.2", licLevel: 4, licSubLevel: 4.2, licColor: 4, carClassColor: 1, lastLapTime: 99.7, bestLapTime: 96.8, gapToPlayer:   0.0, onTrack: true, onPit: false, offTrack: false, out: false },
+    { carIdx: 7, classPosition: 7, name: "Maximiliano Luna2", carNumber: "62", irating: 1500, licString: "D 2.3", licLevel: 2, licSubLevel: 2.3, licColor: 2, carClassColor: 1, lastLapTime: 100.1, bestLapTime: 97.5, gapToPlayer:  0.0, onTrack: true, onPit: false, offTrack: true, out: false, isPlayer: true },
+    { carIdx: 8, classPosition: 8, name: "Anders Krog",    carNumber: "44", irating:  2800, licString: "D 3.7", licLevel: 2, licSubLevel: 3.7, licColor: 2, carClassColor: 1, lastLapTime: 100.4, bestLapTime: 98.0, gapToPlayer:   1.2, onTrack: true, onPit: false, offTrack: false, out: false },
+    { carIdx: 9, classPosition: 9, name: "Marc Vidal",     carNumber: "8",  irating:  1400, licString: "R 1.8", licLevel: 1, licSubLevel: 1.8, licColor: 1, carClassColor: 1, lastLapTime: 101.0, bestLapTime: 98.6, gapToPlayer:   6.7, onTrack: true, onPit: false, offTrack: false, out: false },
+    { carIdx: 10, classPosition: 10, name: "Park Joon",     carNumber: "21", irating:  1700, licString: "D 2.9", licLevel: 2, licSubLevel: 2.9, licColor: 2, carClassColor: 1, lastLapTime: 101.8, bestLapTime: 99.2, gapToPlayer:   8.0, onTrack: true, onPit: false, offTrack: false, out: false },
+  ],
+  session: {
+    type: "Practice",
+    time: 1525,         // 25:25
+    timeRemain: 2075,   // 34:35
+    timeTotal: 3600,    // 1h00m
+    lapsTotal: 0,
+    lapCurrent: 4,
+    lapsMax: 0,
+    incidents: 2,
+    maxIncidents: 17,
+  },
+};
+
+function RelativeLite() {
+  const [telemetry, setTelemetry] = useState({ connected: false, onTrack: false, preview: false, relative: null });
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.fly) return;
+    if (typeof window.fly.onTelemetry !== "function") return;
+    const unsub = window.fly.onTelemetry((data) => {
+      setTelemetry((prev) => ({ ...prev, ...data }));
+    });
+    return unsub;
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.fly) return;
+    if (typeof window.fly.onTelemetryHeavy !== "function") return;
+    const unsub = window.fly.onTelemetryHeavy((data) => {
+      if (data.relative) {
+        setTelemetry((prev) => ({ ...prev, relative: data.relative }));
+      }
+    });
+    return unsub;
+  }, []);
+
+  // Fallback al mock: si después de 1.5s la sesión real no está mandando
+  // relative con datos (sesión cerrada, sin pilotos, etc.), mostramos el mock
+  // para que el preview nunca quede vacío.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setTelemetry((prev) => {
+        const hasReal = prev.relative && Array.isArray(prev.relative.drivers) && prev.relative.drivers.length > 0;
+        if (hasReal) return prev;
+        return { ...prev, relative: RELATIVE_MOCK, preview: true };
+      });
+    }, 1500);
+    return () => clearTimeout(t);
+  }, []);
+
+  return <Relative settings={{ rowsAbove: 3, rowsBelow: 3 }} injectedTelemetry={telemetry} previewMode />;
+}
+
 // === TYRES Lite (preview para el dashboard) ===
 function TyresLite() {
   const [telemetry, setTelemetry] = useState({ connected: false, onTrack: false, preview: false, tyres: null });
@@ -797,7 +875,9 @@ const SETTING_LABELS = {
     showLicense: "Mostrar licencia",
     showIRating: "Mostrar iRating",
     showCarNumber: "Mostrar número de auto",
-    maxRows: "Máximo de pilotos",
+    showLaps: "Mostrar last lap",
+    rowsAbove: "Rivales arriba",
+    rowsBelow: "Rivales abajo",
     rowHeight: "Alto de fila",
     fontSize: "Tamaño de fuente",
     borderRadius: "Radio del contenedor",
@@ -954,7 +1034,9 @@ function AppearanceSettings({ overlayId, overlayKey, settings = {}, onChange }) 
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showLicense" value={settings.showLicense} onChange={onChange} />
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showIRating" value={settings.showIRating} onChange={onChange} />
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showCarNumber" value={settings.showCarNumber} onChange={onChange} />
-          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="maxRows" min={4} max={30} step={1} unit="" value={settings.maxRows} onChange={onChange} />
+          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showLaps" value={settings.showLaps} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="rowsAbove" min={0} max={6} step={1} unit="" value={settings.rowsAbove} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="rowsBelow" min={0} max={6} step={1} unit="" value={settings.rowsBelow} onChange={onChange} />
           <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="rowHeight" min={20} max={48} step={2} unit="px" value={settings.rowHeight} onChange={onChange} />
           <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="fontSize" min={9} max={18} step={1} unit="px" value={settings.fontSize} onChange={onChange} />
           <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="borderRadius" min={0} max={20} step={1} unit="px" value={settings.borderRadius} onChange={onChange} />

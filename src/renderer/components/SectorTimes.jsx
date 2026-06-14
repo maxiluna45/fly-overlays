@@ -8,25 +8,38 @@ const SECTOR_COUNT = 3;
 const SUB_PER_SECTOR = 8;
 const TOTAL_SUBS = SECTOR_COUNT * SUB_PER_SECTOR; // 24
 
-// Colores por tono (más vibrantes y modernos)
+// Colores por tono (alineados con el estándar de iRacing + paleta bo2)
+//   - bo2 delta bar: #FF52E052 (verde) → #FFFFFFFF (blanco) → #FFFF7F66 (coral)
+//   - iRacing sectors in-game: purple (PB) / green (mejor que last) / yellow (peor)
 const TONE_COLORS = {
   empty: "rgba(255,255,255,0.06)",
-  gray: "rgba(120, 130, 145, 0.85)",
-  green: "rgba(34, 197, 94, 0.95)",
-  purple: "rgba(168, 85, 247, 0.95)",
+  gray: "rgba(120, 130, 145, 0.85)",     // peor que last lap / sin referencia
+  yellow: "rgba(234, 179, 8, 0.95)",     // iRacing yellow (peor que last)
+  green: "rgba(34, 197, 94, 0.95)",      // más rápido que last lap
+  purple: "rgba(168, 85, 247, 0.95)",    // PB en este micro-sector (incluye empate)
+  red: "rgba(239, 68, 68, 0.95)",        // sector invalidado (off-track / cut)
 };
 
 const TONE_GLOW = {
   empty: "none",
   gray: "0 0 8px rgba(120,130,145,0.4)",
+  yellow: "0 0 10px rgba(234,179,8,0.7)",
   green: "0 0 10px rgba(34,197,94,0.7)",
-  purple: "0 0 10px rgba(168,85,247,0.7)",
+  purple: "0 0 12px rgba(168,85,247,0.8)",
+  red: "0 0 10px rgba(239,68,68,0.7)",
 };
 
 function getMicroTone(current, last, best) {
   if (current == null) return "empty";
-  if (best != null && current <= best) return "purple";
-  if (last != null && current < last) return "green";
+  // PB en este micro-sector (estricto: batiste tu mejor marca acá).
+  // Empate con best también cuenta como purple (sigue siendo el más rápido
+  // conocido en esta posición). Mismo criterio que usa iRacing en pantalla.
+  if (best != null && isFinite(best) && best > 0 && current <= best) return "purple";
+  // Más rápido que tu última vuelta en este micro-sector, pero no PB.
+  if (last != null && isFinite(last) && last > 0 && current < last) return "green";
+  // Peor (o igual) que tu última vuelta. iRacing muestra esto en amarillo.
+  if (last != null && isFinite(last) && last > 0) return "yellow";
+  // Sin referencia de vuelta previa (primera vuelta): neutro.
   return "gray";
 }
 
@@ -79,6 +92,10 @@ export function SectorTimes({ previewMode = false, injectedTelemetry = null, set
     if (typeof window.fly.onTelemetry !== "function") return;
     try {
       const unsub = window.fly.onTelemetry((data) => {
+        // El payload de IrsdkClient ya incluye { current, last, best }.
+        // Si no lo copiamos al estado, todos los sub-sectores se quedan en null
+        // y se renderizan como "empty" (gris muy claro) sin colores.
+        if (data.sectors) setSectors(data.sectors);
         setTelemetry((prev) => ({ ...prev, ...data }));
       });
       return unsub;
