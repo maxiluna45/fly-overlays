@@ -29,6 +29,29 @@ const TONE_GLOW = {
   red: "0 0 10px rgba(239,68,68,0.7)",
 };
 
+// Tonos para el fondo del sector ENTERO cuando está completo.
+// ~20% de opacidad — visible pero sin saturar.
+const SECTOR_BG = {
+  purple: "rgba(168, 85, 247, 0.22)",   // PB
+  green:  "rgba(34, 197, 94, 0.22)",    // mejor que last
+  yellow: "rgba(234, 179, 8, 0.22)",    // peor que last
+  gray:   "rgba(120, 130, 145, 0.12)",  // sin referencia
+};
+
+const SECTOR_BORDER = {
+  purple: "rgba(168, 85, 247, 0.55)",
+  green:  "rgba(34, 197, 94, 0.55)",
+  yellow: "rgba(234, 179, 8, 0.55)",
+  gray:   "rgba(120, 130, 145, 0.30)",
+};
+
+const SECTOR_LABEL_COLOR = {
+  purple: "rgba(216, 180, 254, 1)",
+  green:  "rgba(134, 239, 172, 1)",
+  yellow: "rgba(253, 224, 71, 1)",
+  gray:   "rgba(255,255,255,0.7)",
+};
+
 function getMicroTone(current, last, best) {
   if (current == null) return "empty";
   // PB en este micro-sector (estricto: batiste tu mejor marca acá).
@@ -41,6 +64,49 @@ function getMicroTone(current, last, best) {
   if (last != null && isFinite(last) && last > 0) return "yellow";
   // Sin referencia de vuelta previa (primera vuelta): neutro.
   return "gray";
+}
+
+// Tono del sector ENTERO. Devuelve null si el sector aún no terminó
+// (algún micro-sector sin valor), o si no hay referencias para comparar.
+function getSectorTone(sectorIdx, sectors) {
+  const offset = sectorIdx * SUB_PER_SECTOR;
+  const cur = sectors.current?.slice(offset, offset + SUB_PER_SECTOR) || [];
+  const last = sectors.last?.slice(offset, offset + SUB_PER_SECTOR) || [];
+  const best = sectors.best?.slice(offset, offset + SUB_PER_SECTOR) || [];
+
+  // ¿Están los 8 micro-sectores llenos?
+  const allFilled = cur.length === SUB_PER_SECTOR && cur.every((v) => v != null && v > 0 && isFinite(v));
+  if (!allFilled) return null;
+
+  const curSum = sumOf(cur);
+  const bestSum = best.every((v) => v != null && v > 0 && isFinite(v)) ? sumOf(best) : null;
+  const lastSum = last.every((v) => v != null && v > 0 && isFinite(v)) ? sumOf(last) : null;
+
+  // PB en este sector (suma ≤ best, incluiyendo empate)
+  if (bestSum != null && curSum <= bestSum) return "purple";
+  // Mejor que tu última vuelta en este sector, pero no PB
+  if (lastSum != null && curSum < lastSum) return "green";
+  // Peor (o igual) que tu última vuelta
+  if (lastSum != null && curSum >= lastSum) return "yellow";
+  // Sin referencia de vuelta previa
+  return "gray";
+}
+
+// Delta del sector completo respecto a la referencia (best si existe, si no last).
+// Devuelve null si el sector aún no terminó o no hay con qué comparar.
+function getSectorDelta(sectorIdx, sectors) {
+  const offset = sectorIdx * SUB_PER_SECTOR;
+  const cur = sectors.current?.slice(offset, offset + SUB_PER_SECTOR) || [];
+  const best = sectors.best?.slice(offset, offset + SUB_PER_SECTOR) || [];
+  const last = sectors.last?.slice(offset, offset + SUB_PER_SECTOR) || [];
+  const allFilled = cur.length === SUB_PER_SECTOR && cur.every((v) => v != null && v > 0 && isFinite(v));
+  if (!allFilled) return null;
+  const curSum = sumOf(cur);
+  const bestSum = best.every((v) => v != null && v > 0 && isFinite(v)) ? sumOf(best) : null;
+  const lastSum = last.every((v) => v != null && v > 0 && isFinite(v)) ? sumOf(last) : null;
+  const ref = bestSum != null ? bestSum : lastSum;
+  if (ref == null) return null;
+  return { delta: curSum - ref, vsBest: bestSum != null };
 }
 
 function formatLapTime(seconds) {
@@ -63,6 +129,7 @@ export function SectorTimes({ previewMode = false, injectedTelemetry = null, set
     subBarHeight: 28,
     showHeader: true,
     showSubBars: true,
+    showSectorDelta: true,
     ...settings,
   };
   const [telemetry, setTelemetry] = useState({
@@ -247,6 +314,7 @@ export function SectorTimes({ previewMode = false, injectedTelemetry = null, set
                   key={sectorIdx}
                   index={sectorIdx}
                   sectors={sectors}
+                  showDelta={cfg.showSectorDelta !== false}
                 />
               ))}
               </div>
@@ -294,7 +362,7 @@ function LapTimeRow({ label, time, accent, invalid = false }) {
   );
 }
 
-function SectorColumn({ index, sectors }) {
+function SectorColumn({ index, sectors, showDelta = true }) {
   const offset = index * SUB_PER_SECTOR;
   const subs = new Array(SUB_PER_SECTOR).fill(0).map((_, i) => ({
     current: sectors.current?.[offset + i] ?? null,
@@ -302,10 +370,42 @@ function SectorColumn({ index, sectors }) {
     best: sectors.best?.[offset + i] ?? null,
   }));
 
+  // Tono del sector entero (null si aún no terminó)
+  const sectorTone = getSectorTone(index, sectors);
+  const hasTone = sectorTone != null;
+
+  // Delta numérico del sector vs. referencia (se muestra junto al label para
+  // no aumentar la altura del overlay).
+  const sectorDelta = showDelta ? getSectorDelta(index, sectors) : null;
+
   return (
-    <div className="flex-1 flex flex-col gap-1.5">
-      {/* Label S1/S2/S3 */}
-      <div className="text-[11px] font-bold text-white/50 text-center">S{index + 1}</div>
+    <div
+      className="flex-1 flex flex-col gap-1.5 rounded-md p-1.5 transition-colors duration-300"
+      style={{
+        // Fondo del sector ENTERO (label + micro-sectores) cuando está completo
+        background: hasTone ? SECTOR_BG[sectorTone] : "transparent",
+        border: hasTone ? `1px solid ${SECTOR_BORDER[sectorTone]}` : "1px solid transparent",
+      }}
+    >
+      {/* Label S1/S2/S3 + delta del sector — toma el color del tono al completarse */}
+      <div
+        className="text-[11px] font-bold text-center transition-colors duration-300 flex items-center justify-center gap-1.5"
+        style={{ color: hasTone ? SECTOR_LABEL_COLOR[sectorTone] : "rgba(255,255,255,0.5)" }}
+      >
+        <span>S{index + 1}</span>
+        {sectorDelta && (
+          <span
+            className="font-mono tnum"
+            style={{
+              fontSize: "10px",
+              color: sectorDelta.delta <= 0 ? "rgb(134, 239, 172)" : "rgb(248, 113, 113)",
+            }}
+            title={sectorDelta.vsBest ? "vs. mejor sector" : "vs. sector de la última vuelta"}
+          >
+            {sectorDelta.delta >= 0 ? "+" : "−"}{Math.abs(sectorDelta.delta).toFixed(2)}
+          </span>
+        )}
+      </div>
 
       {/* 8 subsecciones */}
       <div className="flex gap-0.5">

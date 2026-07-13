@@ -70,6 +70,16 @@ function formatIrating(ir) {
   return `${(ir / 1000).toFixed(1)}k`;
 }
 
+// Convierte CarClassColor de iRacing a CSS. Puede venir como índice de paleta
+// (valores chicos, p.ej. el mock) o como entero RGB de 24 bits (p.ej. 0xFFFFFF).
+const CLASS_PALETTE = { 1: "#f6c915", 2: "#3b82f6", 3: "#ef4444", 4: "#22c55e", 5: "#a855f7", 6: "#f97316", 7: "#06b6d4" };
+function classColorCss(c) {
+  if (c == null || c === 0) return null;
+  if (c > 0 && c <= 16) return CLASS_PALETTE[c] || "rgb(160,160,170)";
+  const hex = (c & 0xffffff).toString(16).padStart(6, "0");
+  return `#${hex}`;
+}
+
 function formatGap(seconds) {
   if (seconds == null || !isFinite(seconds)) return "—";
   // Sin signo: la posición de la fila (arriba/abajo) ya indica si va
@@ -196,58 +206,79 @@ export function Relative({ previewMode = false, injectedTelemetry = null, settin
   const session = relative?.session || { type: "Practice", time: 0, timeRemain: 0, lapCurrent: 0, lapsTotal: 0 };
   const playerIdx = relative?.playerIdx ?? -1;
 
-  // Ordenar por posición de clase (1 al frente, N al fondo).
-  const sorted = useMemo(() => {
-    return [...drivers].sort((a, b) => (a.classPosition || 99) - (b.classPosition || 99));
-  }, [drivers]);
+  // Layout: el player va SIEMPRE en el centro. La cantidad de rivales arriba /
+  // abajo es configurable. A diferencia de la versión vieja, NO filtramos por
+  // una ventana de 30s: mostramos los N autos más cercanos EN PISTA en cada
+  // dirección (así se comporta como iRon / iOverlay / RaceLab).
+  const ROWS_ABOVE = Math.max(0, cfg.rowsAbove ?? 3);
+  const ROWS_BELOW = Math.max(0, cfg.rowsBelow ?? 3);
 
-  const playerRowIdx = sorted.findIndex((d) => d.carIdx === playerIdx);
+  // Driver "self" mínimo cuando no hay datos — para que el overlay nunca quede
+  // visualmente muerto si la sesión está vacía o el SDK no expone CarIdx*.
+  const SELF_PLACEHOLDER = {
+    carIdx: playerIdx >= 0 ? playerIdx : 0,
+    classPosition: 1,
+    name: previewMode ? "Maximiliano Luna2" : "—",
+    carNumber: "—",
+    irating: 0,
+    licString: "",
+    licLevel: 2,
+    licSubLevel: 0,
+    carClassColor: 1,
+    isPlayerClass: true,
+    relDelta: 0,
+    gapToPlayer: 0,
+    isAhead: false,
+    lapDelta: 0,
+    lastLapTime: 0,
+    bestLapTime: 0,
+    onTrack: true,
+    onPit: false,
+    offTrack: false,
+    out: false,
+    isPlayer: true,
+    isPlaceholder: true,
+  };
 
-  // Centrar la vista en el player: N arriba + vos + M abajo. Si está cerca
-  // de los extremos, se ajusta para no mostrar filas vacías arriba/abajo.
-  // Si no hay drivers (sesión vacía / SDK sin data), fabricamos una fila "self"
-  // mínima para que el overlay nunca quede visualmente muerto.
+  // Construir las filas centradas en el player (algoritmo iRon):
+  //   1. Ordenar TODOS los autos por relDelta descendente (adelante en pista
+  //      arriba, atrás abajo). El player queda en su lugar natural.
+  //   2. Ubicar al player y tomar ROWS_ABOVE filas por encima y ROWS_BELOW por
+  //      debajo. Si no alcanzan, se rellena con null (fila vacía).
+  // Sin autos / sin data → fila única "self".
   const visibleDrivers = useMemo(() => {
-    if (sorted.length === 0) {
-      return [{
-        carIdx: playerIdx >= 0 ? playerIdx : 0,
-        classPosition: 1,
-        name: previewMode ? "Maximiliano Luna2" : "—",
-        carNumber: "—",
-        irating: 0,
-        licString: "",
-        licLevel: 2,
-        licSubLevel: 0,
-        carClassColor: 1,
-        gapToPlayer: 0,
-        lastLapTime: 0,
-        bestLapTime: 0,
-        onTrack: true,
-        onPit: false,
-        offTrack: false,
-        out: false,
-        isPlayer: true,
-      }];
-    }
-    if (playerRowIdx < 0) return sorted.slice(0, cfg.rowsAbove + 1 + cfg.rowsBelow);
-    const total = cfg.rowsAbove + 1 + cfg.rowsBelow;
-    let start = playerRowIdx - cfg.rowsAbove;
-    let end = start + total;
-    if (start < 0) {
-      start = 0;
-      end = Math.min(sorted.length, total);
-    } else if (end > sorted.length) {
-      end = sorted.length;
-      start = Math.max(0, end - total);
-    }
-    return sorted.slice(start, end);
-  }, [sorted, playerRowIdx, cfg.rowsAbove, cfg.rowsBelow, playerIdx, previewMode]);
+    if (drivers.length === 0) return [SELF_PLACEHOLDER];
 
-  // Strength of Field = promedio de iRating de los pilotos en clase
+    // Orden por cercanía en pista. El cliente ya lo manda ordenado, pero lo
+    // reforzamos acá por si llega en otro orden.
+    const sorted = [...drivers].sort(
+      (a, b) => (b.relDelta ?? -Infinity) - (a.relDelta ?? -Infinity)
+    );
+
+    const selfPos = sorted.findIndex((d) => d.carIdx === playerIdx);
+    if (selfPos < 0) return [SELF_PLACEHOLDER];
+
+    const rows = [];
+    for (let i = ROWS_ABOVE; i >= 1; i--) rows.push(sorted[selfPos - i] || null);
+    rows.push(sorted[selfPos]); // player al centro
+    for (let i = 1; i <= ROWS_BELOW; i++) rows.push(sorted[selfPos + i] || null);
+    return rows;
+  }, [drivers, playerIdx, ROWS_ABOVE, ROWS_BELOW, SELF_PLACEHOLDER]);
+
+  // ¿Sesión multiclase? Coloreamos el borde de fila por clase si hay más de una.
+  const multiClass = useMemo(
+    () => new Set(drivers.map((d) => d.carClassId)).size > 1,
+    [drivers]
+  );
+
+  // Strength of Field = promedio de iRating de los pilotos de LA CLASE del
+  // player (en multiclase no tiene sentido promediar clases distintas).
   const sof = useMemo(() => {
     if (drivers.length === 0) return null;
-    const sum = drivers.reduce((acc, d) => acc + (d.irating || 0), 0);
-    return sum / drivers.length;
+    const pool = drivers.filter((d) => d.isPlayerClass !== false && (d.irating || 0) > 0);
+    const list = pool.length > 0 ? pool : drivers;
+    const sum = list.reduce((acc, d) => acc + (d.irating || 0), 0);
+    return list.length > 0 ? sum / list.length : null;
   }, [drivers]);
 
   return (
@@ -338,31 +369,25 @@ export function Relative({ previewMode = false, injectedTelemetry = null, settin
 
           {/* Lista */}
           <div className="flex-1 overflow-hidden flex flex-col">
-            {visibleDrivers.map((d) => (
-              <DriverRow
-                key={d.carIdx}
-                driver={d}
-                isPlayer={d.carIdx === playerIdx}
-                cfg={cfg}
-              />
-            ))}
+            {visibleDrivers.map((d, i) =>
+              d ? (
+                <DriverRow
+                  key={`d-${d.carIdx}-${i}`}
+                  driver={d}
+                  isPlayer={d.carIdx === playerIdx}
+                  cfg={cfg}
+                  multiClass={multiClass}
+                />
+              ) : (
+                <EmptyRow key={`e-${i}`} cfg={cfg} />
+              )
+            )}
             {visibleDrivers.length === 0 && (
               <div
                 className="flex-1 flex items-center justify-center"
                 style={{ color: "rgba(255,255,255,0.4)", fontSize: `${cfg.fontSize}px` }}
               >
                 {telemetry.connected ? "Esperando datos..." : "Sin conexión con iRacing"}
-              </div>
-            )}
-            {/* Fila "self" mínima cuando no hay drivers — así el overlay
-                nunca queda visualmente vacío, incluso si el SDK no está
-                exponiendo CarIdx* todavía. */}
-            {visibleDrivers.length > 0 && sorted.length === 0 && (
-              <div
-                className="flex items-center justify-center py-2 text-[10px] tracking-widest"
-                style={{ color: "rgba(255,255,255,0.35)" }}
-              >
-                {telemetry.connected ? "SIN PILOTOS EN CLASE" : "iRACING NO CONECTADO"}
               </div>
             )}
           </div>
@@ -413,12 +438,29 @@ export function Relative({ previewMode = false, injectedTelemetry = null, settin
 // DriverRow
 // ──────────────────────────────────────────────────────────────────────────
 
-const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg }) {
+// Fila vacía (espacio reservado para mantener al player centrado cuando
+// no hay autos dentro de la ventana de 30s en esa dirección).
+const EmptyRow = React.memo(function EmptyRow({ cfg }) {
+  return (
+    <div
+      className="flex items-center px-2.5"
+      style={{
+        height: `${cfg.rowHeight}px`,
+        opacity: 0,
+      }}
+    />
+  );
+});
+
+const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg, multiClass = false }) {
   const d = driver;
   const isLeader = d.classPosition === 1;
   // Resuelve la clase real del piloto (a veces LicLevel viene mal del SDK
   // pero LicString — el string que muestra iRacing — es la fuente confiable).
   const licLevel = resolveLicLevel(d);
+
+  // Color de clase (solo relevante en multiclase).
+  const classColor = multiClass ? classColorCss(d.carClassColor) : null;
 
   // Background: player con gradient ámbar (Racelabs), líder con tinte cian,
   // resto alterna muy sutil.
@@ -430,8 +472,12 @@ const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg }) {
     ? "rgba(255,255,255,0.015)"
     : "rgba(255,255,255,0.04)";
 
+  // El borde izquierdo marca al player (ámbar); en multiclase, el resto usa el
+  // color de su clase; si no, el líder va cian y los demás sin borde.
   const stripe = isPlayer
     ? "rgb(234, 179, 8)"
+    : classColor
+    ? classColor
     : isLeader
     ? "rgb(125, 211, 252)"
     : "transparent";
@@ -625,6 +671,21 @@ const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg }) {
         </div>
       )}
 
+      {/* Vueltas de diferencia en carrera (+1L = te va a doblar, -1L = lo doblás) */}
+      {!isPlayer && d.lapDelta ? (
+        <span
+          className="font-mono font-bold text-center flex-shrink-0"
+          style={{
+            fontSize: `${cfg.fontSize - 2}px`,
+            minWidth: "24px",
+            color: d.lapDelta > 0 ? "rgb(248, 113, 113)" : "rgb(96, 165, 250)",
+          }}
+          title={d.lapDelta > 0 ? "Te está por doblar" : "Lo estás por doblar"}
+        >
+          {d.lapDelta > 0 ? `+${d.lapDelta}L` : `${d.lapDelta}L`}
+        </span>
+      ) : null}
+
       {/* Gap al player (segundos y décimas) */}
       <span
         className="font-mono font-bold text-right flex-shrink-0"
@@ -642,6 +703,8 @@ const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg }) {
   return (
     prev.driver.classPosition === next.driver.classPosition &&
     prev.driver.gapToPlayer === next.driver.gapToPlayer &&
+    prev.driver.isAhead === next.driver.isAhead &&
+    prev.driver.lapDelta === next.driver.lapDelta &&
     prev.driver.onPit === next.driver.onPit &&
     prev.driver.offTrack === next.driver.offTrack &&
     prev.driver.out === next.driver.out &&
@@ -651,7 +714,9 @@ const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg }) {
     prev.driver.irating === next.driver.irating &&
     prev.driver.carNumber === next.driver.carNumber &&
     prev.driver.name === next.driver.name &&
+    prev.driver.carClassColor === next.driver.carClassColor &&
     prev.isPlayer === next.isPlayer &&
+    prev.multiClass === next.multiClass &&
     prev.cfg === next.cfg
   );
 });

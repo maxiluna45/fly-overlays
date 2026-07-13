@@ -24,13 +24,16 @@ class IrsdkClient {
 
     // === Sector tracking ===
     // 3 sectores principales, cada uno dividido en 8 micro-sectores
-    // 3 × 8 = 24 micro-sectores totales
-    // Splits distribuidos cada 1/25 de la vuelta (4% cada uno)
-    // El último split (24/25 = 96%) marca el fin del micro-sector 23.
-    // S1: 4% al 28% (8 sub-secs)
-    // S2: 32% al 60% (8 sub-secs)
-    // S3: 64% al 96% (8 sub-secs)
-    this._splitPcts = Array.from({ length: 24 }, (_, i) => (i + 1) / 25);
+    // 3 × 8 = 24 micro-sectores totales que cubren la vuelta COMPLETA (0-100%).
+    // El micro-sector i ocupa el tramo [i/24, (i+1)/24).
+    //   - Los micro-sectores 0..22 se cierran al cruzar los splits interiores
+    //     (1/24, 2/24, …, 23/24) → por eso _splitPcts tiene 23 entradas.
+    //   - El micro-sector 23 (23/24 → meta) se cierra en el cruce de meta,
+    //     usando LapLastLapTime (ver _updateSectors). Así ya no perdemos el
+    //     tramo final ~4% que la versión vieja (splits a i/25, tope 96%) dejaba
+    //     sin cronometrar y que hacía que la suma de vuelta quedara corta.
+    // S1: micro 0-7 (0%-33%) · S2: micro 8-15 (33%-66%) · S3: micro 16-23 (66%-100%)
+    this._splitPcts = Array.from({ length: 23 }, (_, i) => (i + 1) / 24);
     this._lastLapPct = 0;        // LapDistPct del frame anterior (para detectar cruces)
     this._lastSplitTime = 0;     // currentLap al cruzar el último split
     this._currentMicroSectors = new Array(24).fill(null); // 3 micro × 3 sectores
@@ -141,6 +144,9 @@ class IrsdkClient {
     this._lastLapPct = 0; // _lastLapPct=0 permite que el primer frame detecte split 0
     this._lastSplitTime = 0; // _lastSplitTime=0 da microTime = currentLap (1.5s) para S1.1
     this._currentMicroSectors = new Array(24).fill(null);
+    // Evita un lapChanged espurio en el primer tick (que copiaría un array
+    // vacío sobre el historial recién sembrado por _seedMockHistory).
+    this._lastLapNumberForSectors = null;
 
     this._mockTimer = setInterval(() => {
       const t = (Date.now() - this._mockStart) / 1000;
@@ -171,12 +177,13 @@ class IrsdkClient {
 
       // Simulamos cruce de splits: pasamos los datos al sector tracker
       if (this._previewMode) {
-        // Si cambió el número de vuelta, reiniciamos el _lastLapPct para que el primer split se detecte
+        // Solo bookkeeping del número de vuelta del mock. El reset de estado
+        // (currentMicroSectors, _lastSplitTime, _lastLapPct) lo hace ahora
+        // _updateSectors en su bloque lapChanged; si lo reseteáramos ACÁ antes,
+        // el guard de captura del micro-sector final (_lastSplitTime>0) saltaría
+        // y S3 quedaría incompleto en el preview.
         if (lap !== this._mockLap) {
           this._mockLap = lap;
-          this._lastLapPct = 0;
-          this._lastSplitTime = 0;
-          this._currentMicroSectors = new Array(24).fill(null);
         }
         // "Empujamos" el currentLap bastante para que haya variabilidad entre
         // micro-sectores y se vean distintos colores
@@ -186,6 +193,9 @@ class IrsdkClient {
           lapDistPct,
           currentLap: jitteredCurrentLap,
           sessionTime: t,
+          // El micro-sector final (índice 23) se cierra en meta con este valor;
+          // sin él, S3 quedaría incompleto en el preview.
+          lastLapTime: LAP_DURATION,
         });
       }
 
@@ -221,13 +231,14 @@ class IrsdkClient {
     const drivers = driverNames.map((name, i) => {
       const [licString, licLevel, licSub, licColor] = licData[i];
       const isPlayer = i === playerIdx;
-      // Gap al player (negativo = adelante, positivo = detrás, player = 0).
-      // Lo hacemos variar con t y con la posición relativa del piloto,
-      // simulando que cada uno corre a un ritmo distinto (algunos acercan,
-      // otros se alejan) para que el delta se vea vivo en preview.
-      const baseGap = (i - playerIdx) * 1.5;
+      // Gap al player. Convención: gap SIEMPRE positivo; isAhead indica
+      // si el auto va adelante (true) o detrás (false) del player. El
+      // componente ordena y posiciona según isAhead.
+      const baseGap = Math.abs(i - playerIdx) * 1.5;
       const drift = Math.sin(t * 0.2 + i * 0.7) * 0.8;
-      const gapToPlayer = isPlayer ? 0 : baseGap + drift;
+      // relDelta con la convención nueva: >0 = adelante en pista. Los índices
+      // menores al player (i < playerIdx) van adelante.
+      const relDelta = isPlayer ? 0 : (i < playerIdx ? (baseGap + drift) : -(baseGap + drift));
       const lastLapTime = baseLap + (i * 0.15) + Math.sin(t + i) * 0.2;
       return {
         carIdx: i,
@@ -245,7 +256,11 @@ class IrsdkClient {
         carClassId: 0,
         carClassShort: "",
         carClassColor: 1,
-        gapToPlayer,
+        isPlayerClass: true,
+        relDelta,
+        gapToPlayer: Math.abs(relDelta),
+        isAhead: relDelta > 0,
+        lapDelta: 0,
         lapCompleted: isPlayer ? currentLapNum - 1 : currentLapNum - 1,
         lapDistPct: isPlayer ? (currentLapTime / 12) : Math.min(1, (currentLapTime + (i - playerIdx) * 0.5) / 12),
         onTrack: true,
@@ -431,6 +446,7 @@ class IrsdkClient {
     const currentLap = this._read(telemetry, 'LapCurrentLapTime') || 0;
     const lapDistPct = this._read(telemetry, 'LapDistPct') || 0;
     const sessionTime = this._read(telemetry, 'SessionTime') || 0;
+    const lastLapTime = this._read(telemetry, 'LapLastLapTime') || 0;
 
     // Detectar tipo de sesión del SessionInfo
     // iRacing expone SessionType como string. Valores comunes:
@@ -496,18 +512,32 @@ class IrsdkClient {
     }
 
     // Detectar cruces de splits y meta
-    this._updateSectors({ lap, lapDistPct, currentLap, sessionTime });
+    this._updateSectors({ lap, lapDistPct, currentLap, sessionTime, lastLapTime });
 
     this._cachedData = {
       // Preservamos los campos pesados seteados por ticks anteriores
       ...this._cachedData,
       delta: this._computeDelta({ lap, bestLap, currentLap, lapDeltaToBest, deltaRate: lapDeltaRate, speed, lapDistPct, sessionType, isRace, isQual, isPractice }),
+      // Tasa de cambio del delta (segundos/segundo). >0 = perdiendo tiempo,
+      // <0 = ganando. La usa el DeltaBar para el indicador de tendencia.
+      deltaRate: lapDeltaRate,
+      // Referencias alternativas del delta, para que el overlay pueda dejar
+      // que el usuario elija contra qué compararse (best de sesión / best
+      // histórico personal / óptima). null = iRacing no tiene esa referencia
+      // válida todavía. La elección "auto" (según tipo de sesión) sigue en `delta`.
+      deltaRefs: {
+        sessionBest: this._readDelta(telemetry, 'LapDeltaToSessionBestLap'),
+        personalBest: this._readDelta(telemetry, 'LapDeltaToBestLap'),
+        optimal: this._readDelta(telemetry, 'LapDeltaToOptimalLap'),
+      },
       lap,
       speed,
       onTrack: typeof speed === 'number' && speed > 0.5,
       session: session?.SessionNum,
       sessionType,
     };
+    // Guardamos el sessionType para getDeltaBest (lectura fuera del loop)
+    this._cachedSessionType = sessionType;
 
     // Sectors: barato de armar (sólo copia de arrays), lo actualizamos siempre.
     this._cachedData.sectors = this.getSectors();
@@ -532,7 +562,7 @@ class IrsdkClient {
       this._cachedData.tyres = this.getTyres();
       heavyChanged = true;
     }
-    if (now - this._lastRelativeUpdate > 1000) {
+    if (now - this._lastRelativeUpdate > 100) {
       this._lastRelativeUpdate = now;
       this._cachedData.relative = this.getRelative();
       heavyChanged = true;
@@ -540,7 +570,7 @@ class IrsdkClient {
     if (heavyChanged) this._emitHeavy();
   }
 
-  _updateSectors({ lap, lapDistPct, currentLap, sessionTime }) {
+  _updateSectors({ lap, lapDistPct, currentLap, sessionTime, lastLapTime = 0 }) {
     // Detección de cruce de meta por cambio en número de vuelta
     // (más robusto que detectar el wrap de LapDistPct que puede fallar en
     // circuitos con geometría irregular)
@@ -548,8 +578,21 @@ class IrsdkClient {
     this._lastLapNumberForSectors = lap;
 
     if (lapChanged) {
+      // Cerrar el micro-sector FINAL (índice 23, tramo 23/24 → meta) que no se
+      // detecta por cruce de split porque LapDistPct ya reseteó a ~0.
+      // Lo derivamos del tiempo oficial de vuelta: tramo final = LapLastLapTime
+      // menos el tiempo acumulado hasta el último split interior (_lastSplitTime).
+      // En vueltas inválidas LapLastLapTime viene <=0 → el guard lo descarta y
+      // el micro-sector 23 queda null (S3 se muestra incompleto, correcto).
+      if (this._currentMicroSectors[23] == null && lastLapTime > 0 && this._lastSplitTime > 0) {
+        const finalMicro = lastLapTime - this._lastSplitTime;
+        if (finalMicro > 0 && finalMicro < 300) {
+          this._currentMicroSectors[23] = finalMicro;
+        }
+      }
+
       // Guardamos la última vuelta completa (los 24 micro-sectores ya se
-      // llenaron por cruce de splits; el último se llena al cruzar 24/25)
+      // llenaron: 0..22 por cruce de splits interiores, 23 por el cruce de meta)
       this._lastLapMicroSectors = [...this._currentMicroSectors];
 
       // Actualizamos bestLapMicroSectors si alguno es record
@@ -663,10 +706,23 @@ class IrsdkClient {
     return raw;
   }
 
+  // Lee una variable de delta oficial (LapDeltaTo*) solo si su flag _OK está
+  // activo y el valor es sano. Devuelve null en caso contrario, para que el
+  // overlay distinguga "sin referencia" de "delta exactamente 0".
+  _readDelta(telemetry, base) {
+    if (this._read(telemetry, base + '_OK')) {
+      const v = this._read(telemetry, base);
+      if (v != null && isFinite(v) && Math.abs(v) < 1000) return v;
+    }
+    return null;
+  }
+
   _buildLightPayload() {
     return {
       connected: this._connected,
       delta: this._cachedData.delta ?? 0,
+      deltaRate: this._cachedData.deltaRate ?? 0,
+      deltaRefs: this._cachedData.deltaRefs ?? { sessionBest: null, personalBest: null, optimal: null },
       lap: this._cachedData.lap ?? 0,
       speed: this._cachedData.speed ?? 0,
       onTrack: this._cachedData.onTrack ?? false,
@@ -860,21 +916,31 @@ class IrsdkClient {
     };
   }
 
-  // Devuelve el relative (leaderboard) con todos los pilotos de la clase del player.
-  // Estructura:
-  //   {
-  //     playerIdx, playerCarClass, totalInClass, totalOverall,
-  //     drivers: [
-  //       { carIdx, position, classPosition, name, abbrev,
-  //         carNumber, irating, licString, licColor, licSubLevel,
-  //         carClassId, carClassShort, carClassColor,
-  //         gapToPlayer, lapCompleted, lapDistPct, onTrack, onPit, out,
-  //         estLapTime, lastLapTime, bestLapTime, isPlayer, isLeader,
-  //         isFastest, sessionFlags
-  //       }, ...
-  //     ],
-  //     session: { type, time, timeRemain, lapsTotal, lapCurrent, lapsMax }
-  //   }
+  // Devuelve el relative: los autos físicamente cerca del player EN PISTA, con
+  // el tiempo (con signo) que los separa. NO es la tabla de posiciones — es un
+  // "relative" al estilo iRon/iRacing: incluye TODAS las clases (multiclase) y
+  // el componente centra al player y ordena por cercanía en pista.
+  //
+  // Estructura por driver:
+  //   { carIdx, position, classPosition, name, abbrev, carNumber, irating,
+  //     licString, licColor, licSubLevel, carClassId, carClassShort,
+  //     carClassColor, relDelta, gapToPlayer, isAhead, lapDelta, isPlayerClass,
+  //     lapCompleted, lapDistPct, onTrack, onPit, offTrack, out, estLapTime,
+  //     lastLapTime, bestLapTime, bestLapNum, isFastest, sessionFlags }
+  //
+  //   relDelta   = tiempo con signo respecto al player en pista.
+  //                >0 → el auto va ADELANTE tuyo · <0 → DETRÁS. null si no hay datos.
+  //   gapToPlayer = |relDelta| (magnitud, para mostrar).
+  //   isAhead    = relDelta > 0.
+  //   lapDelta   = vueltas de diferencia en carrera (+1 = te está por doblar,
+  //                -1 = lo estás por doblar). 0 fuera de carrera o sin datos.
+  //
+  // ── Algoritmo del gap (referencia: lespalt/iRon, OverlayRelative.h) ──
+  //   El wrap por la línea de meta se detecta con LapDistPct (|Δpct| > 0.5),
+  //   NO con el signo crudo del EstTime (que es tiempo-dentro-de-la-vuelta y
+  //   wrappea). Con EstTime real por-auto usamos la diferencia directa (respeta
+  //   el pace no uniforme por la vuelta); si el wrapper solo expone escalares,
+  //   caemos a distancia_relativa × tiempo_de_vuelta (asume pace uniforme).
   //
   // IMPORTANTE: en este wrapper (irsdk-node) los arrays CarIdx* a veces vienen
   // como escalares (valor del player) en vez de arrays por piloto. Usamos
@@ -902,98 +968,122 @@ class IrsdkClient {
           const playerRealClass = playerDriver ? playerDriver.CarClassID : 0;
 
           // Arrays CarIdx* (normalizados a tamaño n)
-          const positions = this._readCarIdxArray(telemetry, 'CarIdxPosition', n, playerIdx);
-          const classPositions = this._readCarIdxArray(telemetry, 'CarIdxClassPosition', n, playerIdx);
-          const lapCompleted = this._readCarIdxArray(telemetry, 'CarIdxLapCompleted', n, playerIdx);
-          const lapDistPct = this._readCarIdxArray(telemetry, 'CarIdxLapDistPct', n, playerIdx);
-          const trackSurface = this._readCarIdxArray(telemetry, 'CarIdxTrackSurface', n, playerIdx);
-          const onPitRoad = this._readCarIdxArray(telemetry, 'CarIdxOnPitRoad', n, playerIdx);
-          const estTime = this._readCarIdxArray(telemetry, 'CarIdxEstTime', n, playerIdx);
-          const lastLapTime = this._readCarIdxArray(telemetry, 'CarIdxLastLapTime', n, playerIdx);
-          const bestLapTime = this._readCarIdxArray(telemetry, 'CarIdxBestLapTime', n, playerIdx);
-          const bestLapNum = this._readCarIdxArray(telemetry, 'CarIdxBestLapNum', n, playerIdx);
-          const sessionFlagsArr = this._readCarIdxArray(telemetry, 'CarIdxSessionFlags', n, playerIdx);
+            const positions = this._readCarIdxArray(telemetry, 'CarIdxPosition', n, playerIdx);
+            const classPositions = this._readCarIdxArray(telemetry, 'CarIdxClassPosition', n, playerIdx);
+            const lapCompleted = this._readCarIdxArray(telemetry, 'CarIdxLapCompleted', n, playerIdx);
+            const lapDistPct = this._readCarIdxArray(telemetry, 'CarIdxLapDistPct', n, playerIdx);
+            const trackSurfaceRaw = this._read(telemetry, 'CarIdxTrackSurface');
+            const trackSurface = this._readCarIdxArray(telemetry, 'CarIdxTrackSurface', n, playerIdx);
+            // Sanity check: si el wrapper solo expone el surface del player
+            // (escalar), todos los demás índices vienen en 0 y se confunden
+            // con "not in world". Solo confiamos en el array si tiene
+            // valores plausibles (mezcla de 1/2/3, no todos 0 ni todos 3).
+            const trackSurfaceIsReliable =
+              Array.isArray(trackSurfaceRaw) &&
+              trackSurfaceRaw.length > 1 &&
+              trackSurfaceRaw.some((v) => v === 1 || v === 2 || v === 3) &&
+              !(trackSurfaceRaw.every((v) => v === 3)); // no todos off-track
+            const onPitRoad = this._readCarIdxArray(telemetry, 'CarIdxOnPitRoad', n, playerIdx);
+            const estTime = this._readCarIdxArray(telemetry, 'CarIdxEstTime', n, playerIdx);
+            const lastLapTime = this._readCarIdxArray(telemetry, 'CarIdxLastLapTime', n, playerIdx);
+            const bestLapTime = this._readCarIdxArray(telemetry, 'CarIdxBestLapTime', n, playerIdx);
+            const bestLapNum = this._readCarIdxArray(telemetry, 'CarIdxBestLapNum', n, playerIdx);
+            const sessionFlagsArr = this._readCarIdxArray(telemetry, 'CarIdxSessionFlags', n, playerIdx);
 
-          // Best lap del player (clase) para detectar "fastest"
-          let bestLapInClass = Infinity;
+          // Best lap por clase (para marcar el "fastest" de cada clase en multiclase)
+          const bestLapByClass = {};
           for (let i = 0; i < n; i++) {
             const d = driverInfo.Drivers[i];
-            if (d.CarClassID !== playerRealClass) continue;
             const bl = bestLapTime[i];
-            if (bl > 0 && bl < bestLapInClass) bestLapInClass = bl;
+            if (bl > 0) {
+              const c = d.CarClassID;
+              if (bestLapByClass[c] == null || bl < bestLapByClass[c]) bestLapByClass[c] = bl;
+            }
           }
 
-          // Construir lista de drivers de la clase del player.
-          // Filtro: solo mostrar drivers activos según CarIdxTrackSurface.
-          //   surface === -1 → slot inactivo (no mostrar, salvo player)
-          //   surface === 0  → not in world / disconnected (no mostrar, salvo player)
-          //   surface === 1  → in pit stall (mostrar con tag PIT)
-          //   surface === 2  → on track (mostrar normal)
-          //   surface === 3  → off track (mostrar con tag OFF)
-          // Sin esto, el SDK reporta 25+ posiciones > 0 pero solo 3 autos
-          // están realmente en pista; el resto son "fantasmas" de slots viejos.
+          // ── Referencia de tiempo de vuelta (L) para convertir distancia→tiempo
+          // y para el wrap por meta. Preferimos CarClassEstLapTime (lo que usa
+          // iRacing internamente); fallback al best/last del player; luego 90s.
+          const classEstRaw = this._read(telemetry, 'CarClassEstLapTime');
+          let L = 0;
+          if (typeof classEstRaw === 'number' && classEstRaw > 0) {
+            L = classEstRaw;
+          } else if (Array.isArray(classEstRaw)) {
+            const v = classEstRaw[playerIdx] > 0 ? classEstRaw[playerIdx] : classEstRaw.find((x) => x > 0);
+            if (v > 0) L = v;
+          }
+          if (!(L > 0)) { const pb = bestLapTime[playerIdx]; if (pb > 0) L = pb; }
+          if (!(L > 0)) { const pl = lastLapTime[playerIdx]; if (pl > 0) L = pl; }
+          if (!(L > 0)) { const tb = this._read(telemetry, 'LapBestLapTime'); if (tb > 0) L = tb; }
+          if (!(L > 0)) L = 90;
+
+          // ── Arrays por-auto para el gap. Detectamos si son arrays "reales"
+          // (con valores de otros autos, no solo el escalar del player).
+          const estRaw = this._read(telemetry, 'CarIdxEstTime');
+          const pctRaw = this._read(telemetry, 'CarIdxLapDistPct');
+          const lapRaw = this._read(telemetry, 'CarIdxLap');
+          const estReal = Array.isArray(estRaw) && estRaw.length > 1 && estRaw.some((v, idx) => idx !== playerIdx && v > 0);
+          const pctReal = Array.isArray(pctRaw) && pctRaw.length > 1 && pctRaw.some((v, idx) => idx !== playerIdx && v !== 0);
+          const lapReal = Array.isArray(lapRaw) && lapRaw.length > 1 && lapRaw.some((v, idx) => idx !== playerIdx && v > 0);
+          const estA = this._readCarIdxArray(telemetry, 'CarIdxEstTime', n, playerIdx);
+          const lapArr = this._readCarIdxArray(telemetry, 'CarIdxLap', n, playerIdx);
+          const isRace = /race/i.test(this._cachedSessionType || '');
+
+          const pctSelf = lapDistPct[playerIdx];
+          const estSelf = estA[playerIdx];
+
+          // Construir la lista. En multiclase incluimos TODAS las clases: un
+          // relative muestra a quien tenés cerca en pista, sea de tu clase o no.
+          // Filtro por CarIdxTrackSurface para descartar "fantasmas" de slots viejos.
+          //   -1 inactivo · 0 not in world · 1 pit stall · 2 on track · 3 off track
           const drivers = [];
           for (let i = 0; i < n; i++) {
             const d = driverInfo.Drivers[i];
-            if (d.CarClassID !== playerRealClass) continue;
             if (d.CarIsPaceCar === 1) continue;
+            if (d.IsSpectator === 1) continue;
             const pos = positions[i] ?? 0;
             const cpos = classPositions[i] ?? 0;
             const surface = trackSurface[i] ?? -1;
             const onPit = !!onPitRoad[i];
             const isPlayer = i === playerIdx;
-            // Filtrar slots inactivos o "not in world" (fantasmas).
             // El player se muestra siempre (puede tener surface=-1 transitorio).
             if (!isPlayer && (surface === -1 || surface === 0)) continue;
 
-            // Estados
-            const onTrack = surface === 2;
+            const onTrack = trackSurfaceIsReliable ? surface === 2 : (isPlayer ? surface === 2 : true);
             const inPitStall = surface === 1;
-            const offTrack = surface === 3;
+            const offTrack = trackSurfaceIsReliable ? surface === 3 : false;
             const out = surface === -1 || surface === 0;
 
-            // Gap al player (en segundos).
-            // Convención (igual a iRacing): negativo = adelante, positivo = atrás.
-            //   Adelante tuyo → fila arriba, gap con número absoluto
-            //   Atrás tuyo   → fila abajo, gap con número absoluto
-            //
-            // Fuente 1: CarIdxF2Time (tiempo detrás del leader). El wrapper
-            //   irsdk-node a veces lo expone como escalar (solo el del player),
-            //   en cuyo caso NO podemos sacar gaps de otros pilotos — caemos
-            //   a estTime.
-            // Fuente 2: CarIdxEstTime (tiempo estimado de cruce de meta). La
-            //   diferencia directa entre dos pilotos da el gap en segundos.
-            const f2 = this._read(telemetry, 'CarIdxF2Time') ?? null;
-            const f2IsRealArray =
-              Array.isArray(f2) &&
-              f2.length > 1 &&
-              f2.some((v, idx) => idx !== playerIdx && v > 0);
-            const estRaw = this._read(telemetry, 'CarIdxEstTime') ?? null;
-            const estIsRealArray =
-              Array.isArray(estRaw) &&
-              estRaw.length > 1 &&
-              estRaw.some((v, idx) => idx !== playerIdx && v > 0);
+            // ── Gap relativo con signo (algoritmo iRon) ──
+            let relDelta = null;
+            const pctCar = lapDistPct[i];
+            // Distancia relativa en fracción de vuelta, normalizada a (-0.5, 0.5].
+            let dPct = pctCar - pctSelf;
+            const wrap = Math.abs(dPct) > 0.5;
+            if (dPct > 0.5) dPct -= 1;
+            else if (dPct < -0.5) dPct += 1;
 
-            let gapToPlayer = null;
-            if (f2IsRealArray && f2[playerIdx] != null && f2[playerIdx] >= 0) {
-              // Camino A: array real de F2Time
-              gapToPlayer = f2[i] - f2[playerIdx];
-            } else if (estIsRealArray && estRaw[playerIdx] != null && estRaw[playerIdx] > 0) {
-              // Camino B: array real de EstTime
-              gapToPlayer = estRaw[i] - estRaw[playerIdx];
-            } else {
-              // Camino C: re-normalizar a arrays aunque hayan venido escalares,
-              //   pero descartar si el resultado es degenerado (todos ceros
-              //   salvo el índice del player).
-              const f2Arr = this._readCarIdxArray(telemetry, 'CarIdxF2Time', n, playerIdx);
-              const estArr = this._readCarIdxArray(telemetry, 'CarIdxEstTime', n, playerIdx);
-              const f2HasOthers = f2Arr.some((v, idx) => idx !== playerIdx && v > 0);
-              const estHasOthers = estArr.some((v, idx) => idx !== playerIdx && v > 0);
-              if (f2HasOthers && f2Arr[playerIdx] != null && f2Arr[playerIdx] >= 0) {
-                gapToPlayer = f2Arr[i] - f2Arr[playerIdx];
-              } else if (estHasOthers && estArr[playerIdx] != null && estArr[playerIdx] > 0) {
-                gapToPlayer = estArr[i] - estArr[playerIdx];
-              }
+            if (isPlayer) {
+              relDelta = 0;
+            } else if (estReal && estSelf > 0) {
+              // EstTime real: respeta el pace no uniforme a lo largo de la vuelta.
+              const S = estSelf;
+              const C = estA[i];
+              relDelta = wrap ? (S > C ? (C - S) + L : (C - S) - L) : (C - S);
+            } else if (pctReal) {
+              // Fallback robusto: distancia_relativa × tiempo_de_vuelta.
+              relDelta = dPct * L;
+            }
+            const isAhead = relDelta != null && relDelta > 0;
+
+            // ── lapDelta: solo en carrera y con datos reales de vuelta por-auto.
+            // Progreso total = vuelta + fracción; la diferencia redondeada son
+            // las vueltas que nos separan. +1 = te va a doblar, -1 = lo doblás.
+            let lapDelta = 0;
+            if (isRace && lapReal && !isPlayer) {
+              const progSelf = (lapArr[playerIdx] || 0) + pctSelf;
+              const progCar = (lapArr[i] || 0) + pctCar;
+              lapDelta = Math.round(progCar - progSelf);
             }
 
             drivers.push({
@@ -1013,9 +1103,13 @@ class IrsdkClient {
               carClassId: d.CarClassID,
               carClassShort: d.CarClassShortName || "",
               carClassColor: d.CarClassColor || 0,
-              gapToPlayer,
+              isPlayerClass: d.CarClassID === playerRealClass,
+              relDelta,
+              gapToPlayer: relDelta != null ? Math.abs(relDelta) : null,
+              isAhead,
+              lapDelta,
               lapCompleted: lapCompleted[i] || 0,
-              lapDistPct: lapDistPct[i] || 0,
+              lapDistPct: pctCar || 0,
               onTrack,
               onPit: onPit || inPitStall,
               offTrack,
@@ -1024,7 +1118,8 @@ class IrsdkClient {
               lastLapTime: lastLapTime[i] || 0,
               bestLapTime: bestLapTime[i] || 0,
               bestLapNum: bestLapNum[i] || 0,
-              isFastest: bestLapTime[i] > 0 && Math.abs(bestLapTime[i] - bestLapInClass) < 0.001,
+              isFastest: bestLapTime[i] > 0 && bestLapByClass[d.CarClassID] != null &&
+                Math.abs(bestLapTime[i] - bestLapByClass[d.CarClassID]) < 0.001,
               sessionFlags: sessionFlagsArr[i] || 0,
             });
           }
@@ -1035,16 +1130,23 @@ class IrsdkClient {
             const s = trackSurface[i] ?? -1;
             if (s !== -1 && s !== 0) totalOverall++;
           }
-          const totalInClass = drivers.length;
+          const totalInClass = drivers.filter((x) => x.isPlayerClass).length;
 
-          // Ordenar por classPosition ascendente
-          drivers.sort((a, b) => (a.classPosition || 99) - (b.classPosition || 99));
-
-          // Asignar classPosition correlativa dentro de los drivers visibles
-          // (porque a veces iRacing no la publica en practice)
-          for (let k = 0; k < drivers.length; k++) {
-            if (!drivers[k].classPosition) drivers[k].classPosition = k + 1;
+          // Rellenar classPosition faltante por clase (iRacing no siempre la
+          // publica en práctica). Ordenamos cada clase por best lap.
+          const byClass = {};
+          for (const dr of drivers) (byClass[dr.carClassId] ||= []).push(dr);
+          for (const cls of Object.values(byClass)) {
+            if (cls.some((d) => !d.classPosition)) {
+              cls.slice().sort((a, b) => (a.bestLapTime || 1e9) - (b.bestLapTime || 1e9))
+                .forEach((d, k) => { if (!d.classPosition) d.classPosition = k + 1; });
+            }
           }
+
+          // Orden base por cercanía en pista (relDelta desc: adelante arriba).
+          // El componente vuelve a centrar en el player, pero así el payload
+          // ya llega coherente.
+          drivers.sort((a, b) => (b.relDelta ?? -Infinity) - (a.relDelta ?? -Infinity));
 
           // Info de sesión
           const session = this._getSessionInfo();

@@ -416,9 +416,15 @@ function DeltaBarLite() {
 
   useEffect(() => {
     const lastSetValueRef = { current: 0 };
-    const tick = () => {
+    // Suavizado exponencial por tiempo (consistente entre 60/120/144 Hz).
+    const TAU = 0.12;
+    let lastTs = 0;
+    const tick = (ts) => {
+      const dt = lastTs ? Math.min(0.1, (ts - lastTs) / 1000) : 1 / 60;
+      lastTs = ts;
+      const alpha = 1 - Math.exp(-dt / TAU);
       const diff = targetRef.current - displayRef.current;
-      const next = displayRef.current + diff * 0.22;
+      const next = displayRef.current + diff * alpha;
       displayRef.current = next;
       if (Math.abs(next - lastSetValueRef.current) >= 0.005) {
         lastSetValueRef.current = next;
@@ -649,16 +655,16 @@ const RELATIVE_MOCK = {
   totalInClass: 12,
   totalOverall: 24,
   drivers: [
-    { carIdx: 1, classPosition: 1, name: "Tre Blohm",      carNumber: "9",  irating: 14500, licString: "A 4.6", licLevel: 5, licSubLevel: 4.6, licColor: 5, carClassColor: 1, lastLapTime: 96.7, bestLapTime: 95.1, gapToPlayer: -22.5, onTrack: true, onPit: false, offTrack: false, out: false, isFastest: true },
-    { carIdx: 2, classPosition: 2, name: "Max Josten",     carNumber: "12", irating:  1850, licString: "D 3.4", licLevel: 2, licSubLevel: 3.4, licColor: 2, carClassColor: 1, lastLapTime: 97.2, bestLapTime: 95.4, gapToPlayer: -16.0, onTrack: true, onPit: false, offTrack: false, out: false },
-    { carIdx: 3, classPosition: 3, name: "Henrique Silva", carNumber: "10", irating:  2400, licString: "D 2.7", licLevel: 2, licSubLevel: 2.7, licColor: 2, carClassColor: 1, lastLapTime: 98.4, bestLapTime: 96.2, gapToPlayer:  -3.2, onTrack: true, onPit: false, offTrack: false, out: false },
-    { carIdx: 4, classPosition: 4, name: "Joao Rocha",     carNumber: "7",  irating:  3200, licString: "C 3.9", licLevel: 3, licSubLevel: 3.9, licColor: 3, carClassColor: 1, lastLapTime: 98.9, bestLapTime: 96.5, gapToPlayer:  -1.1, onTrack: true, onPit: false, offTrack: false, out: false },
-    { carIdx: 5, classPosition: 5, name: "Suleiman Himmo", carNumber: "23", irating:  1100, licString: "R 2.1", licLevel: 1, licSubLevel: 2.1, licColor: 1, carClassColor: 1, lastLapTime: 99.3, bestLapTime: 97.1, gapToPlayer:  -0.4, onTrack: true, onPit: false, offTrack: false, out: false },
-    { carIdx: 6, classPosition: 6, name: "Jose Ferrada",   carNumber: "17", irating:  6700, licString: "B 4.2", licLevel: 4, licSubLevel: 4.2, licColor: 4, carClassColor: 1, lastLapTime: 99.7, bestLapTime: 96.8, gapToPlayer:   0.0, onTrack: true, onPit: false, offTrack: false, out: false },
-    { carIdx: 7, classPosition: 7, name: "Maximiliano Luna2", carNumber: "62", irating: 1500, licString: "D 2.3", licLevel: 2, licSubLevel: 2.3, licColor: 2, carClassColor: 1, lastLapTime: 100.1, bestLapTime: 97.5, gapToPlayer:  0.0, onTrack: true, onPit: false, offTrack: true, out: false, isPlayer: true },
-    { carIdx: 8, classPosition: 8, name: "Anders Krog",    carNumber: "44", irating:  2800, licString: "D 3.7", licLevel: 2, licSubLevel: 3.7, licColor: 2, carClassColor: 1, lastLapTime: 100.4, bestLapTime: 98.0, gapToPlayer:   1.2, onTrack: true, onPit: false, offTrack: false, out: false },
-    { carIdx: 9, classPosition: 9, name: "Marc Vidal",     carNumber: "8",  irating:  1400, licString: "R 1.8", licLevel: 1, licSubLevel: 1.8, licColor: 1, carClassColor: 1, lastLapTime: 101.0, bestLapTime: 98.6, gapToPlayer:   6.7, onTrack: true, onPit: false, offTrack: false, out: false },
-    { carIdx: 10, classPosition: 10, name: "Park Joon",     carNumber: "21", irating:  1700, licString: "D 2.9", licLevel: 2, licSubLevel: 2.9, licColor: 2, carClassColor: 1, lastLapTime: 101.8, bestLapTime: 99.2, gapToPlayer:   8.0, onTrack: true, onPit: false, offTrack: false, out: false },
+    { carIdx: 1, classPosition: 1, name: "Tre Blohm",      carNumber: "9",  irating: 14500, licString: "A 4.6", licLevel: 5, licSubLevel: 4.6, licColor: 5, carClassColor: 1, lastLapTime: 96.7, bestLapTime: 95.1, gapToPlayer: 22.5, isAhead: true,  onTrack: true, onPit: false, offTrack: false, out: false, isFastest: true },
+    { carIdx: 2, classPosition: 2, name: "Max Josten",     carNumber: "12", irating:  1850, licString: "D 3.4", licLevel: 2, licSubLevel: 3.4, licColor: 2, carClassColor: 1, lastLapTime: 97.2, bestLapTime: 95.4, gapToPlayer: 16.0, isAhead: true,  onTrack: true, onPit: false, offTrack: false, out: false },
+    { carIdx: 3, classPosition: 3, name: "Henrique Silva", carNumber: "10", irating:  2400, licString: "D 2.7", licLevel: 2, licSubLevel: 2.7, licColor: 2, carClassColor: 1, lastLapTime: 98.4, bestLapTime: 96.2, gapToPlayer:  3.2, isAhead: true,  onTrack: true, onPit: false, offTrack: false, out: false },
+    { carIdx: 4, classPosition: 4, name: "Joao Rocha",     carNumber: "7",  irating:  3200, licString: "C 3.9", licLevel: 3, licSubLevel: 3.9, licColor: 3, carClassColor: 1, lastLapTime: 98.9, bestLapTime: 96.5, gapToPlayer:  1.1, isAhead: true,  onTrack: true, onPit: false, offTrack: false, out: false },
+    { carIdx: 5, classPosition: 5, name: "Suleiman Himmo", carNumber: "23", irating:  1100, licString: "R 2.1", licLevel: 1, licSubLevel: 2.1, licColor: 1, carClassColor: 1, lastLapTime: 99.3, bestLapTime: 97.1, gapToPlayer:  0.4, isAhead: true,  onTrack: true, onPit: false, offTrack: false, out: false },
+    { carIdx: 6, classPosition: 6, name: "Jose Ferrada",   carNumber: "17", irating:  6700, licString: "B 4.2", licLevel: 4, licSubLevel: 4.2, licColor: 4, carClassColor: 1, lastLapTime: 99.7, bestLapTime: 96.8, gapToPlayer:  0.0, isAhead: false, onTrack: true, onPit: false, offTrack: false, out: false },
+    { carIdx: 7, classPosition: 7, name: "Maximiliano Luna2", carNumber: "62", irating: 1500, licString: "D 2.3", licLevel: 2, licSubLevel: 2.3, licColor: 2, carClassColor: 1, lastLapTime: 100.1, bestLapTime: 97.5, gapToPlayer:  0.0, isAhead: false, onTrack: true, onPit: false, offTrack: true, out: false, isPlayer: true },
+    { carIdx: 8, classPosition: 8, name: "Anders Krog",    carNumber: "44", irating:  2800, licString: "D 3.7", licLevel: 2, licSubLevel: 3.7, licColor: 2, carClassColor: 1, lastLapTime: 100.4, bestLapTime: 98.0, gapToPlayer:  1.2, isAhead: false, onTrack: true, onPit: false, offTrack: false, out: false },
+    { carIdx: 9, classPosition: 9, name: "Marc Vidal",     carNumber: "8",  irating:  1400, licString: "R 1.8", licLevel: 1, licSubLevel: 1.8, licColor: 1, carClassColor: 1, lastLapTime: 101.0, bestLapTime: 98.6, gapToPlayer:  6.7, isAhead: false, onTrack: true, onPit: false, offTrack: false, out: false },
+    { carIdx: 10, classPosition: 10, name: "Park Joon",     carNumber: "21", irating:  1700, licString: "D 2.9", licLevel: 2, licSubLevel: 2.9, licColor: 2, carClassColor: 1, lastLapTime: 101.8, bestLapTime: 99.2, gapToPlayer:  8.0, isAhead: false, onTrack: true, onPit: false, offTrack: false, out: false },
   ],
   session: {
     type: "Practice",
@@ -704,7 +710,19 @@ function RelativeLite() {
       setTelemetry((prev) => {
         const hasReal = prev.relative && Array.isArray(prev.relative.drivers) && prev.relative.drivers.length > 0;
         if (hasReal) return prev;
-        return { ...prev, relative: RELATIVE_MOCK, preview: true };
+        // Enriquecemos el mock con los campos del nuevo esquema (relDelta con
+        // signo, lapDelta, isPlayerClass) para que el preview use el mismo
+        // camino de render que la sesión real.
+        const relative = {
+          ...RELATIVE_MOCK,
+          drivers: RELATIVE_MOCK.drivers.map((d) => ({
+            ...d,
+            isPlayerClass: true,
+            lapDelta: 0,
+            relDelta: d.isPlayer ? 0 : (d.isAhead ? (d.gapToPlayer || 0) : -(d.gapToPlayer || 0)),
+          })),
+        };
+        return { ...prev, relative, preview: true };
       });
     }, 1500);
     return () => clearTimeout(t);
@@ -837,6 +855,9 @@ const SETTING_LABELS = {
   delta: {
     showBar: "Mostrar barra",
     showNumber: "Mostrar número",
+    showTrend: "Indicador de tendencia",
+    range: "Rango de la barra (±s)",
+    deltaReference: "Referencia del delta",
     barHeight: "Alto de la barra",
     barWidthPercent: "Ancho de la barra",
     valueFontSize: "Tamaño del número",
@@ -848,6 +869,7 @@ const SETTING_LABELS = {
   sectors: {
     showHeader: "Mostrar header",
     showSubBars: "Mostrar sub-sectores",
+    showSectorDelta: "Delta por sector",
     headerFontSize: "Tamaño del header",
     valueFontSize: "Tamaño de los tiempos",
     timeColumnWidth: "Ancho columna label",
@@ -967,6 +989,37 @@ function AppearanceSettings({ overlayId, overlayKey, settings = {}, onChange }) 
         <>
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showBar" value={settings.showBar} onChange={onChange} />
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showNumber" value={settings.showNumber} onChange={onChange} />
+          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showTrend" value={settings.showTrend} onChange={onChange} />
+          <div className="space-y-1">
+            <span className="text-[11px] text-muted-foreground">Referencia del delta</span>
+            <div className="grid grid-cols-2 gap-1">
+              {[
+                ["auto", "Auto"],
+                ["sessionBest", "Sesión"],
+                ["personalBest", "Personal"],
+                ["optimal", "Óptima"],
+              ].map(([val, label]) => {
+                const active = (settings.deltaReference || "auto") === val;
+                return (
+                  <button
+                    key={val}
+                    type="button"
+                    className="px-2 py-1 text-[10px] font-mono font-bold rounded-md border transition-colors hover:bg-white/5"
+                    style={{
+                      background: active ? "rgba(125, 211, 252, 0.15)" : "transparent",
+                      color: active ? "rgb(125, 211, 252)" : "rgba(255,255,255,0.5)",
+                      borderColor: active ? "rgba(125, 211, 252, 0.4)" : "rgba(255,255,255,0.08)",
+                      cursor: "pointer",
+                    }}
+                    onClick={() => onChange(overlayId, "deltaReference", val)}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="range" min={1} max={10} step={1} unit="s" value={settings.range} onChange={onChange} />
           <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="barHeight" min={4} max={32} step={1} unit="px" value={settings.barHeight} onChange={onChange} />
           <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="barWidthPercent" min={50} max={100} step={1} unit="%" value={settings.barWidthPercent} onChange={onChange} />
           <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="valueFontSize" min={14} max={56} step={1} unit="px" value={settings.valueFontSize} onChange={onChange} />
@@ -981,6 +1034,7 @@ function AppearanceSettings({ overlayId, overlayKey, settings = {}, onChange }) 
         <>
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showHeader" value={settings.showHeader} onChange={onChange} />
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showSubBars" value={settings.showSubBars} onChange={onChange} />
+          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showSectorDelta" value={settings.showSectorDelta} onChange={onChange} />
           <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="headerFontSize" min={8} max={18} step={1} unit="px" value={settings.headerFontSize} onChange={onChange} />
           <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="valueFontSize" min={10} max={28} step={1} unit="px" value={settings.valueFontSize} onChange={onChange} />
           <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="timeColumnWidth" min={32} max={120} step={2} unit="px" value={settings.timeColumnWidth} onChange={onChange} />

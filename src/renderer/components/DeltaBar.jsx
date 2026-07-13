@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { EditCorners } from "./ui/edit-corners.jsx";
 
 const BASE_W = 600;
@@ -22,6 +22,16 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null, settin
     gap: 12,
     showNumber: true,
     showBar: true,
+    // Rango de la barra en segundos (±). Hotlap suele querer ±2s (más sensible);
+    // carrera ±5s. Antes estaba fijo en 5.
+    range: 5,
+    // Referencia contra la que se compara el delta:
+    //   'auto'         → según tipo de sesión (best de sesión / qualy / carrera)
+    //   'sessionBest'  → tu mejor vuelta de ESTA sesión
+    //   'personalBest' → tu mejor vuelta histórica (auto+pista)
+    //   'optimal'      → vuelta óptima (suma de tus mejores sectores)
+    showTrend: true,
+    deltaReference: "auto",
     ...settings,
   };
   const [telemetry, setTelemetry] = useState({
@@ -47,7 +57,6 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null, settin
     if (typeof window.fly.onTelemetry !== "function") return;
     try {
       const unsub = window.fly.onTelemetry((data) => {
-        targetRef.current = data.delta || 0;
         setTelemetry((prev) => ({ ...prev, ...data }));
       });
       return unsub;
@@ -56,10 +65,23 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null, settin
 
   useEffect(() => {
     if (injectedTelemetry) {
-      targetRef.current = injectedTelemetry.delta || 0;
       setTelemetry((prev) => ({ ...prev, ...injectedTelemetry }));
     }
   }, [injectedTelemetry]);
+
+  // Delta según la referencia elegida. 'auto' usa el que ya calcula el cliente
+  // (sector-aware, según tipo de sesión); las otras usan las referencias
+  // alternativas que el cliente publica en deltaRefs.
+  const selectedDelta = useMemo(() => {
+    const ref = cfg.deltaReference || "auto";
+    if (ref !== "auto") {
+      const v = telemetry.deltaRefs?.[ref];
+      if (v != null && isFinite(v)) return v;
+    }
+    return telemetry.delta || 0;
+  }, [telemetry.delta, telemetry.deltaRefs, cfg.deltaReference]);
+
+  useEffect(() => { targetRef.current = selectedDelta; }, [selectedDelta]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.fly) return;
@@ -79,9 +101,17 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null, settin
 
   useEffect(() => {
     const lastSetValueRef = { current: 0 };
-    const tick = () => {
+    // Suavizado exponencial POR TIEMPO (no por frame): así se siente igual en
+    // monitores de 60, 120 o 144 Hz. tau = constante de tiempo en segundos;
+    // más chico = más reactivo. alpha se deriva del dt real de cada frame.
+    const TAU = 0.12;
+    let lastTs = 0;
+    const tick = (ts) => {
+      const dt = lastTs ? Math.min(0.1, (ts - lastTs) / 1000) : 1 / 60;
+      lastTs = ts;
+      const alpha = 1 - Math.exp(-dt / TAU);
       const diff = targetRef.current - displayRef.current;
-      const next = displayRef.current + diff * 0.22;
+      const next = displayRef.current + diff * alpha;
       displayRef.current = next;
       if (Math.abs(next - lastSetValueRef.current) >= 0.005) {
         lastSetValueRef.current = next;
@@ -93,7 +123,7 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null, settin
     return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
   }, []);
 
-  const max = 5;
+  const max = cfg.range > 0 ? cfg.range : 5;
   const clamped = Math.max(-max, Math.min(max, renderDelta));
   const fillPercent = (Math.abs(clamped) / max) * 50;
   const isGaining = renderDelta < 0;
@@ -158,6 +188,14 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null, settin
     previewMode ||
     telemetry.preview ||
     (telemetry.onTrack && telemetry.connected);
+
+  // Tendencia (usa deltaRate = tasa de cambio del delta que publica el cliente).
+  // >0 = el delta crece ahora mismo (perdiendo tiempo) → ▲ rojo.
+  // <0 = el delta baja (ganando tiempo) → ▼ verde. Cerca de 0 → sin flecha.
+  const deltaRate = telemetry.deltaRate || 0;
+  const trend = cfg.showTrend && showBar
+    ? (deltaRate > 0.02 ? 1 : deltaRate < -0.02 ? -1 : 0)
+    : 0;
 
   return (
     <div
@@ -268,6 +306,19 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null, settin
                 >
                   {showBar ? formatDelta(renderDelta) : "+0.00"}
                 </span>
+                {trend !== 0 && (
+                  <span
+                    className="font-bold leading-none"
+                    style={{
+                      marginLeft: "6px",
+                      fontSize: `${cfg.valueFontSize * 0.55}px`,
+                      color: trend < 0 ? "rgb(52,211,153)" : "rgb(248,113,113)",
+                    }}
+                    title={trend < 0 ? "Ganando tiempo" : "Perdiendo tiempo"}
+                  >
+                    {trend < 0 ? "▼" : "▲"}
+                  </span>
+                )}
               </div>
             )}
           </div>
