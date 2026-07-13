@@ -1,10 +1,11 @@
-const { app, BrowserWindow, ipcMain, globalShortcut } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { IrsdkClient } = require('./irsdk-client');
 const { ConfigStore } = require('./config-store');
 const { OverlayManager, REGISTRY } = require('./overlay-manager');
 const { SessionRecorder } = require('./session-recorder');
+const { parseIbtMeta, parseIbtSession } = require('./ibt-parser');
 
 const isDev = process.env.NODE_ENV === 'development';
 
@@ -310,6 +311,103 @@ ipcMain.handle('sectors:get', () => {
 ipcMain.handle('recordings:list', () => (recorder ? recorder.listSessions() : []));
 ipcMain.handle('recordings:get', (_e, id) => (recorder ? recorder.getSession(id) : null));
 ipcMain.handle('recordings:delete', (_e, id) => (recorder ? recorder.deleteSession(id) : false));
+
+// === Sesiones .ibt de iRacing (escaneo de la carpeta de telemetría) ===
+function defaultTelemetryDir() {
+  return path.join(app.getPath('documents'), 'iRacing', 'telemetry');
+}
+function iracingTelemetryDir() {
+  const custom = configStore && configStore.get() && configStore.get().telemetryDir;
+  return custom || defaultTelemetryDir();
+}
+
+ipcMain.handle('ibt:telemetry-dir', () => {
+  const custom = configStore && configStore.get() ? configStore.get().telemetryDir : null;
+  return { dir: iracingTelemetryDir(), custom: !!custom, default: defaultTelemetryDir() };
+});
+
+ipcMain.handle('ibt:pick-folder', async () => {
+  try {
+    const parent = dashboardWindow && !dashboardWindow.isDestroyed() ? dashboardWindow : null;
+    const res = await dialog.showOpenDialog(parent, {
+      title: 'Elegí la carpeta de telemetría de iRacing',
+      defaultPath: iracingTelemetryDir(),
+      properties: ['openDirectory'],
+    });
+    if (res.canceled || !res.filePaths[0]) return null;
+    configStore.setTelemetryDir(res.filePaths[0]);
+    return { dir: iracingTelemetryDir(), custom: true, default: defaultTelemetryDir() };
+  } catch (err) {
+    console.error('[ibt] pick-folder error:', err.message);
+    return null;
+  }
+});
+
+ipcMain.handle('ibt:reset-folder', () => {
+  configStore.setTelemetryDir(null);
+  return { dir: iracingTelemetryDir(), custom: false, default: defaultTelemetryDir() };
+});
+
+ipcMain.handle('ibt:import', async () => {
+  try {
+    const parent = dashboardWindow && !dashboardWindow.isDestroyed() ? dashboardWindow : null;
+    const res = await dialog.showOpenDialog(parent, {
+      title: 'Importar archivo de telemetría .ibt',
+      filters: [{ name: 'iRacing telemetry', extensions: ['ibt'] }],
+      properties: ['openFile'],
+    });
+    if (res.canceled || !res.filePaths[0]) return null;
+    const full = res.filePaths[0];
+    const meta = parseIbtMeta(full);
+    if (!meta) return null;
+    return { id: `ibtpath:${full}`, source: 'ibt', imported: true, file: path.basename(full), ...meta };
+  } catch (err) {
+    console.error('[ibt] import error:', err.message);
+    return null;
+  }
+});
+
+ipcMain.handle('ibt:list', () => {
+  const dir = iracingTelemetryDir();
+  let files = [];
+  try {
+    files = fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.ibt'));
+  } catch (_) {
+    return []; // carpeta inexistente (logging apagado o iRacing no instalado)
+  }
+  const out = [];
+  for (const f of files) {
+    const meta = parseIbtMeta(path.join(dir, f));
+    if (meta) out.push({ id: `ibt:${f}`, source: 'ibt', file: f, ...meta });
+  }
+  out.sort((a, b) => b.startedAt - a.startedAt);
+  return out;
+});
+
+ipcMain.handle('ibt:get', (_e, id) => {
+  if (typeof id !== 'string') return null;
+  let full = null;
+  if (id.startsWith('ibtpath:')) {
+    // Archivo importado manualmente: ruta absoluta (elegida por el usuario en
+    // un diálogo, así que es de confianza). Validamos extensión y existencia.
+    const p = id.slice(8);
+    if (p.toLowerCase().endsWith('.ibt') && fs.existsSync(p)) full = p;
+  } else if (id.startsWith('ibt:')) {
+    // Archivo del escaneo automático: solo un basename dentro de la carpeta.
+    const file = id.slice(4);
+    if (!file.includes('/') && !file.includes('\\') && !file.includes('..')) {
+      full = path.join(iracingTelemetryDir(), file);
+    }
+  }
+  if (!full) return null;
+  try {
+    const session = parseIbtSession(full);
+    return { id, source: 'ibt', ...session };
+  } catch (err) {
+    console.error('[ibt] error parseando:', err.message);
+    return null;
+  }
+});
 
 ipcMain.handle('preview:toggle', () => {
   const enabled = irsdk.togglePreview();

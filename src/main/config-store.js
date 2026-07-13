@@ -94,6 +94,9 @@ const DEFAULTS = {
     toggleLock: 'F7',
     openPanel: 'F8',
   },
+  // Carpeta de telemetría .ibt de iRacing. null = usar la ruta por defecto
+  // (Documentos/iRacing/telemetry). El usuario puede sobreescribirla.
+  telemetryDir: null,
 };
 
 class ConfigStore {
@@ -112,6 +115,7 @@ class ConfigStore {
         return {
           overlays: { ...DEFAULTS.overlays, ...(parsed.overlays || {}) },
           hotkeys: { ...DEFAULTS.hotkeys, ...(parsed.hotkeys || {}) },
+          telemetryDir: parsed.telemetryDir ?? DEFAULTS.telemetryDir,
         };
       }
     } catch (err) {
@@ -152,6 +156,13 @@ class ConfigStore {
     if (!ov) return null;
     this.setOverlay(id, { enabled: !ov.enabled });
     return this.data.overlays[id].enabled;
+  }
+
+  setTelemetryDir(dir) {
+    this.data.telemetryDir = dir || null;
+    this._save();
+    this._emit();
+    return this.data.telemetryDir;
   }
 
   setBounds(id, bounds) {

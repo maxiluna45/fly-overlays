@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useCallback } from "react";
-import { Trash2, Trophy, Clock, Activity, Gauge } from "lucide-react";
+import { Trash2, Trophy, Clock, Activity, Gauge, Upload, FolderOpen, RotateCcw } from "lucide-react";
 import { analyzeLap, bestLapOf, consistency } from "../lib/coach.js";
 
 function fmtLap(s) {
@@ -51,12 +51,22 @@ export function AnalysisView() {
   const [selectedId, setSelectedId] = useState(null);
   const [session, setSession] = useState(null);
   const [lapIdx, setLapIdx] = useState(-1);
+  const [loading, setLoading] = useState(false);
+  const [telemetryDir, setTelemetryDir] = useState(null);
 
   const loadList = useCallback(async () => {
     if (!window.fly?.getRecordings) return;
-    const list = await window.fly.getRecordings();
-    setSessions(list || []);
-    setSelectedId((cur) => cur || (list && list[0] ? list[0].id : null));
+    // Merge de sesiones grabadas en vivo + archivos .ibt de iRacing.
+    const [live, ibt] = await Promise.all([
+      window.fly.getRecordings(),
+      window.fly.getIbtSessions ? window.fly.getIbtSessions() : Promise.resolve([]),
+    ]);
+    const merged = [
+      ...(live || []).map((s) => ({ ...s, source: "live" })),
+      ...(ibt || []),
+    ].sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
+    setSessions(merged);
+    setSelectedId((cur) => cur || (merged[0] ? merged[0].id : null));
   }, []);
 
   useEffect(() => {
@@ -67,17 +77,23 @@ export function AnalysisView() {
   }, [loadList]);
 
   useEffect(() => {
-    if (!selectedId || !window.fly?.getRecording) { setSession(null); return; }
+    if (!selectedId) { setSession(null); return; }
+    const isIbt = selectedId.startsWith("ibt:") || selectedId.startsWith("ibtpath:");
+    const getter = isIbt ? window.fly?.getIbtSession : window.fly?.getRecording;
+    if (!getter) { setSession(null); return; }
     let mounted = true;
-    window.fly.getRecording(selectedId).then((s) => {
+    setSession(null); // limpiar mientras carga (parsear un .ibt puede tardar)
+    setLoading(true);
+    getter(selectedId).then((s) => {
       if (!mounted) return;
       setSession(s);
+      setLoading(false);
       // Comparar por defecto la última vuelta válida contra la mejor.
       if (s && s.laps) {
         const lastValid = [...s.laps].reverse().findIndex((l) => l.valid && l.lapTime > 0);
         setLapIdx(lastValid >= 0 ? s.laps.length - 1 - lastValid : (s.laps.length - 1));
       }
-    });
+    }).catch(() => { if (mounted) setLoading(false); });
     return () => { mounted = false; };
   }, [selectedId]);
 
@@ -86,12 +102,42 @@ export function AnalysisView() {
   const cons = useMemo(() => consistency(session?.laps), [session]);
   const analysis = useMemo(() => (best && lap ? analyzeLap(best, lap) : null), [best, lap]);
 
+  useEffect(() => {
+    if (window.fly?.getTelemetryDir) window.fly.getTelemetryDir().then(setTelemetryDir);
+  }, []);
+
   const handleDelete = async (id, e) => {
     e.stopPropagation();
     if (!window.fly?.deleteRecording) return;
     await window.fly.deleteRecording(id);
     if (id === selectedId) { setSelectedId(null); setSession(null); }
     loadList();
+  };
+
+  const handleImport = async () => {
+    if (!window.fly?.importIbt) {
+      console.warn("[analysis] window.fly.importIbt no existe — reiniciá Electron (el preload no se recarga con HMR)");
+      return;
+    }
+    const item = await window.fly.importIbt();
+    if (!item) return;
+    setSessions((prev) => (prev.some((s) => s.id === item.id) ? prev : [item, ...prev]));
+    setSelectedId(item.id);
+  };
+
+  const handlePickFolder = async () => {
+    if (!window.fly?.pickTelemetryDir) {
+      console.warn("[analysis] window.fly.pickTelemetryDir no existe — reiniciá Electron (el preload no se recarga con HMR)");
+      return;
+    }
+    const info = await window.fly.pickTelemetryDir();
+    if (info) { setTelemetryDir(info); loadList(); }
+  };
+
+  const handleResetFolder = async () => {
+    if (!window.fly?.resetTelemetryDir) return;
+    const info = await window.fly.resetTelemetryDir();
+    if (info) { setTelemetryDir(info); loadList(); }
   };
 
   // Series para los gráficos (largo n = cantidad de buckets).
@@ -118,8 +164,17 @@ export function AnalysisView() {
     <div className="flex-1 flex overflow-hidden">
       {/* Sesiones */}
       <aside className="w-64 border-r border-border bg-card/30 flex flex-col shrink-0">
-        <div className="p-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-          <Clock className="size-3.5" /> Sesiones
+        <div className="p-3 pb-2 flex items-center justify-between">
+          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+            <Clock className="size-3.5" /> Sesiones
+          </span>
+          <button
+            onClick={handleImport}
+            title="Importar un archivo .ibt de cualquier carpeta"
+            className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold bg-accent/60 hover:bg-accent transition-colors"
+          >
+            <Upload className="size-3" /> Importar
+          </button>
         </div>
         <div className="flex-1 overflow-y-auto px-1.5 pb-2 space-y-1">
           {sessions.length === 0 && (
@@ -137,27 +192,69 @@ export function AnalysisView() {
             >
               <div className="flex items-center justify-between gap-1">
                 <span className="text-xs font-semibold truncate">{s.track}</span>
-                <Trash2
-                  className="size-3 opacity-0 group-hover:opacity-60 hover:!opacity-100 shrink-0"
-                  onClick={(e) => handleDelete(s.id, e)}
-                />
+                <div className="flex items-center gap-1 shrink-0">
+                  {s.source === "ibt" && (
+                    <span className="text-[8px] font-bold uppercase tracking-widest px-1 py-px rounded bg-sky-500/15 text-sky-300">
+                      iRacing
+                    </span>
+                  )}
+                  {s.source !== "ibt" && (
+                    <Trash2
+                      className="size-3 opacity-0 group-hover:opacity-60 hover:!opacity-100"
+                      onClick={(e) => handleDelete(s.id, e)}
+                    />
+                  )}
+                </div>
               </div>
               <div className="text-[10px] text-muted-foreground truncate">{s.car}</div>
               <div className="flex items-center justify-between text-[10px] text-muted-foreground mt-0.5">
-                <span>{s.sessionType} · {s.lapCount} vueltas</span>
-                <span className="font-mono">{fmtLap(s.bestLap)}</span>
+                <span>{s.sessionType}{s.lapCount != null ? ` · ${s.lapCount} vueltas` : ""}</span>
+                <span className="font-mono">{s.bestLap != null ? fmtLap(s.bestLap) : ""}</span>
               </div>
               <div className="text-[9px] text-muted-foreground/70">{fmtDate(s.startedAt)}</div>
             </button>
           ))}
         </div>
+
+        {/* Carpeta de telemetría .ibt */}
+        <div className="border-t border-border p-2 space-y-1">
+          <div className="flex items-center gap-1 text-[9px] uppercase tracking-widest text-muted-foreground/70 font-bold">
+            <FolderOpen className="size-3" /> Carpeta telemetría iRacing
+          </div>
+          <div className="text-[10px] text-muted-foreground font-mono break-all leading-tight" title={telemetryDir?.dir}>
+            {telemetryDir?.dir || "—"}{telemetryDir?.custom ? "" : "  (default)"}
+          </div>
+          <div className="flex gap-1">
+            <button
+              onClick={handlePickFolder}
+              className="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold bg-accent/60 hover:bg-accent transition-colors"
+            >
+              <FolderOpen className="size-3" /> Cambiar
+            </button>
+            {telemetryDir?.custom && (
+              <button
+                onClick={handleResetFolder}
+                title="Volver a la carpeta por defecto"
+                className="flex items-center justify-center px-2 py-1 rounded-md text-[10px] font-semibold hover:bg-accent/50 transition-colors"
+              >
+                <RotateCcw className="size-3" />
+              </button>
+            )}
+          </div>
+        </div>
       </aside>
 
       {/* Detalle */}
       <main className="flex-1 flex flex-col overflow-hidden">
-        {!session ? (
+        {loading ? (
           <div className="flex-1 flex items-center justify-center text-sm text-muted-foreground">
-            Seleccioná una sesión para ver el análisis.
+            Cargando sesión...
+          </div>
+        ) : !session ? (
+          <div className="flex-1 flex items-center justify-center text-sm text-muted-foreground">
+            {sessions.length === 0
+              ? "No hay sesiones. Grabá una con la app en pista, o activá el logging de telemetría en iRacing (Alt+L) para importar archivos .ibt."
+              : "Seleccioná una sesión para ver el análisis."}
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto p-4 space-y-4">

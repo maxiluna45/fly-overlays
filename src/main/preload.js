@@ -46,6 +46,12 @@ contextBridge.exposeInMainWorld('fly', {
   getRecordings: () => ipcRenderer.invoke('recordings:list'),
   getRecording: (id) => ipcRenderer.invoke('recordings:get', id),
   deleteRecording: (id) => ipcRenderer.invoke('recordings:delete', id),
+  getIbtSessions: () => ipcRenderer.invoke('ibt:list'),
+  getIbtSession: (id) => ipcRenderer.invoke('ibt:get', id),
+  importIbt: () => ipcRenderer.invoke('ibt:import'),
+  getTelemetryDir: () => ipcRenderer.invoke('ibt:telemetry-dir'),
+  pickTelemetryDir: () => ipcRenderer.invoke('ibt:pick-folder'),
+  resetTelemetryDir: () => ipcRenderer.invoke('ibt:reset-folder'),
   onRecordingsChange: (callback) => {
     const listener = () => callback();
     ipcRenderer.on('recordings:changed', listener);
