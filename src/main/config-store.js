@@ -13,6 +13,10 @@ const OVERLAY_DEFAULT_SETTINGS = {
     gap: 12,                // espacio entre la barra y el número
     showNumber: true,       // mostrar/ocultar el número
     showBar: true,          // mostrar/ocultar la barra
+    showTrend: true,        // indicador de tendencia ▲/▼
+    showPrediction: true,   // tiempo de vuelta proyectado
+    range: 5,               // rango de la barra en segundos (±)
+    deltaReference: "auto", // auto | sessionBest | personalBest | optimal
   },
   sectors: {
     headerFontSize: 10,     // tamaño de "CURRENT" / "BEST" / etc.
@@ -21,25 +25,7 @@ const OVERLAY_DEFAULT_SETTINGS = {
     subBarHeight: 28,       // alto de cada sub-barra de micro-sector
     showHeader: true,        // mostrar/ocultar el header de tiempos
     showSubBars: true,       // mostrar/ocultar los cuadritos de sub-sectores
-  },
-  tyres: {
-    showTemp: true,          // alias de showNumbers (compat)
-    showNumbers: true,       // mostrar números de temperatura
-    showPressure: true,      // mostrar presión
-    showWear: true,          // mostrar indicador de desgaste
-    compactMode: false,      // modo compacto: solo colores, sin números
-    cellSize: 130,           // tamaño máximo de cada celda de neumático
-    cellMaxWidth: 160,       // ancho máximo de cada celda (deja blanco alrededor si sobra)
-    gap: 10,                 // espacio entre celdas
-    borderRadius: 14,        // radio de las celdas
-    tempFontSize: 15,        // tamaño de números de temperatura (en px)
-    pressFontSize: 10,       // tamaño del número de presión (en px)
-    wearFontSize: 9,         // tamaño del % de desgaste (en px)
-    headerFontSize: 10,      // tamaño del header global (AVG/MIN/MAX)
-    bandWidth: 14,           // ancho de las bandas laterales (I/O) en px
-    primaryBandWidth: 18,    // ancho de la banda central (C) en px
-    bandGap: 2,              // separación entre bandas (en px)
-    pressureUnit: "kPa",     // "kPa" o "psi"
+    showSectorDelta: true,   // delta numérico por sector
   },
   relative: {
     showIRating: true,       // mostrar iRating al final de la fila
@@ -51,6 +37,17 @@ const OVERLAY_DEFAULT_SETTINGS = {
     borderRadius: 8,         // radio del contenedor
     rowHeight: 26,           // alto de cada fila
     fontSize: 11,            // tamaño de fuente base
+  },
+  standings: {
+    showLicense: true,       // badge de licencia
+    showIRating: true,       // columna de iRating
+    showCarNumber: true,     // número del auto
+    showBestLap: true,       // columna de best lap
+    gapMode: "leader",       // 'leader' (gap al líder) | 'interval' (al de adelante)
+    maxRows: 24,             // máximo de filas
+    rowHeight: 24,           // alto de fila
+    fontSize: 11,            // tamaño de fuente
+    borderRadius: 8,         // radio del contenedor
   },
 };
 
@@ -74,15 +71,6 @@ const DEFAULTS = {
       opacity: 0.8,
       settings: { ...OVERLAY_DEFAULT_SETTINGS.sectors },
     },
-    tyres: {
-      enabled: false,
-      x: null,
-      y: null,
-      width: 600,
-      height: 320,
-      opacity: 0.85,
-      settings: { ...OVERLAY_DEFAULT_SETTINGS.tyres },
-    },
     relative: {
       enabled: false,
       x: null,
@@ -91,6 +79,15 @@ const DEFAULTS = {
       height: 400,
       opacity: 0.9,
       settings: { ...OVERLAY_DEFAULT_SETTINGS.relative },
+    },
+    standings: {
+      enabled: false,
+      x: null,
+      y: null,
+      width: 460,
+      height: 520,
+      opacity: 0.9,
+      settings: { ...OVERLAY_DEFAULT_SETTINGS.standings },
     },
   },
   hotkeys: {

@@ -8,6 +8,8 @@ import {
 } from "lucide-react";
 import { OVERLAY_META } from "../overlay-catalog.js";
 import { Relative } from "./Relative.jsx";
+import { Standings } from "./Standings.jsx";
+import { AnalysisView } from "./AnalysisView.jsx";
 import { Button } from "./ui/button.jsx";
 import { Switch } from "./ui/switch.jsx";
 import { Slider } from "./ui/slider.jsx";
@@ -16,8 +18,7 @@ import { VerticalSlider } from "./ui/vertical-slider.jsx";
 import { useToast } from "./ui/toast.jsx";
 import { ErrorBoundary } from "./ui/error-boundary.jsx";
 
-// Por ahora solo el delta bar está implementado
-const IMPLEMENTED = ["delta", "sectors", "tyres", "relative"];
+const IMPLEMENTED = ["delta", "sectors", "relative", "standings"];
 
 function formatBytes(bps) {
   if (!bps || !isFinite(bps)) return "0 B";
@@ -33,6 +34,7 @@ function formatBytes(bps) {
 export function Dashboard() {
   const [config, setConfig] = useState(null);
   const [selectedId, setSelectedId] = useState("delta");
+  const [view, setView] = useState("overlays"); // 'overlays' | 'analysis'
   const [preview, setPreview] = useState(false);
   const [previewShowAll, setPreviewShowAll] = useState(false);
   const [scale, setScale] = useState(0.6);
@@ -88,6 +90,9 @@ export function Dashboard() {
       }),
 
       window.fly.onUpdater("downloaded", (info) => {
+        // Sacar el toast de "Descargando..." (tiene duration:0, no se auto-cierra)
+        // antes de mostrar el de "listo para reiniciar".
+        toast.dismiss("updater-download");
         toast.show({
           tone: "update",
           title: `Actualización ${info.version} lista`,
@@ -170,14 +175,30 @@ export function Dashboard() {
       {/* HEADER */}
       <header className="h-12 border-b border-border bg-card/40 flex items-center px-4 gap-3 shrink-0">
         <div className="flex items-center gap-2">
-          <img src="./logo.png" alt="Fly Overlays" className="h-7 w-7 rounded-md object-contain" />
-          <span className="font-bold tracking-tight text-sm">FLY OVERLAYS</span>
+          <img src="./logo.png" alt="iFly" className="h-7 w-7 rounded-md object-contain" />
+          <span className="font-bold tracking-tight text-sm">iFly</span>
+        </div>
+        <div className="flex items-center gap-1 ml-3">
+          {[["overlays", "Overlays"], ["analysis", "Análisis"]].map(([v, label]) => (
+            <button
+              key={v}
+              onClick={() => setView(v)}
+              className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors ${
+                view === v ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/50"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
         </div>
         <div className="flex-1" />
         <span className="text-xs text-muted-foreground">v{APP_VERSION}</span>
       </header>
 
-      {/* MAIN */}
+      {view === "analysis" ? (
+        <AnalysisView />
+      ) : (
+      /* MAIN */
       <div className="flex-1 flex overflow-hidden">
         {/* SIDEBAR */}
         <aside className="w-56 border-r border-border bg-card/30 flex flex-col shrink-0">
@@ -253,14 +274,14 @@ export function Dashboard() {
                     <SectorLite />
                   </ErrorBoundary>
                 )}
-                {selectedId === "tyres" && (
-                  <ErrorBoundary resetKey={selectedId}>
-                    <TyresLite />
-                  </ErrorBoundary>
-                )}
                 {selectedId === "relative" && (
                   <ErrorBoundary resetKey={selectedId}>
                     <RelativeLite />
+                  </ErrorBoundary>
+                )}
+                {selectedId === "standings" && (
+                  <ErrorBoundary resetKey={selectedId}>
+                    <StandingsLite />
                   </ErrorBoundary>
                 )}
               </div>
@@ -380,6 +401,7 @@ export function Dashboard() {
           </div>
         </aside>
       </div>
+      )}
     </div>
   );
 }
@@ -679,6 +701,22 @@ const RELATIVE_MOCK = {
   },
 };
 
+// Enriquece el mock estático con los campos del esquema actual (relDelta con
+// signo, lapDelta, f2Time, isPlayerClass) para que los previews de Relative y
+// Standings usen el mismo camino de render que la sesión real.
+function enrichRelativeMock() {
+  return {
+    ...RELATIVE_MOCK,
+    drivers: RELATIVE_MOCK.drivers.map((d, i) => ({
+      ...d,
+      isPlayerClass: true,
+      lapDelta: 0,
+      f2Time: i * 1.2,
+      relDelta: d.isPlayer ? 0 : (d.isAhead ? (d.gapToPlayer || 0) : -(d.gapToPlayer || 0)),
+    })),
+  };
+}
+
 function RelativeLite() {
   const [telemetry, setTelemetry] = useState({ connected: false, onTrack: false, preview: false, relative: null });
 
@@ -710,19 +748,7 @@ function RelativeLite() {
       setTelemetry((prev) => {
         const hasReal = prev.relative && Array.isArray(prev.relative.drivers) && prev.relative.drivers.length > 0;
         if (hasReal) return prev;
-        // Enriquecemos el mock con los campos del nuevo esquema (relDelta con
-        // signo, lapDelta, isPlayerClass) para que el preview use el mismo
-        // camino de render que la sesión real.
-        const relative = {
-          ...RELATIVE_MOCK,
-          drivers: RELATIVE_MOCK.drivers.map((d) => ({
-            ...d,
-            isPlayerClass: true,
-            lapDelta: 0,
-            relDelta: d.isPlayer ? 0 : (d.isAhead ? (d.gapToPlayer || 0) : -(d.gapToPlayer || 0)),
-          })),
-        };
-        return { ...prev, relative, preview: true };
+        return { ...prev, relative: enrichRelativeMock(), preview: true };
       });
     }, 1500);
     return () => clearTimeout(t);
@@ -731,16 +757,14 @@ function RelativeLite() {
   return <Relative settings={{ rowsAbove: 3, rowsBelow: 3 }} injectedTelemetry={telemetry} previewMode />;
 }
 
-// === TYRES Lite (preview para el dashboard) ===
-function TyresLite() {
-  const [telemetry, setTelemetry] = useState({ connected: false, onTrack: false, preview: false, tyres: null });
+// === STANDINGS Lite (preview para el dashboard) ===
+function StandingsLite() {
+  const [telemetry, setTelemetry] = useState({ connected: false, onTrack: false, preview: false, relative: null });
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.fly) return;
     if (typeof window.fly.onTelemetry !== "function") return;
-    const unsub = window.fly.onTelemetry((data) => {
-      setTelemetry((prev) => ({ ...prev, ...data }));
-    });
+    const unsub = window.fly.onTelemetry((data) => setTelemetry((prev) => ({ ...prev, ...data })));
     return unsub;
   }, []);
 
@@ -748,94 +772,25 @@ function TyresLite() {
     if (typeof window === "undefined" || !window.fly) return;
     if (typeof window.fly.onTelemetryHeavy !== "function") return;
     const unsub = window.fly.onTelemetryHeavy((data) => {
-      if (data.tyres) {
-        setTelemetry((prev) => ({ ...prev, tyres: data.tyres }));
-      }
+      if (data.relative) setTelemetry((prev) => ({ ...prev, relative: data.relative }));
     });
     return unsub;
   }, []);
 
-  const tone = (c) => {
-    if (c == null) return { rgb: "120, 130, 145" };
-    if (c < 50) return { rgb: "59, 130, 246" };
-    if (c < 70) return { rgb: "34, 197, 94" };
-    if (c < 95) return { rgb: "234, 179, 8" };
-    if (c < 115) return { rgb: "249, 115, 22" };
-    return { rgb: "239, 68, 68" };
-  };
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setTelemetry((prev) => {
+        const hasReal = prev.relative && Array.isArray(prev.relative.drivers) && prev.relative.drivers.length > 0;
+        if (hasReal) return prev;
+        return { ...prev, relative: enrichRelativeMock(), preview: true };
+      });
+    }, 1500);
+    return () => clearTimeout(t);
+  }, []);
 
-  const tyres = telemetry.tyres || {
-    LF: { tempL: 70, tempM: 75, tempR: 72, press: 160 },
-    RF: { tempL: 72, tempM: 77, tempR: 74, press: 162 },
-    LR: { tempL: 80, tempM: 85, tempR: 82, press: 170 },
-    RR: { tempL: 82, tempM: 87, tempR: 84, press: 172 },
-  };
-
-  return (
-    <div className="w-full h-full grid grid-cols-2 gap-2 p-3">
-      {["LF", "RF", "LR", "RR"].map((id) => {
-        const t = tyres[id] || {};
-        const tL = tone(t.tempL);
-        const tM = tone(t.tempM);
-        const tR = tone(t.tempR);
-        return (
-          <div
-            key={id}
-            className="rounded-lg border border-white/10 flex flex-col overflow-hidden p-2"
-            style={{ background: "linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.01) 100%)" }}
-          >
-            <div className="flex items-center justify-between text-[8px] font-mono font-bold mb-1">
-              <span className="uppercase tracking-widest text-white/40">{id}</span>
-              {t.press != null && (
-                <span
-                  style={{
-                    color: t.press < 155 ? "rgba(59,130,246,1)"
-                          : t.press > 175 ? "rgba(239,68,68,1)"
-                          : "rgba(34,197,94,1)",
-                  }}
-                >
-                  {Math.round(t.press)}
-                </span>
-              )}
-            </div>
-            <div className="flex-1 flex items-stretch justify-center" style={{ gap: "2px" }}>
-              {[
-                { l: "I", c: t.tempL, rgb: tL.rgb, w: 12 },
-                { l: "C", c: t.tempM, rgb: tM.rgb, w: 16, primary: true },
-                { l: "O", c: t.tempR, rgb: tR.rgb, w: 12 },
-              ].map((b, i) => (
-                <div key={i} className="flex flex-col items-center">
-                  <div className="text-[7px] font-bold font-mono mb-0.5 text-white/40">{b.l}</div>
-                  <div
-                    className="flex-1 rounded-sm relative overflow-hidden flex items-center justify-center"
-                    style={{
-                      width: `${b.w}px`,
-                      background: `linear-gradient(180deg, rgba(${b.rgb}, 1) 0%, rgba(${b.rgb}, 0.7) 100%)`,
-                      boxShadow: `0 0 4px rgba(${b.rgb}, 0.5)`,
-                      border: `1px solid rgba(${b.rgb}, 0.9)`,
-                    }}
-                  >
-                    <span
-                      className="font-mono font-bold leading-none"
-                      style={{
-                        fontSize: b.primary ? "11px" : "9px",
-                        color: "white",
-                        textShadow: "0 1px 2px rgba(0,0,0,0.95)",
-                        lineHeight: 1,
-                      }}
-                    >
-                      {b.c != null ? Math.round(b.c) : "—"}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
+  return <Standings injectedTelemetry={telemetry} previewMode />;
 }
+
 
 // === APPEARANCE SETTINGS (per overlay) ===
 
@@ -856,6 +811,7 @@ const SETTING_LABELS = {
     showBar: "Mostrar barra",
     showNumber: "Mostrar número",
     showTrend: "Indicador de tendencia",
+    showPrediction: "Vuelta proyectada",
     range: "Rango de la barra (±s)",
     deltaReference: "Referencia del delta",
     barHeight: "Alto de la barra",
@@ -875,23 +831,15 @@ const SETTING_LABELS = {
     timeColumnWidth: "Ancho columna label",
     subBarHeight: "Alto de sub-barra",
   },
-  tyres: {
-    showNumbers: "Mostrar números",
-    showPressure: "Mostrar presión",
-    showWear: "Mostrar desgaste",
-    compactMode: "Modo compacto (solo colores)",
-    tempFontSize: "Tamaño números temperatura",
-    pressFontSize: "Tamaño número de presión",
-    wearFontSize: "Tamaño % desgaste",
-    headerFontSize: "Tamaño del header",
-    bandWidth: "Ancho banda lateral",
-    primaryBandWidth: "Ancho banda central",
-    bandGap: "Separación entre bandas",
-    cellSize: "Tamaño de celda",
-    cellMaxWidth: "Ancho máximo de celda",
-    gap: "Espacio entre celdas",
-    borderRadius: "Radio de las celdas",
-    pressureUnit: "Unidad de presión",
+  standings: {
+    showLicense: "Mostrar licencia",
+    showIRating: "Mostrar iRating",
+    showCarNumber: "Mostrar número de auto",
+    showBestLap: "Mostrar best lap",
+    maxRows: "Máximo de filas",
+    rowHeight: "Alto de fila",
+    fontSize: "Tamaño de fuente",
+    borderRadius: "Radio del contenedor",
   },
   relative: {
     showLicense: "Mostrar licencia",
@@ -975,9 +923,9 @@ const ToggleField = React.memo(function ToggleField({ overlayId, overlayKey, k, 
 function AppearanceSettings({ overlayId, overlayKey, settings = {}, onChange }) {
   const isDelta = overlayKey === "delta";
   const isSectors = overlayKey === "sectors";
-  const isTyres = overlayKey === "tyres";
   const isRelative = overlayKey === "relative";
-  if (!isDelta && !isSectors && !isTyres && !isRelative) return null;
+  const isStandings = overlayKey === "standings";
+  if (!isDelta && !isSectors && !isRelative && !isStandings) return null;
 
   return (
     <div className="pt-2 border-t border-border space-y-3">
@@ -990,6 +938,7 @@ function AppearanceSettings({ overlayId, overlayKey, settings = {}, onChange }) 
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showBar" value={settings.showBar} onChange={onChange} />
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showNumber" value={settings.showNumber} onChange={onChange} />
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showTrend" value={settings.showTrend} onChange={onChange} />
+          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showPrediction" value={settings.showPrediction} onChange={onChange} />
           <div className="space-y-1">
             <span className="text-[11px] text-muted-foreground">Referencia del delta</span>
             <div className="grid grid-cols-2 gap-1">
@@ -1042,44 +991,37 @@ function AppearanceSettings({ overlayId, overlayKey, settings = {}, onChange }) 
         </>
       )}
 
-      {isTyres && (
+      {isStandings && (
         <>
-          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showNumbers" value={settings.showNumbers} onChange={onChange} />
-          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showPressure" value={settings.showPressure} onChange={onChange} />
-          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showWear" value={settings.showWear} onChange={onChange} />
-          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="compactMode" value={settings.compactMode} onChange={onChange} />
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] text-muted-foreground">Unidad de presión</span>
+          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showLicense" value={settings.showLicense} onChange={onChange} />
+          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showIRating" value={settings.showIRating} onChange={onChange} />
+          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showCarNumber" value={settings.showCarNumber} onChange={onChange} />
+          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showBestLap" value={settings.showBestLap} onChange={onChange} />
+          <div className="space-y-1">
+            <span className="text-[11px] text-muted-foreground">Columna de gap (carrera)</span>
             <div className="flex border border-border rounded-md overflow-hidden">
-              {["kPa", "psi"].map((u) => (
+              {[["leader", "Al líder"], ["interval", "Intervalo"]].map(([val, label]) => (
                 <button
-                  key={u}
+                  key={val}
                   type="button"
-                  className="px-2.5 py-1 text-[10px] font-mono font-bold transition-colors hover:bg-white/5"
+                  className="flex-1 px-2.5 py-1 text-[10px] font-mono font-bold transition-colors hover:bg-white/5"
                   style={{
-                    background: (settings.pressureUnit || "kPa") === u ? "rgba(125, 211, 252, 0.15)" : "transparent",
-                    color: (settings.pressureUnit || "kPa") === u ? "rgb(125, 211, 252)" : "rgba(255,255,255,0.5)",
-                    borderRight: u === "kPa" ? "1px solid rgba(255,255,255,0.08)" : "none",
+                    background: (settings.gapMode || "leader") === val ? "rgba(125, 211, 252, 0.15)" : "transparent",
+                    color: (settings.gapMode || "leader") === val ? "rgb(125, 211, 252)" : "rgba(255,255,255,0.5)",
+                    borderRight: val === "leader" ? "1px solid rgba(255,255,255,0.08)" : "none",
                     cursor: "pointer",
                   }}
-                  onClick={() => onChange(overlayId, "pressureUnit", u)}
+                  onClick={() => onChange(overlayId, "gapMode", val)}
                 >
-                  {u}
+                  {label}
                 </button>
               ))}
             </div>
           </div>
-          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="tempFontSize" min={10} max={32} step={1} unit="px" value={settings.tempFontSize} onChange={onChange} />
-          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="pressFontSize" min={8} max={20} step={1} unit="px" value={settings.pressFontSize} onChange={onChange} />
-          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="wearFontSize" min={7} max={16} step={1} unit="px" value={settings.wearFontSize} onChange={onChange} />
-          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="headerFontSize" min={8} max={18} step={1} unit="px" value={settings.headerFontSize} onChange={onChange} />
-          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="bandWidth" min={6} max={24} step={1} unit="px" value={settings.bandWidth} onChange={onChange} />
-          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="primaryBandWidth" min={8} max={32} step={1} unit="px" value={settings.primaryBandWidth} onChange={onChange} />
-          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="bandGap" min={0} max={16} step={1} unit="px" value={settings.bandGap} onChange={onChange} />
-          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="cellSize" min={80} max={200} step={5} unit="px" value={settings.cellSize} onChange={onChange} />
-          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="cellMaxWidth" min={100} max={300} step={10} unit="px" value={settings.cellMaxWidth} onChange={onChange} />
-          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="gap" min={0} max={24} step={1} unit="px" value={settings.gap} onChange={onChange} />
-          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="borderRadius" min={0} max={24} step={1} unit="px" value={settings.borderRadius} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="maxRows" min={5} max={40} step={1} unit="" value={settings.maxRows} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="rowHeight" min={18} max={40} step={1} unit="px" value={settings.rowHeight} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="fontSize" min={9} max={18} step={1} unit="px" value={settings.fontSize} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="borderRadius" min={0} max={20} step={1} unit="px" value={settings.borderRadius} onChange={onChange} />
         </>
       )}
 

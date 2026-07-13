@@ -1,21 +1,66 @@
 const { app, BrowserWindow, ipcMain, globalShortcut } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { IrsdkClient } = require('./irsdk-client');
 const { ConfigStore } = require('./config-store');
 const { OverlayManager, REGISTRY } = require('./overlay-manager');
+const { SessionRecorder } = require('./session-recorder');
 
 const isDev = process.env.NODE_ENV === 'development';
 
 let irsdk = null;
+let recorder = null;
 let configStore = null;
 let overlayManager = null;
 let dashboardWindow = null;
+let _recPrevConnected = false;
 let sendUpdate = () => {};
 let updateCheckInterval = null;
 let isQuitting = false;
 let pendingUpdateMessages = [];
 let previewShowAll = false;
 let previewSelectedId = null;
+
+// === Rebranding a "iFly": migración de datos ===
+// Con el nuevo productName "iFly", Electron usaría %APPDATA%/iFly como userData,
+// dejando atrás la config y las grabaciones del nombre viejo. Para no perder
+// nada, fijamos userData a una carpeta estable ("iFly") y, si está vacía,
+// copiamos config.json + recordings desde las ubicaciones anteriores.
+// Fijar la carpeta también nos independiza de futuros cambios de nombre.
+function migrateUserData() {
+  try {
+    const appData = app.getPath('appData');
+    const targetDir = path.join(appData, 'iFly');
+    const alreadyMigrated = fs.existsSync(path.join(targetDir, 'config.json'));
+
+    if (!alreadyMigrated) {
+      // Ubicaciones históricas posibles (productName viejo / name npm).
+      const candidates = ['Fly Overlays', 'fly-overlays'];
+      for (const name of candidates) {
+        const oldDir = path.join(appData, name);
+        if (oldDir === targetDir) continue;
+        const hasConfig = fs.existsSync(path.join(oldDir, 'config.json'));
+        const hasRecordings = fs.existsSync(path.join(oldDir, 'recordings'));
+        if (hasConfig || hasRecordings) {
+          fs.mkdirSync(targetDir, { recursive: true });
+          if (hasConfig) {
+            fs.copyFileSync(path.join(oldDir, 'config.json'), path.join(targetDir, 'config.json'));
+          }
+          if (hasRecordings) {
+            fs.cpSync(path.join(oldDir, 'recordings'), path.join(targetDir, 'recordings'), { recursive: true });
+          }
+          console.log(`[migrate] datos copiados desde "${name}" a "iFly"`);
+          break;
+        }
+      }
+    }
+
+    app.setPath('userData', targetDir);
+  } catch (err) {
+    console.error('[migrate] error migrando userData:', err.message);
+  }
+}
+migrateUserData();
 
 function createDashboardWindow() {
   dashboardWindow = new BrowserWindow({
@@ -24,7 +69,7 @@ function createDashboardWindow() {
     minWidth: 1100,
     minHeight: 700,
     show: false,
-    title: 'Fly Overlays',
+    title: 'iFly',
     backgroundColor: '#0a0a0a',
     autoHideMenuBar: true,
     webPreferences: {
@@ -151,11 +196,27 @@ app.whenReady().then(() => {
   }
 
   irsdk = new IrsdkClient();
+
+  // Grabador de sesiones: recibe frames del SDK real y persiste por vuelta.
+  recorder = new SessionRecorder(path.join(app.getPath('userData'), 'recordings'));
+  irsdk.setFrameSink((frame) => recorder.handleFrame(frame));
+  recorder.onChange(() => {
+    if (dashboardWindow && !dashboardWindow.isDestroyed()) {
+      dashboardWindow.webContents.send('recordings:changed');
+    }
+  });
+
   irsdk.start();
 
   // Canal rápido (60 Hz): delta, lap, onTrack, connected, preview, sectors.
   // Lo consume el DeltaBar y el SectorTimes (necesita sectors al cruzar splits).
   irsdk.onUpdate((data) => {
+    // Cerrar la sesión de grabación al desconectar iRacing (transición conectado→no).
+    if (_recPrevConnected && !data.connected) {
+      recorder.endSession();
+    }
+    _recPrevConnected = !!data.connected;
+
     for (const [id, win] of overlayManager.windows.entries()) {
       if (overlayManager.isUnlocked(id)) continue;
       if (win.isDestroyed()) continue;
@@ -211,6 +272,7 @@ app.on('will-quit', () => {
 
 app.on('window-all-closed', () => {
   if (updateCheckInterval) clearInterval(updateCheckInterval);
+  if (recorder) recorder.endSession();
   if (irsdk) irsdk.stop();
   if (process.platform !== 'darwin') app.quit();
 });
@@ -244,6 +306,10 @@ ipcMain.handle('sectors:get', () => {
   }
   return irsdk.getSectors();
 });
+
+ipcMain.handle('recordings:list', () => (recorder ? recorder.listSessions() : []));
+ipcMain.handle('recordings:get', (_e, id) => (recorder ? recorder.getSession(id) : null));
+ipcMain.handle('recordings:delete', (_e, id) => (recorder ? recorder.deleteSession(id) : false));
 
 ipcMain.handle('preview:toggle', () => {
   const enabled = irsdk.togglePreview();

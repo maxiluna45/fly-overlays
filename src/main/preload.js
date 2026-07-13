@@ -42,6 +42,16 @@ contextBridge.exposeInMainWorld('fly', {
   setPreview: (enabled) => ipcRenderer.invoke('preview:set', enabled),
   configurePreview: (options) => ipcRenderer.invoke('preview:configure', options),
 
+  // Grabaciones / análisis post-sesión
+  getRecordings: () => ipcRenderer.invoke('recordings:list'),
+  getRecording: (id) => ipcRenderer.invoke('recordings:get', id),
+  deleteRecording: (id) => ipcRenderer.invoke('recordings:delete', id),
+  onRecordingsChange: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on('recordings:changed', listener);
+    return () => ipcRenderer.removeListener('recordings:changed', listener);
+  },
+
   onUpdater: (channel, callback) => {
     const listener = (_event, data) => callback(data);
     ipcRenderer.on('updater:' + channel, listener);

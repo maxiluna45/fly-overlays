@@ -22,19 +22,19 @@ const REGISTRY = {
     minWidth: 320,
     minHeight: 140,
   },
-  tyres: {
-    name: 'Tyres',
-    description: 'Temperatura y presión de neumáticos',
-    entry: 'tyres.html',
-    minWidth: 400,
-    minHeight: 280,
-  },
   relative: {
     name: 'Relative',
     description: 'Clasificación en tiempo real',
     entry: 'relative.html',
     minWidth: 360,
     minHeight: 200,
+  },
+  standings: {
+    name: 'Standings',
+    description: 'Tabla completa del field',
+    entry: 'standings.html',
+    minWidth: 360,
+    minHeight: 240,
   },
 };
 

@@ -61,6 +61,19 @@ class IrsdkClient {
     this._lastLapTimesUpdate = 0;
     this._lastTyresUpdate = 0;
     this._lastRelativeUpdate = 0;
+
+    // === Grabación de sesión ===
+    // Sink al que enviamos un frame de telemetría por tick (solo con SDK real).
+    this._frameSink = null;
+    this._recPrevLap = null;   // para detectar cruce de meta (vuelta completada)
+    this._trackName = null;    // cacheado del SessionInfo
+    this._carName = null;      // cacheado del DriverInfo
+  }
+
+  // Registra un consumidor de frames crudos (el SessionRecorder). Se llama con
+  // un objeto por tick mientras haya SDK real; nunca en preview.
+  setFrameSink(fn) {
+    this._frameSink = fn;
   }
 
   _initTyreCache() {
@@ -268,6 +281,7 @@ class IrsdkClient {
         offTrack: i === 6, // el player está OFF como en el mock del dashboard
         out: false,
         estLapTime: baseLap,
+        f2Time: i * 1.2, // gap creciente al líder (mock)
         lastLapTime,
         bestLapTime: baseLap - 1.5,
         bestLapNum: 1,
@@ -420,6 +434,11 @@ class IrsdkClient {
       this.sdk = null;
     }
     this._cachedData = {};
+    // Reset del estado de grabación: la próxima conexión re-detecta track/car
+    // y no arrastra el número de vuelta viejo.
+    this._recPrevLap = null;
+    this._trackName = null;
+    this._carName = null;
     this._emitLight();
     this._emitHeavy();
     this._scheduleReconnect();
@@ -447,6 +466,13 @@ class IrsdkClient {
     const lapDistPct = this._read(telemetry, 'LapDistPct') || 0;
     const sessionTime = this._read(telemetry, 'SessionTime') || 0;
     const lastLapTime = this._read(telemetry, 'LapLastLapTime') || 0;
+
+    // Inputs para la grabación (pedales, volante, marcha, RPM).
+    const throttle = this._read(telemetry, 'Throttle') || 0;
+    const brake = this._read(telemetry, 'Brake') || 0;
+    const steer = this._read(telemetry, 'SteeringWheelAngle') || 0;
+    const gear = this._read(telemetry, 'Gear') || 0;
+    const rpm = this._read(telemetry, 'RPM') || 0;
 
     // Detectar tipo de sesión del SessionInfo
     // iRacing expone SessionType como string. Valores comunes:
@@ -530,6 +556,9 @@ class IrsdkClient {
         personalBest: this._readDelta(telemetry, 'LapDeltaToBestLap'),
         optimal: this._readDelta(telemetry, 'LapDeltaToOptimalLap'),
       },
+      // Tiempo de vuelta de referencia (best del player en la sesión) para que
+      // el DeltaBar pueda proyectar la vuelta actual: predicha = ref + delta.
+      refLapTime: bestLap || 0,
       lap,
       speed,
       onTrack: typeof speed === 'number' && speed > 0.5,
@@ -568,6 +597,54 @@ class IrsdkClient {
       heavyChanged = true;
     }
     if (heavyChanged) this._emitHeavy();
+
+    // === Grabación: enviar frame al recorder (solo SDK real, nunca preview) ===
+    if (this._frameSink && !this._previewMode) {
+      // Metadata de track/car cacheada (barata de leer una vez por conexión).
+      if (!this._trackName && session && session.WeekendInfo) {
+        this._trackName = session.WeekendInfo.TrackDisplayName || session.WeekendInfo.TrackName || null;
+      }
+      if (!this._carName) {
+        try {
+          const di = this.sdk.getDriverInfo();
+          const pIdx = this._read(telemetry, 'PlayerCarIdx') ?? 0;
+          const pd = di && di.Drivers && di.Drivers.find((d) => d.CarIdx === pIdx);
+          if (pd) this._carName = pd.CarScreenName || pd.CarPath || null;
+        } catch (_) {}
+      }
+
+      // Detección de vuelta completada (cruce de meta).
+      let completedLap = null;
+      if (this._recPrevLap != null && lap > this._recPrevLap && lastLapTime > 0) {
+        completedLap = {
+          number: this._recPrevLap,
+          time: lastLapTime,
+          valid: lastLapTime > 0,
+          micros: [...this._lastLapMicroSectors],
+          at: now,
+        };
+      }
+      this._recPrevLap = lap;
+
+      this._frameSink({
+        t: sessionTime,
+        at: now,
+        lap,
+        lapDistPct,
+        currentLapTime: currentLap,
+        throttle,
+        brake,
+        steer,
+        gear,
+        rpm,
+        speed,
+        onTrack: this._cachedData.onTrack,
+        sessionType,
+        track: this._trackName,
+        car: this._carName,
+        completedLap,
+      });
+    }
   }
 
   _updateSectors({ lap, lapDistPct, currentLap, sessionTime, lastLapTime = 0 }) {
@@ -723,6 +800,7 @@ class IrsdkClient {
       delta: this._cachedData.delta ?? 0,
       deltaRate: this._cachedData.deltaRate ?? 0,
       deltaRefs: this._cachedData.deltaRefs ?? { sessionBest: null, personalBest: null, optimal: null },
+      refLapTime: this._cachedData.refLapTime ?? 0,
       lap: this._cachedData.lap ?? 0,
       speed: this._cachedData.speed ?? 0,
       onTrack: this._cachedData.onTrack ?? false,
@@ -1027,6 +1105,9 @@ class IrsdkClient {
           const lapReal = Array.isArray(lapRaw) && lapRaw.length > 1 && lapRaw.some((v, idx) => idx !== playerIdx && v > 0);
           const estA = this._readCarIdxArray(telemetry, 'CarIdxEstTime', n, playerIdx);
           const lapArr = this._readCarIdxArray(telemetry, 'CarIdxLap', n, playerIdx);
+          // F2Time = tiempo detrás del líder en carrera (0 = líder). Lo usa el
+          // overlay de Standings para el gap al líder / intervalo.
+          const f2A = this._readCarIdxArray(telemetry, 'CarIdxF2Time', n, playerIdx);
           const isRace = /race/i.test(this._cachedSessionType || '');
 
           const pctSelf = lapDistPct[playerIdx];
@@ -1115,6 +1196,7 @@ class IrsdkClient {
               offTrack,
               out,
               estLapTime: estTime[i] || 0,
+              f2Time: f2A[i] || 0,
               lastLapTime: lastLapTime[i] || 0,
               bestLapTime: bestLapTime[i] || 0,
               bestLapNum: bestLapNum[i] || 0,

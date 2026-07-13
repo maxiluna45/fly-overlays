@@ -10,6 +10,13 @@ function formatDelta(seconds) {
   return `${sign}${Math.abs(seconds).toFixed(2)}`;
 }
 
+function formatLapTime(seconds) {
+  if (seconds == null || !isFinite(seconds) || seconds <= 0) return "—:——.—";
+  const m = Math.floor(seconds / 60);
+  const s = seconds - m * 60;
+  return `${m}:${s.toFixed(2).padStart(5, "0")}`;
+}
+
 export function DeltaBar({ previewMode = false, injectedTelemetry = null, settings = {} }) {
   // Settings con defaults (vienen de config o se sobreescriben)
   const cfg = {
@@ -31,6 +38,8 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null, settin
     //   'personalBest' → tu mejor vuelta histórica (auto+pista)
     //   'optimal'      → vuelta óptima (suma de tus mejores sectores)
     showTrend: true,
+    // Muestra el tiempo de vuelta proyectado (referencia + delta actual).
+    showPrediction: true,
     deltaReference: "auto",
     ...settings,
   };
@@ -197,6 +206,13 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null, settin
     ? (deltaRate > 0.02 ? 1 : deltaRate < -0.02 ? -1 : 0)
     : 0;
 
+  // Vuelta proyectada = tiempo de referencia + delta actual. Solo se muestra
+  // con una referencia válida (ya diste una vuelta). Es una proyección: asume
+  // que sostenés el ritmo del delta actual hasta el final de la vuelta.
+  const refLapTime = telemetry.refLapTime || 0;
+  const predictedLap = refLapTime > 0 ? refLapTime + renderDelta : null;
+  const showPrediction = cfg.showPrediction && showBar && predictedLap != null && predictedLap > 0;
+
   return (
     <div
       ref={containerRef}
@@ -319,6 +335,27 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null, settin
                     {trend < 0 ? "▼" : "▲"}
                   </span>
                 )}
+              </div>
+            )}
+
+            {showPrediction && (
+              <div
+                className="inline-flex items-baseline gap-1.5 leading-none"
+                style={{ opacity: 0.85 }}
+                title="Vuelta proyectada (referencia + delta actual)"
+              >
+                <span
+                  className="font-bold uppercase tracking-widest"
+                  style={{ fontSize: `${cfg.valueFontSize * 0.34}px`, color: "rgba(255,255,255,0.4)" }}
+                >
+                  Proy
+                </span>
+                <span
+                  className="font-mono font-semibold tnum"
+                  style={{ fontSize: `${cfg.valueFontSize * 0.5}px`, color: "rgba(255,255,255,0.85)" }}
+                >
+                  {formatLapTime(predictedLap)}
+                </span>
               </div>
             )}
           </div>

@@ -1,6 +1,6 @@
-# Fly Overlays
+# iFly
 
-Overlays propios para iRacing. Hecho con Electron + React + Vite + Tailwind v4 + shadcn/ui.
+App para iRacing: overlays en vivo (delta, sectores, relative, standings), grabación de sesiones y análisis post-sesión con coach. Hecho con Electron + React + Vite + Tailwind v4 + shadcn/ui.
 
 ## Stack
 - **Electron** — ventanas transparentes, always-on-top, click-through
@@ -38,7 +38,7 @@ npm run dev          # vite + electron con HMR
 npm run dist
 ```
 
-El archivo se genera en `release/FlyOverlays-X.X.X-portable.exe`. Es un único `.exe` autocontenido (~180MB) que el usuario solo necesita descargar y ejecutar con doble click.
+El archivo se genera en `release/iFly-Setup-X.X.X.exe`. El usuario solo necesita descargarlo y ejecutarlo.
 
 ## Auto-update
 Las actualizaciones se descargan automáticamente desde GitHub Releases. El usuario ve una notificación y al cerrar la app se instala la nueva versión.
@@ -49,7 +49,7 @@ Para publicar una actualización:
 3. Crear un Release en GitHub con el tag `vX.X.X` y subir el `.exe` como asset
 
 ## Config persistida
-`%APPDATA%\fly-overlays\config.json`
+`%APPDATA%\iFly\config.json` (migrado automáticamente desde el nombre anterior)
 - Posición, tamaño, opacidad y estado enabled de cada overlay
 - Hotkeys
 - Cualquier propiedad custom

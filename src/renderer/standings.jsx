@@ -1,21 +1,21 @@
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Tyres } from "./components/Tyres.jsx";
+import { Standings } from "./components/Standings.jsx";
 import "./styles/global.css";
 
-function TyresApp() {
+function StandingsApp() {
   const [settings, setSettings] = useState({});
   useEffect(() => {
     if (typeof window === "undefined" || !window.fly) return;
     let mounted = true;
     window.fly.getConfig().then((cfg) => {
       if (!mounted) return;
-      const ov = cfg?.overlays?.tyres || {};
+      const ov = cfg?.overlays?.standings || {};
       setSettings(ov.settings || {});
     });
     const unsub = window.fly.onConfigChange((cfg) => {
       if (!mounted) return;
-      const ov = cfg?.overlays?.tyres || {};
+      const ov = cfg?.overlays?.standings || {};
       setSettings(ov.settings || {});
     });
     return () => {
@@ -23,8 +23,8 @@ function TyresApp() {
       if (typeof unsub === "function") unsub();
     };
   }, []);
-  return <Tyres settings={settings} />;
+  return <Standings settings={settings} />;
 }
 
 const root = createRoot(document.getElementById("root"));
-root.render(<TyresApp />);
+root.render(<StandingsApp />);
