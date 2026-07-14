@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { Trash2, Trophy, Clock, Activity, Gauge, Upload, FolderOpen, RotateCcw, Pencil, Check, X, Search, ExternalLink } from "lucide-react";
-import { analyzeLap, bestLapOf, consistency, sectorTimes, sessionOptimal } from "../lib/coach.js";
+import { analyzeLap, bestLapOf, consistency, sectorTimes, sessionOptimal, cornerConsistency } from "../lib/coach.js";
 import lovelyTracks from "../assets/lovely-tracks.json"; // curvas + sectores por pista (© Lovely Sim Racing, CC BY-NC-SA)
 
 function fmtLap(s) {
@@ -570,8 +570,6 @@ export function AnalysisView() {
     }
     return sessionBest;
   }, [refSession, refLapIdx, sessionBest]);
-  const analysis = useMemo(() => (best && lap ? analyzeLap(best, lap) : null), [best, lap]);
-
   // Datos de pista de Lovely (curvas + sectores reales) por nombre de circuito.
   const trackData = useMemo(() => {
     if (!session) return null;
@@ -627,6 +625,17 @@ export function AnalysisView() {
     if (!trackData || !trackData.turns || !trackData.turns.length) return [];
     return trackData.turns.map((t, i) => ({ pct: t.s, label: t.name || `T${i + 1}` }));
   }, [trackData]);
+
+  // Coach: análisis de la vuelta anclado a curvas reales + largo de pista.
+  const analysis = useMemo(
+    () => (best && lap ? analyzeLap(best, lap, { corners, trackLength: session?.trackLength || 0 }) : null),
+    [best, lap, corners, session]
+  );
+  // (#6) Consistencia por curva sobre toda la sesión.
+  const cornerConsist = useMemo(
+    () => (session && corners.length ? cornerConsistency(session, { corners }) : null),
+    [session, corners]
+  );
 
   const sectorInfo = useMemo(() => {
     if (!session || !lap) return null;
@@ -1289,11 +1298,22 @@ export function AnalysisView() {
                 </div>
 
                 {/* Coach IA */}
-                {analysis && (analysis.tips.length > 0 || (analysis.insights && analysis.insights.length > 0)) && (
+                {analysis && (analysis.tips.length > 0 || (analysis.insights && analysis.insights.length > 0) || cornerConsist) && (
                   <div className="rounded-lg border border-border bg-card/40 p-3 space-y-1.5">
                     <div className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
                       <Activity className="size-3.5" /> Coach
                     </div>
+                    {/* Titular: mayor oportunidad de tiempo */}
+                    {analysis.headline && (
+                      <div className="flex items-baseline gap-2 text-xs mb-0.5 pb-1.5 border-b border-border/60">
+                        <span className="text-[10px] uppercase tracking-widest text-muted-foreground/70">Mayor oportunidad</span>
+                        <span className="font-bold text-foreground">{analysis.headline.label}</span>
+                        <span className="font-mono text-red-400">+{analysis.headline.loss.toFixed(2)}s</span>
+                        {analysis.headline.total > analysis.headline.loss + 0.01 && (
+                          <span className="text-[10px] text-muted-foreground/70 ml-auto">recuperable ~{analysis.headline.total.toFixed(2)}s</span>
+                        )}
+                      </div>
+                    )}
                     {analysis.tips.map((t, i) => (
                       <div key={i} className="flex items-start gap-2 text-xs">
                         <span
@@ -1309,6 +1329,15 @@ export function AnalysisView() {
                         <span className="text-foreground/80">{t.text}</span>
                       </div>
                     ))}
+                    {/* (#6) Consistencia por curva */}
+                    {cornerConsist && cornerConsist.worst && cornerConsist.worst.std >= 0.1 && (
+                      <div className="flex items-start gap-2 text-xs">
+                        <span className="mt-1 size-1.5 rounded-full shrink-0 bg-purple-400" />
+                        <span className="text-foreground/80">
+                          Sos inconsistente en <span className="font-semibold">{cornerConsist.worst.label}</span> (±{cornerConsist.worst.std.toFixed(2)}s entre vueltas): ahí hay tiempo fácil repitiendo la misma línea/frenada.
+                        </span>
+                      </div>
+                    )}
                   </div>
                 )}
 

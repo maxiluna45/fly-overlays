@@ -108,124 +108,184 @@ export function sessionOptimal(session, pctsOverride) {
   return { bestPerSector: best, optimalLap: complete ? best.reduce((a, b) => a + b, 0) : null };
 }
 
-function fmtPct(d) {
-  return `${Math.round(d * 100)}%`;
-}
 function fmtT(s) {
   const sign = s >= 0 ? "+" : "−";
   return `${sign}${Math.abs(s).toFixed(2)}s`;
 }
+// Diferencia de buckets → metros (si conocemos el largo de pista).
+function bucketsToMeters(db, n, trackLength) {
+  if (!trackLength || trackLength <= 0 || n <= 1) return null;
+  return (db / n) * trackLength;
+}
+// Primer bucket frenando fuerte (>0.25) en [from,to].
+function firstBrake(l, from, to) {
+  for (let i = from; i <= to; i++) { const s = at(l, i); if (s && (s.br ?? 0) > 0.25) return i; }
+  return -1;
+}
+// Velocidad mínima (apex) en [from,to].
+function minSpeedIn(l, from, to) {
+  let m = Infinity, idx = -1;
+  for (let i = from; i <= to; i++) { const s = at(l, i); if (s && s.sp != null && s.sp < m) { m = s.sp; idx = i; } }
+  return { m, idx };
+}
+// Primer bucket a fondo (>0.9) desde `start` hasta `to`.
+function firstFullThrottle(l, start, to) {
+  for (let i = Math.max(0, start); i <= to; i++) { const s = at(l, i); if (s && (s.th ?? 0) > 0.9) return i; }
+  return -1;
+}
 
-// Analiza una vuelta contra la mejor. Devuelve { deltaTotal, deltaTrace, tips }.
-export function analyzeLap(best, lap) {
+// Zonas de análisis: una por CURVA real (con su nombre), abarcando desde el
+// punto medio con la curva anterior hasta el punto medio con la siguiente
+// (frenada → apex → salida). Si no hay curvas, detecta zonas de frenada.
+function buildSegments(lap, n, corners) {
+  if (Array.isArray(corners) && corners.length) {
+    const cs = corners.filter((c) => c && c.pct != null).slice().sort((a, b) => a.pct - b.pct);
+    return cs.map((c, i) => {
+      const prev = i > 0 ? cs[i - 1].pct : c.pct - 0.05;
+      const next = i < cs.length - 1 ? cs[i + 1].pct : c.pct + 0.05;
+      return {
+        label: c.label,
+        a: Math.max(0, Math.round(((prev + c.pct) / 2) * (n - 1))),
+        apex: Math.round(c.pct * (n - 1)),
+        b: Math.min(n - 1, Math.round(((c.pct + next) / 2) * (n - 1))),
+      };
+    });
+  }
+  // Fallback: zonas de frenada detectadas.
+  const zones = [];
+  let i = 0;
+  while (i < n) {
+    const s = at(lap, i);
+    if (s && (s.br ?? 0) > 0.3) {
+      const start = i; let j = i;
+      while (j < n && (() => { const x = at(lap, j); return x && (x.br ?? 0) > 0.15; })()) j++;
+      zones.push({ label: `Frenada ${zones.length + 1}`, a: Math.max(0, start - Math.round(n * 0.01)), apex: null, b: Math.min(n - 1, j + Math.round(n * 0.06)) });
+      i = j + 1;
+    } else i++;
+  }
+  return zones;
+}
+
+// Detalle de una zona: fase donde perdés (entrada/apex/salida) + causas concretas.
+function segmentDetail(best, lap, seg, n, trackLength, deltaAt) {
+  const from = seg.a, to = seg.b;
+  const causes = [];
+
+  // Punto de frenada (en metros si se puede).
+  const boB = firstBrake(best, from, to), boL = firstBrake(lap, from, to);
+  if (boB >= 0 && boL >= 0) {
+    const dm = bucketsToMeters(boL - boB, n, trackLength);
+    if (dm != null && Math.abs(dm) >= 5) causes.push(dm > 0 ? `frenás ${Math.round(dm)} m más tarde` : `frenás ${Math.round(-dm)} m antes (perdés velocidad)`);
+    else if (dm == null && Math.abs(boL - boB) >= 3) causes.push(boL > boB ? "frenás más tarde" : "frenás antes");
+  }
+
+  // Velocidad mínima (apex).
+  const msB = minSpeedIn(best, from, to), msL = minSpeedIn(lap, from, to);
+  if (isFinite(msB.m) && isFinite(msL.m)) {
+    const dv = (msL.m - msB.m) * MS_TO_KMH;
+    if (dv < -2) causes.push(`velocidad mínima ${Math.round(msL.m * MS_TO_KMH)} vs ${Math.round(msB.m * MS_TO_KMH)} km/h`);
+  }
+
+  // Reaplicación de gas a la salida.
+  const apexB = msB.idx >= 0 ? msB.idx : from, apexL = msL.idx >= 0 ? msL.idx : from;
+  const tOnB = firstFullThrottle(best, apexB, to), tOnL = firstFullThrottle(lap, apexL, to);
+  if (tOnB >= 0 && tOnL >= 0) {
+    const dm = bucketsToMeters(tOnL - tOnB, n, trackLength);
+    if (dm != null && dm >= 5) causes.push(`abrís gas ${Math.round(dm)} m tarde a la salida`);
+    else if (dm == null && tOnL - tOnB >= 3) causes.push("abrís gas tarde a la salida");
+  }
+
+  // Coasting (sin gas ni freno) en la zona.
+  let coast = 0, tot = 0;
+  for (let i = from; i <= to; i++) { const s = at(lap, i); if (s) { tot++; if ((s.th ?? 0) < 0.05 && (s.br ?? 0) < 0.05) coast++; } }
+  if (tot > 0 && coast / tot > 0.3) causes.push(`vas "coasting" (sin gas ni freno) en ~${Math.round((coast / tot) * 100)}% de la zona`);
+
+  // Subviraje (proxy) en el apex: más volante pero menos G lateral que la ref.
+  const aL = at(lap, apexL), aB = at(best, apexB);
+  if (aL && aB && aL.st != null && aB.st != null) {
+    const moreSteer = Math.abs(aL.st) > Math.abs(aB.st) * 1.2 + 0.02;
+    const lessGrip = aL.gLat != null && aB.gLat != null ? Math.abs(aL.gLat) < Math.abs(aB.gLat) - 0.2 : true;
+    if (moreSteer && lessGrip) causes.push("metés más volante con menos agarre (subviraje / entrada apretada)");
+  }
+
+  // Fase donde se concentra la pérdida: entrada (frenada) vs salida (tracción).
+  const apex = seg.apex != null ? seg.apex : Math.round((from + to) / 2);
+  const lossEntry = deltaAt(apex) - deltaAt(from);
+  const lossExit = deltaAt(to) - deltaAt(apex);
+  let phase = null;
+  if (lossEntry > 0.02 || lossExit > 0.02) {
+    if (lossExit > lossEntry * 1.4) phase = "salida";
+    else if (lossEntry > lossExit * 1.4) phase = "entrada/frenada";
+    else phase = "apex";
+  }
+
+  return { causes: causes.slice(0, 3), phase };
+}
+
+// Analiza una vuelta contra la referencia, anclando a curvas reales.
+// opts: { corners: [{pct,label}], trackLength: metros }.
+export function analyzeLap(best, lap, opts = {}) {
   if (!best || !lap || !best.samples || !lap.samples) {
-    return { deltaTotal: null, deltaTrace: [], tips: [] };
+    return { deltaTotal: null, deltaTrace: [], tips: [], insights: [], headline: null };
   }
   const n = Math.min(best.samples.length, lap.samples.length);
   const trace = buildDeltaTrace(best, lap);
   const deltaTotal = (lap.lapTime && best.lapTime) ? lap.lapTime - best.lapTime : (trace.length ? trace[trace.length - 1].delta : null);
+  const trackLength = opts.trackLength || 0;
+  const deltaAt = (i) => trace[Math.max(0, Math.min(trace.length - 1, i))]?.delta ?? 0;
 
-  // Pérdida de tiempo por zona = delta al final - delta al inicio de la zona.
-  const zoneSize = Math.floor(n / ZONES) || 1;
-  const zones = [];
-  for (let z = 0; z < ZONES; z++) {
-    const a = z * zoneSize;
-    const b = z === ZONES - 1 ? n - 1 : (z + 1) * zoneSize;
-    const da = trace[a]?.delta ?? 0;
-    const db = trace[b]?.delta ?? da;
-    zones.push({ z, a, b, loss: db - da });
-  }
+  const segments = buildSegments(lap, n, opts.corners);
+  for (const s of segments) s.loss = deltaAt(s.b) - deltaAt(s.a);
 
-  // Top zonas donde perdés tiempo (loss positivo).
-  const worst = zones.filter((zz) => zz.loss > 0.04).sort((x, y) => y.loss - x.loss).slice(0, 3);
+  // Curvas/zonas donde MÁS perdés (top 4).
+  const worst = segments.filter((s) => s.loss > 0.03).sort((x, y) => y.loss - x.loss).slice(0, 4);
 
   const tips = [];
-  for (const zz of worst) {
-    const posPct = (zz.a / n + zz.b / n) / 2;
-    const sub = [];
-    // Análisis de inputs dentro de la zona (más un poco de "approach" antes).
-    const from = Math.max(0, zz.a - zoneSize);
-    const to = zz.b;
-
-    // Punto de frenada: primer bucket con brake > 0.25.
-    const brakeOnset = (l) => {
-      for (let i = from; i <= to; i++) { const s = at(l, i); if (s && s.br > 0.25) return i; }
-      return -1;
-    };
-    const boBest = brakeOnset(best);
-    const boLap = brakeOnset(lap);
-    if (boBest >= 0 && boLap >= 0) {
-      const diff = boLap - boBest; // buckets
-      if (Math.abs(diff) >= 2) {
-        sub.push(diff > 0
-          ? "frenás más tarde que en tu mejor vuelta (podés estar pasándote de largo)"
-          : "frenás antes que en tu mejor vuelta (perdés velocidad de más)");
-      }
-    }
-
-    // Velocidad mínima (apex) en la zona.
-    const minSpeed = (l) => {
-      let m = Infinity, idx = -1;
-      for (let i = zz.a; i <= to; i++) { const s = at(l, i); if (s && s.sp != null && s.sp < m) { m = s.sp; idx = i; } }
-      return { m, idx };
-    };
-    const msBest = minSpeed(best);
-    const msLap = minSpeed(lap);
-    if (isFinite(msBest.m) && isFinite(msLap.m)) {
-      const dv = (msLap.m - msBest.m) * MS_TO_KMH;
-      if (dv < -3) sub.push(`menor velocidad de paso por curva (${Math.round(msLap.m * MS_TO_KMH)} vs ${Math.round(msBest.m * MS_TO_KMH)} km/h)`);
-    }
-
-    // Reanudación del acelerador: primer bucket con throttle > 0.9 tras el apex.
-    const throttleOn = (l, apexIdx) => {
-      const start = apexIdx >= 0 ? apexIdx : zz.a;
-      for (let i = start; i <= to; i++) { const s = at(l, i); if (s && s.th > 0.9) return i; }
-      return -1;
-    };
-    const toBest = throttleOn(best, msBest.idx);
-    const toLap = throttleOn(lap, msLap.idx);
-    if (toBest >= 0 && toLap >= 0 && (toLap - toBest) >= 2) {
-      sub.push("abrís el acelerador más tarde a la salida");
-    }
-
-    // Coasting: buckets sin gas ni freno.
-    let coast = 0, total = 0;
-    for (let i = zz.a; i <= to; i++) {
-      const s = at(lap, i);
-      if (s) { total++; if ((s.th ?? 0) < 0.05 && (s.br ?? 0) < 0.05) coast++; }
-    }
-    const coastPct = total > 0 ? coast / total : 0;
-    if (coastPct > 0.25) sub.push(`vas en "coasting" (sin gas ni freno) en ~${Math.round(coastPct * 100)}% del tramo`);
-
-    // Subviraje (proxy): en el apex, más ángulo de volante que la referencia
-    // pero MENOS G lateral (usás menos agarre) → el auto no gira / entrás apretado.
-    const apexLap = at(lap, msLap.idx);
-    const apexRef = at(best, msBest.idx);
-    if (apexLap && apexRef && apexLap.st != null && apexRef.st != null) {
-      const moreSteer = Math.abs(apexLap.st) > Math.abs(apexRef.st) * 1.2 + 0.02;
-      const lessGrip = apexLap.gLat != null && apexRef.gLat != null
-        ? Math.abs(apexLap.gLat) < Math.abs(apexRef.gLat) - 0.2
-        : true;
-      if (moreSteer && lessGrip) sub.push("metés más volante que la referencia (posible subviraje / entrada apretada)");
-    }
-
+  for (const seg of worst) {
+    const d = segmentDetail(best, lap, seg, n, trackLength, deltaAt);
     tips.push({
-      severity: zz.loss > 0.2 ? "high" : zz.loss > 0.1 ? "med" : "low",
-      posPct,
-      loss: zz.loss,
-      text: sub.length > 0
-        ? `En ~${fmtPct(posPct)} de la vuelta perdés ${fmtT(zz.loss)}: ${sub.join("; ")}.`
-        : `En ~${fmtPct(posPct)} de la vuelta perdés ${fmtT(zz.loss)} (revisá línea y ritmo en este tramo).`,
+      severity: seg.loss > 0.25 ? "high" : seg.loss > 0.1 ? "med" : "low",
+      loss: seg.loss,
+      label: seg.label,
+      text: `${seg.label} · ${fmtT(seg.loss)}${d.phase ? ` (${d.phase})` : ""} — ${d.causes.length ? d.causes.join("; ") : "revisá línea y ritmo"}.`,
     });
   }
 
   if (tips.length === 0 && deltaTotal != null && deltaTotal <= 0.05) {
-    tips.push({ severity: "low", posPct: 0, loss: 0, text: "Vuelta muy pareja a tu mejor referencia. Buen trabajo — buscá micro-ganancias en frenadas y salidas." });
+    tips.push({ severity: "low", loss: 0, text: "Vuelta muy pareja a tu referencia. Buen trabajo — buscá micro-ganancias en frenadas y salidas." });
   }
 
-  const insights = buildInsights(lap);
+  const headline = worst.length
+    ? { label: worst[0].label, loss: worst[0].loss, total: worst.reduce((a, s) => a + s.loss, 0) }
+    : null;
 
-  return { deltaTotal, deltaTrace: trace, tips, insights };
+  const insights = buildInsights(lap);
+  return { deltaTotal, deltaTrace: trace, tips, insights, headline };
+}
+
+// (#6) Consistencia POR CURVA sobre las vueltas válidas: en qué curva variás más
+// entre vueltas (ahí hay tiempo fácil ganando repetibilidad).
+export function cornerConsistency(session, opts = {}) {
+  const corners = (opts.corners || []).filter((c) => c && c.pct != null).slice().sort((a, b) => a.pct - b.pct);
+  if (!session || !session.laps || !corners.length) return null;
+  const valid = session.laps.filter((l) => l.valid && l.lapTime > 0 && Array.isArray(l.samples));
+  if (valid.length < 3) return null;
+  const n = valid[0].samples.length;
+  const per = corners.map((c, i) => {
+    const prev = i > 0 ? corners[i - 1].pct : c.pct - 0.05;
+    const next = i < corners.length - 1 ? corners[i + 1].pct : c.pct + 0.05;
+    const a = Math.max(0, Math.round(((prev + c.pct) / 2) * (n - 1)));
+    const b = Math.min(n - 1, Math.round(((c.pct + next) / 2) * (n - 1)));
+    const times = [];
+    for (const l of valid) { const t0 = tAtBucket(l, a), t1 = tAtBucket(l, b); if (t0 != null && t1 != null && t1 > t0) times.push(t1 - t0); }
+    if (times.length < 3) return null;
+    const mean = times.reduce((x, y) => x + y, 0) / times.length;
+    const std = Math.sqrt(times.reduce((x, y) => x + (y - mean) ** 2, 0) / times.length);
+    return { label: c.label, std, mean };
+  }).filter(Boolean);
+  if (!per.length) return null;
+  per.sort((x, y) => y.std - x.std);
+  return { worst: per[0], perCorner: per };
 }
 
 // Insights globales de la vuelta (no atados a un tramo): cambios de marcha,
