@@ -1,4 +1,4 @@
-import { Gauge, Layers, ListOrdered, Trophy } from "lucide-react";
+import { Gauge, Layers, ListOrdered, Trophy, Radar as RadarIcon } from "lucide-react";
 
 export const OVERLAY_META = {
   delta: {
@@ -20,5 +20,10 @@ export const OVERLAY_META = {
     name: "Standings",
     description: "Tabla completa del field",
     icon: Trophy,
+  },
+  radar: {
+    name: "Radar",
+    description: "Proximidad de autos cercanos (spotter)",
+    icon: RadarIcon,
   },
 };

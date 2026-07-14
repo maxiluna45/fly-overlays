@@ -121,6 +121,7 @@ class IrsdkClient {
     this._refTrackId = null;
     this._refCarId = null;
     this._refPrevLap = null;
+    this._trackLengthM = null;  // largo de pista en metros (para el radar)
     this._sectorPcts = null;   // límites de sectores reales (SplitTimeInfo)
     this._trackLength = null;  // largo de pista en km
   }
@@ -500,6 +501,7 @@ class IrsdkClient {
     this._refTrackId = null;
     this._refCarId = null;
     this._refPrevLap = null;
+    this._trackLengthM = null;
     if (this._refStore) this._refStore.reset();
     this._sectorPcts = null;
     this._trackLength = null;
@@ -686,6 +688,9 @@ class IrsdkClient {
       lap,
       speed,
       onTrack: isOnTrack,
+      // Spotter propio del juego (auto a izquierda/derecha). Único dato fiable
+      // para el lado en el radar. Canal rápido → aviso instantáneo.
+      carLeftRight: this._read(telemetry, 'CarLeftRight'),
       session: session?.SessionNum,
       sessionType,
     };
@@ -1271,6 +1276,18 @@ class IrsdkClient {
           const pctSelf = lapDistPct[playerIdx];
           const estSelf = estA[playerIdx];
 
+          // Largo de pista (m) para el radar: gap longitudinal = Δpct × largo.
+          // Cacheado (no cambia en la sesión). Lo leemos del YAML (WeekendInfo).
+          if (this._trackLengthM == null) {
+            try {
+              const sd = this.sdk.getSessionData();
+              const tl = sd && sd.WeekendInfo && sd.WeekendInfo.TrackLength;
+              const km = tl != null ? parseFloat(String(tl)) : NaN;
+              if (isFinite(km) && km > 0) this._trackLengthM = km * 1000;
+            } catch (_) {}
+          }
+          const trackLengthM = this._trackLengthM || 0;
+
           // ── Vuelta de referencia para gaps precisos (interpolación de tiempo
           // por posición de pista). Preferida sobre EstTime cuando existe.
           const refStore = this._refs();
@@ -1370,6 +1387,8 @@ class IrsdkClient {
               isPlayerClass: d.CarClassID === playerRealClass,
               relDelta,
               gapToPlayer: relDelta != null ? Math.abs(relDelta) : null,
+              // Distancia longitudinal en metros (para el radar): >0 = adelante.
+              relMeters: trackLengthM > 0 ? dPct * trackLengthM : null,
               isAhead,
               lapDelta,
               lapCompleted: lapCompleted[i] || 0,
@@ -1467,6 +1486,7 @@ class IrsdkClient {
             playerCarClass: playerRealClass,
             totalInClass,
             totalOverall,
+            trackLength: trackLengthM,
             drivers,
             session,
           };

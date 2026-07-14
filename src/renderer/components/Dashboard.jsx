@@ -11,6 +11,7 @@ import {
 import { OVERLAY_META } from "../overlay-catalog.js";
 import { Relative } from "./Relative.jsx";
 import { Standings } from "./Standings.jsx";
+import { Radar } from "./Radar.jsx";
 import { AnalysisView } from "./AnalysisView.jsx";
 import { Button } from "./ui/button.jsx";
 import { Switch } from "./ui/switch.jsx";
@@ -20,7 +21,7 @@ import { VerticalSlider } from "./ui/vertical-slider.jsx";
 import { useToast } from "./ui/toast.jsx";
 import { ErrorBoundary } from "./ui/error-boundary.jsx";
 
-const IMPLEMENTED = ["delta", "sectors", "relative", "standings"];
+const IMPLEMENTED = ["delta", "sectors", "relative", "standings", "radar"];
 
 function formatBytes(bps) {
   if (!bps || !isFinite(bps)) return "0 B";
@@ -292,6 +293,13 @@ export function Dashboard() {
                 {selectedId === "standings" && (
                   <ErrorBoundary resetKey={selectedId}>
                     <StandingsLite />
+                  </ErrorBoundary>
+                )}
+                {selectedId === "radar" && (
+                  <ErrorBoundary resetKey={selectedId}>
+                    <div className="h-full flex items-center justify-center" style={{ width: 220 }}>
+                      <RadarLite />
+                    </div>
                   </ErrorBoundary>
                 )}
               </div>
@@ -832,6 +840,46 @@ function StandingsLite() {
   return <Standings injectedTelemetry={telemetry} previewMode />;
 }
 
+// === RADAR Lite (preview para el dashboard) ===
+function RadarLite() {
+  const [telemetry, setTelemetry] = useState({ connected: false, onTrack: false, preview: false, relative: null, carLeftRight: 0 });
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.fly) return;
+    if (typeof window.fly.onTelemetry !== "function") return;
+    return window.fly.onTelemetry((data) => setTelemetry((p) => ({ ...p, ...data })));
+  }, []);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.fly) return;
+    if (typeof window.fly.onTelemetryHeavy !== "function") return;
+    return window.fly.onTelemetryHeavy((data) => { if (data.relative) setTelemetry((p) => ({ ...p, relative: data.relative })); });
+  }, []);
+  // Mock si no hay sesión real con autos.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setTelemetry((prev) => {
+        const hasReal = prev.relative && Array.isArray(prev.relative.drivers) && prev.relative.drivers.some((d) => d.relMeters != null);
+        if (hasReal) return prev;
+        return {
+          ...prev, preview: true, carLeftRight: 3,
+          relative: {
+            playerIdx: 0, trackLength: 5000,
+            drivers: [
+              { carIdx: 0, relMeters: 0, onTrack: true, carNumber: "" },
+              { carIdx: 1, relMeters: 14, onTrack: true, carNumber: "7", carClassColor: 0 },
+              { carIdx: 2, relMeters: -28, onTrack: true, carNumber: "14", carClassColor: 0 },
+              { carIdx: 3, relMeters: 2, onTrack: true, carNumber: "3", carClassColor: 0 },
+            ],
+          },
+        };
+      });
+    }, 1500);
+    return () => clearTimeout(t);
+  }, []);
+
+  return <Radar injectedTelemetry={telemetry} previewMode />;
+}
+
 
 // === APPEARANCE SETTINGS (per overlay) ===
 
@@ -958,6 +1006,12 @@ const SETTING_LABELS = {
     fontSize: "Tamaño de fuente",
     borderRadius: "Radio del contenedor",
   },
+  radar: {
+    range: "Alcance (metros)",
+    showClassColors: "Colorear por clase",
+    showDistance: "Mostrar distancia del más cercano",
+    fontSize: "Tamaño de fuente",
+  },
 };
 
 function labelFor(overlayKey, k) {
@@ -1059,7 +1113,8 @@ function AppearanceSettings({ overlayId, overlayKey, settings = {}, onChange }) 
   const isSectors = overlayKey === "sectors";
   const isRelative = overlayKey === "relative";
   const isStandings = overlayKey === "standings";
-  if (!isDelta && !isSectors && !isRelative && !isStandings) return null;
+  const isRadar = overlayKey === "radar";
+  if (!isDelta && !isSectors && !isRelative && !isStandings && !isRadar) return null;
 
   return (
     <div className="pt-2 border-t border-border space-y-3">
@@ -1174,6 +1229,15 @@ function AppearanceSettings({ overlayId, overlayKey, settings = {}, onChange }) 
           <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="rowHeight" min={20} max={48} step={2} unit="px" value={settings.rowHeight} onChange={onChange} />
           <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="fontSize" min={9} max={18} step={1} unit="px" value={settings.fontSize} onChange={onChange} />
           <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="borderRadius" min={0} max={20} step={1} unit="px" value={settings.borderRadius} onChange={onChange} />
+        </>
+      )}
+
+      {isRadar && (
+        <>
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="range" min={20} max={150} step={5} unit="m" value={settings.range} onChange={onChange} />
+          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showClassColors" value={settings.showClassColors} onChange={onChange} />
+          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showDistance" value={settings.showDistance} onChange={onChange} />
+          <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="fontSize" min={9} max={20} step={1} unit="px" value={settings.fontSize} onChange={onChange} />
         </>
       )}
     </div>

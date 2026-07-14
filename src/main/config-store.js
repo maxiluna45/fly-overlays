@@ -39,6 +39,12 @@ const OVERLAY_DEFAULT_SETTINGS = {
     rowHeight: 26,           // alto de cada fila
     fontSize: 11,            // tamaño de fuente base
   },
+  radar: {
+    range: 60,               // alcance del radar en metros (adelante/atrás)
+    showClassColors: true,   // colorear puntos por clase (multiclase)
+    showDistance: true,      // mostrar la distancia (m) del más cercano
+    fontSize: 12,            // tamaño de fuente
+  },
   standings: {
     showLicense: true,       // badge de licencia
     showIRating: true,       // columna de iRating
@@ -92,6 +98,15 @@ const DEFAULTS = {
       height: 520,
       opacity: 0.9,
       settings: { ...OVERLAY_DEFAULT_SETTINGS.standings },
+    },
+    radar: {
+      enabled: false,
+      x: null,
+      y: null,
+      width: 240,
+      height: 300,
+      opacity: 0.85,
+      settings: { ...OVERLAY_DEFAULT_SETTINGS.radar },
     },
   },
   hotkeys: {

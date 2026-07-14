@@ -36,6 +36,13 @@ const REGISTRY = {
     minWidth: 360,
     minHeight: 240,
   },
+  radar: {
+    name: 'Radar',
+    description: 'Proximidad de autos cercanos (spotter)',
+    entry: 'radar.html',
+    minWidth: 160,
+    minHeight: 200,
+  },
 };
 
 class OverlayManager {

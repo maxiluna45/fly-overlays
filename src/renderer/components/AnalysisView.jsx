@@ -938,9 +938,10 @@ export function AnalysisView() {
     const trLap = alignSamples(lap.samples);
     let mapPath, mapPathRef = null;
     if (trLap) {
+      // Trazada REAL: posición GPS transformada por el ajuste afín, sin retoques.
       mapPath = lap.samples.map((s) => { const p = trLap(s); return p ? { x: p.x, y: p.y, sp: s.sp, hue: hueOf(s.sp) } : null; });
     } else {
-      // Sin datos de posición: ubicamos por LapDistPct sobre la línea base.
+      // Sin datos de posición: ubicamos por LapDistPct sobre la línea central.
       mapPath = lap.samples.map((s, i) => { const p = center(i / (n - 1)); return p ? { x: p.x, y: p.y, sp: s ? s.sp : null, hue: hueOf(s ? s.sp : null) } : null; });
     }
     const refS = best && best !== lap ? (best.samples || []) : [];
@@ -981,13 +982,22 @@ export function AnalysisView() {
           <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
             <Clock className="size-3.5" /> Sesiones
           </span>
-          <button
-            onClick={handleImport}
-            title="Importar telemetría de cualquier carpeta: .ibt de iRacing o .csv (ej. export de una vuelta de Garage 61)"
-            className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold bg-accent/60 hover:bg-accent transition-colors"
-          >
-            <Upload className="size-3" /> Importar
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => loadList()}
+              title="Refrescar: volver a leer las sesiones (grabadas + .ibt/.csv de la carpeta)"
+              className="flex items-center justify-center size-[26px] rounded-md bg-accent/60 hover:bg-accent transition-colors"
+            >
+              <RotateCcw className="size-3" />
+            </button>
+            <button
+              onClick={handleImport}
+              title="Importar telemetría de cualquier carpeta: .ibt de iRacing o .csv (ej. export de una vuelta de Garage 61)"
+              className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold bg-accent/60 hover:bg-accent transition-colors"
+            >
+              <Upload className="size-3" /> Importar
+            </button>
+          </div>
         </div>
         {/* Buscador */}
         <div className="px-2 pb-2">
