@@ -324,6 +324,12 @@ ipcMain.handle('trackmap:open', () => { shell.openPath(trackmapStore.dir()); ret
 ipcMain.handle('tags:get', () => (configStore ? configStore.getDriverTags() : []));
 ipcMain.handle('tags:set', (_e, tags) => (configStore ? configStore.setDriverTags(tags) : []));
 
+// Geometría real de circuitos (OpenStreetMap) para el mapa de análisis.
+ipcMain.handle('osm:track', async (_e, req) => {
+  try { const osm = require('./osm-track'); return await osm.getForBBox(req || {}); }
+  catch (err) { return { error: 'FETCH_FAILED', message: String(err && err.message || err) }; }
+});
+
 ipcMain.handle('recording:get', () => (configStore ? configStore.isRecordingEnabled() : true));
 ipcMain.handle('recording:set', (_e, v) => {
   if (!configStore) return true;

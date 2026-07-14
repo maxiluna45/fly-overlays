@@ -3,6 +3,11 @@ import { Trash2, Trophy, Clock, Activity, Gauge, Upload, FolderOpen, RotateCcw, 
 import { analyzeLap, bestLapOf, consistency, sectorTimes, sessionOptimal, cornerConsistency, resampleSamples } from "../lib/coach.js";
 import lovelyTracks from "../assets/lovely-tracks.json"; // curvas + sectores por pista (© Lovely Sim Racing, CC BY-NC-SA)
 
+// Ancho de asfalto (metros) para engrosar el eje de OSM y dibujar ambos bordes.
+// OSM no guarda el ancho de pista; ~14 m es un valor típico de circuito de GP y
+// contiene la línea de carrera (medido en Spa: p95 6 m del eje, máx 11.7 m).
+const ROAD_WIDTH_M = 14;
+
 function fmtLap(s) {
   if (s == null || !isFinite(s) || s <= 0) return "—";
   const m = Math.floor(s / 60);
@@ -290,6 +295,32 @@ function ToggleBtn({ active, onClick, color, children }) {
   );
 }
 
+// Selector de fuente del mapa: SVG del juego (irdashies) · trazado real de OSM ·
+// foto satelital (Esri). `avail` = qué fuentes hay para esta pista.
+function MapSourceSwitch({ source, setSource, avail }) {
+  const opts = [
+    { v: "svg", label: "SVG estilizado" },
+    { v: "osm", label: "Open Street Map" },
+    { v: "sat", label: "Satélite" },
+  ].filter((o) => avail[o.v]);
+  if (opts.length < 2) return null; // con una sola fuente no hay nada que elegir
+  const Btn = ({ v, children }) => (
+    <button
+      onClick={() => setSource(v)}
+      className="px-2 py-0.5 rounded-md text-[10px] font-semibold transition-colors"
+      style={{ background: source === v ? "rgba(125,211,252,0.18)" : "transparent", color: source === v ? "rgb(125,211,252)" : "rgba(255,255,255,0.45)" }}
+    >
+      {children}
+    </button>
+  );
+  return (
+    <div className="flex items-center gap-1 rounded-md border border-border/60 p-0.5" title="Fuente del mapa">
+      <span className="text-[9px] text-muted-foreground/60 uppercase tracking-wider pl-1 pr-0.5">Mapa</span>
+      {opts.map((o) => <Btn key={o.v} v={o.v}>{o.label}</Btn>)}
+    </div>
+  );
+}
+
 // Capa estática de trazadas (memoizada: no re-renderiza en cada hover).
 // mode 'speed' → color por velocidad; 'compare' → verde/rojo por dónde ganás/
 // perdés tiempo vs la referencia (derivada del delta).
@@ -334,7 +365,7 @@ const TrackLayer = React.memo(function TrackLayer({ segs, segsRef = [], refD, sh
 
 // Mapa interactivo: zoom (rueda / +−), pan (arrastrar), toggle de trazadas y
 // marcador del instante bajo el cursor (vinculado a los gráficos de telemetría).
-function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, outlineD, corners, fill = false, highlightRange = null }) {
+function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, outlineD, corners, fill = false, highlightRange = null, roadWidth = 0, outlineMode = null, tiles = null, attribution = null, scrim = false }) {
   const BV = baseView || { x: 0, y: 0, w: 1000, h: 380 };
   const W = BV.w, H = BV.h, X0 = BV.x, Y0 = BV.y;
   const [showLap, setShowLap] = useState(true);
@@ -346,7 +377,10 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
   const effMode = mode === "compare" && !hasRef ? "speed" : mode;
   const wrapRef = useRef(null);
   const dragRef = useRef(null);
-  const k = view.w / W; // factor de zoom → escalamos trazos para tamaño ~constante
+  // Factor de tamaño de trazos: proporcional al ancho VISIBLE (tamaño ~constante
+  // en pantalla) e INDEPENDIENTE de la escala de coordenadas (SVG estilizado ~1000
+  // unidades, o metros reales ~miles). Referencia fija 1200 en vez de W.
+  const k = view.w / 1200;
 
   // Resetear el encuadre cuando cambia la pista (baseView).
   useEffect(() => { setView(BV); }, [BV.x, BV.y, BV.w, BV.h]);
@@ -488,14 +522,34 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
           <button onClick={reset} className="px-2 py-0.5 rounded-md text-[10px] font-semibold hover:bg-white/10">Reset</button>
         </div>
       </div>
-      <div ref={wrapRef} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp} className={fill ? "flex-1 min-h-0" : ""} style={{ cursor: dragging ? "grabbing" : "grab" }}>
+      <div ref={wrapRef} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp} className={`relative ${fill ? "flex-1 min-h-0" : ""}`} style={{ cursor: dragging ? "grabbing" : "grab" }}>
         <svg viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`} preserveAspectRatio="xMidYMid meet" className={fill ? "w-full h-full block" : "w-full block"} style={fill ? undefined : { aspectRatio: `${W} / ${H}` }}>
-          {outlineD && (
+          {/* Foto satelital (tiles de Esri) como fondo, en el mismo espacio de la
+              trazada. Scrim oscuro encima para que las líneas de color resalten. */}
+          {tiles && tiles.map((t) => (
+            <image key={`${t.x}/${t.y}`} href={t.url} x={t.px} y={t.py} width={256.7} height={256.7} preserveAspectRatio="none" style={{ imageRendering: "auto" }} />
+          ))}
+          {scrim && <rect x={view.x} y={view.y} width={view.w} height={view.h} fill="rgba(0,0,0,0.28)" />}
+          {outlineD && outlineMode === "stroke" && (
+            // Trazado REAL de OSM (highway=raceway) como líneas finas: el eje real
+            // del circuito superpuesto a la línea GPS (misma proyección, SIN
+            // alinear). Sirve para ver cuánto coincide OSM con iRacing. Grosor
+            // constante en pantalla (k) para apreciar el detalle a cualquier zoom.
+            <path d={outlineD} fill="none" stroke="rgba(125,211,252,0.55)" strokeWidth={2.2 * k} strokeLinejoin="round" strokeLinecap="round" />
+          )}
+          {outlineD && outlineMode !== "stroke" && roadWidth > 0 && (
+            // Cinta de ASFALTO real (OSM): centerline engrosada al ancho real de
+            // pista (metros → escala con el zoom). Rim claro + asfalto oscuro
+            // inset → bordes definidos. La trazada de color va encima.
             <g>
-              {/* Bordes REALES de la pista (inside + outside de iRacing). Con dos
-                  bordes, el relleno evenodd pinta el asfalto ENTRE ambos → ancho
-                  real variable (no una cinta de ancho fijo). Con uno solo, sin
-                  relleno. Trazo fino en cada borde; grosor en unidades de pista. */}
+              <path d={outlineD} fill="none" stroke="rgba(255,255,255,0.32)" strokeWidth={roadWidth} strokeLinejoin="round" strokeLinecap="round" />
+              <path d={outlineD} fill="none" stroke="rgb(24,26,32)" strokeWidth={Math.max(0.5, roadWidth - 2.6)} strokeLinejoin="round" strokeLinecap="round" />
+            </g>
+          )}
+          {outlineD && outlineMode !== "stroke" && !(roadWidth > 0) && (
+            <g>
+              {/* Bordes de iRacing (fallback SVG estilizado): relleno evenodd entre
+                  inside/outside; trazo fino en cada borde. */}
               <path
                 d={outlineD}
                 fill={(outlineD.match(/M/gi) || []).length >= 2 ? "rgba(255,255,255,0.07)" : "none"}
@@ -540,6 +594,9 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
           {hRef && <circle cx={hRef.x} cy={hRef.y} r={7 * k} fill="none" stroke="white" strokeWidth={2.5 * k} />}
           {hLap && <circle cx={hLap.x} cy={hLap.y} r={7 * k} fill="rgb(52,211,153)" stroke="black" strokeWidth={1.5 * k} />}
         </svg>
+        {attribution && (
+          <div className="absolute bottom-1 right-1.5 text-[8px] text-white/70 bg-black/45 px-1.5 py-0.5 rounded pointer-events-none">{attribution}</div>
+        )}
       </div>
       <div className="text-[9px] text-muted-foreground/60 mt-1 shrink-0">
         {effMode === "compare"
@@ -575,6 +632,7 @@ export function AnalysisView() {
   const [showLapLine, setShowLapLine] = useState(true); // toggles de líneas en gráficos
   const [showRefLine, setShowRefLine] = useState(true);
   const [trackMap, setTrackMap] = useState(null); // { svg } | { error }
+  const [osmTrack, setOsmTrack] = useState(null); // geometría real de OSM { centerline } | { error }
   const [trackmapDir, setTrackmapDir] = useState(null);
   const [refSessionId, setRefSessionId] = useState(null); // ghost: otra sesión como referencia
   const [refSession, setRefSession] = useState(null);
@@ -815,6 +873,22 @@ export function AnalysisView() {
     window.fly.getTrackMap(session.trackKey || session.track).then((r) => { if (m) setTrackMap(r); });
     return () => { m = false; };
   }, [session]);
+
+  // Geometría REAL del circuito (OpenStreetMap), georreferenciada al GPS de la
+  // telemetría. bbox de la vuelta → Overpass (cacheado por pista en el main).
+  useEffect(() => {
+    setOsmTrack(null);
+    if (!session || !lap || !lap.samples || !window.fly?.getOsmTrack) return;
+    let laMin = Infinity, laMax = -Infinity, loMin = Infinity, loMax = -Infinity, c = 0;
+    for (const s of lap.samples) {
+      if (s && s.lat != null && s.lon != null) { laMin = Math.min(laMin, s.lat); laMax = Math.max(laMax, s.lat); loMin = Math.min(loMin, s.lon); loMax = Math.max(loMax, s.lon); c++; }
+    }
+    if (c < 30 || !isFinite(laMin)) return; // sin GPS suficiente
+    let m = true;
+    window.fly.getOsmTrack({ latMin: laMin, lonMin: loMin, latMax: laMax, lonMax: loMax, key: session.trackKey || session.track })
+      .then((r) => { if (m) setOsmTrack(r || null); });
+    return () => { m = false; };
+  }, [session, lap]);
 
   // URL de Garage 61 para la pista+auto de esta sesión (por IDs de iRacing).
   useEffect(() => {
@@ -1076,6 +1150,131 @@ export function AnalysisView() {
     const baseView = { x: cx - w / 2, y: cy - h / 2, w, h };
     return { mapPath, mapPathRef, outlineD: ribbonD, baseView };
   }, [trackMap, lap, best]);
+
+  // ── Mapa GPS-NATIVO (exacto): proyecta el Lat/Lon real de la telemetría a
+  // metros y usa la geometría REAL del circuito (OpenStreetMap, mismo GPS del
+  // mundo) como contorno. La línea y la pista comparten sistema de coordenadas
+  // → calzan sin ninguna transformación de alineado. Es la fuente preferida
+  // cuando hay GPS; si no, cae a svgMap (SVG de irdashies).
+  const gpsMap = useMemo(() => {
+    if (!lap || !lap.samples) return null;
+    const n = lap.samples.length;
+    let laMin = Infinity, laMax = -Infinity, loMin = Infinity, loMax = -Infinity, c = 0;
+    for (const s of lap.samples) if (s && s.lat != null && s.lon != null) { laMin = Math.min(laMin, s.lat); laMax = Math.max(laMax, s.lat); loMin = Math.min(loMin, s.lon); loMax = Math.max(loMax, s.lon); c++; }
+    if (c < n * 0.3 || !isFinite(laMin)) return null; // sin GPS suficiente → fallback
+    const lat0 = (laMin + laMax) / 2, lon0 = (loMin + loMax) / 2;
+    const R = 6378137, kx = Math.cos((lat0 * Math.PI) / 180);
+    // Equirectangular a metros; y hacia abajo en pantalla (norte arriba).
+    const proj = (la, lo) => ({ x: R * ((lo - lon0) * Math.PI / 180) * kx, y: -R * ((la - lat0) * Math.PI / 180) });
+
+    const sps = lap.samples.filter((s) => s && s.sp != null).map((s) => s.sp);
+    const spLo = sps.length ? Math.min(...sps) : 0, spHi = sps.length ? Math.max(...sps) : 1;
+    const hueOf = (sp) => (sp != null ? 240 - 240 * ((sp - spLo) / (spHi - spLo || 1)) : 210);
+
+    const mapPath = lap.samples.map((s) => (s && s.lat != null && s.lon != null ? { ...proj(s.lat, s.lon), sp: s.sp, hue: hueOf(s.sp), th: s.th, br: s.br } : null));
+    const refS = best && best !== lap ? (best.samples || []) : [];
+    let mapPathRef = null;
+    if (refS.length && refS.some((s) => s && s.lat != null && s.lon != null)) {
+      mapPathRef = refS.map((s) => (s && s.lat != null && s.lon != null ? { ...proj(s.lat, s.lon), th: s.th, br: s.br } : null));
+    }
+
+    // Contorno REAL de OSM (highway=raceway). El eje del circuito de OSM está en
+    // el MISMO espacio geográfico que el GPS del auto: calzan sin alinear (medido
+    // en Spa: línea a 2.7 m del eje en la mediana, p95 6 m — una línea de carrera
+    // normal sobre pista de ~14 m). Engrosamos el eje contiguo al ancho real de
+    // pista para dibujar AMBOS bordes. OSM no guarda el ancho, así que usamos un
+    // valor típico (~14 m): la FORMA y la POSICIÓN son reales, solo el ancho es
+    // estimado. La cinta va en metros reales → escala con el zoom.
+    // Dibujamos TODOS los tramos de OSM como cinta de asfalto (cada uno engrosado
+    // al ancho real). Usar todos —no solo el eje contiguo más largo— evita que se
+    // recorten secciones (p. ej. Snetterton perdía tramos con el stitch). Si sobra
+    // algún tramo alternativo, no molesta; lo importante es que esté completo.
+    let outlineD = "", roadWidth = 0, outlineMode = null;
+    let allPts = [];
+    const segsLL = osmTrack && Array.isArray(osmTrack.segments) && osmTrack.segments.length
+      ? osmTrack.segments
+      : (osmTrack && Array.isArray(osmTrack.centerline) && osmTrack.centerline.length > 20 ? [osmTrack.centerline] : null);
+    if (segsLL) {
+      const projSegs = segsLL.map((seg) => seg.map(([lo, la]) => proj(la, lo)));
+      outlineD = projSegs.map((seg) => smoothPath(seg)).join(" ");
+      roadWidth = ROAD_WIDTH_M; // ancho de asfalto estimado (m reales)
+      allPts = projSegs.flat();
+    }
+    if (!outlineD) return null; // sin geometría OSM no hay mapa GPS que ofrecer
+
+    // Encuadre: bbox de la línea + el contorno OSM, con margen y aspecto acotado.
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    const acc = (x, y) => { if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; };
+    for (const p of mapPath) if (p) acc(p.x, p.y);
+    for (const p of allPts) acc(p.x, p.y);
+    if (!isFinite(minX)) return null;
+    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+    let w = ((maxX - minX) || 1) * 1.08, h = ((maxY - minY) || 1) * 1.08;
+    const target = Math.max(1.3, Math.min(3.2, w / h));
+    if (w / h < target) w = h * target; else h = w / target;
+    return { mapPath, mapPathRef, outlineD, roadWidth, outlineMode, baseView: { x: cx - w / 2, y: cy - h / 2, w, h }, hasOsm: true };
+  }, [lap, best, osmTrack]);
+
+  // ── Mapa SATELITAL: tiles de Esri World Imagery (basemap satelital gratuito, sin
+  // API key) proyectados en Web Mercator. El GPS de la vuelta se proyecta al MISMO
+  // espacio de píxeles de los tiles → la trazada cae sobre el asfalto real de la
+  // foto satelital. Solo requiere GPS (no depende de OSM). Requiere conexión.
+  const satMap = useMemo(() => {
+    if (!lap || !lap.samples) return null;
+    const pts = lap.samples.filter((s) => s && s.lat != null && s.lon != null);
+    if (pts.length < lap.samples.length * 0.3) return null;
+    let laMin = Infinity, laMax = -Infinity, loMin = Infinity, loMax = -Infinity;
+    for (const s of pts) { laMin = Math.min(laMin, s.lat); laMax = Math.max(laMax, s.lat); loMin = Math.min(loMin, s.lon); loMax = Math.max(loMax, s.lon); }
+    const worldPx = (z) => 256 * 2 ** z;
+    const lonToX = (lon, z) => (lon + 180) / 360 * worldPx(z);
+    const latToY = (lat, z) => { const r = (lat * Math.PI) / 180; return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * worldPx(z); };
+    // Elegimos el zoom MÁS detallado cuyo mosaico no exceda ~130 tiles.
+    let Z = 13;
+    for (let z = 18; z >= 12; z--) {
+      const pw = lonToX(loMax, z) - lonToX(loMin, z), ph = latToY(laMin, z) - latToY(laMax, z);
+      const tX = Math.ceil(pw / 256) + 2, tY = Math.ceil(ph / 256) + 2;
+      if (tX * tY <= 130) { Z = z; break; }
+    }
+    // Origen LOCAL: los píxeles Web Mercator son enormes (~4.3 M). Con un viewBox
+    // desplazado a esos valores el renderer SVG pierde precisión y parte las
+    // curvas. Restamos la esquina del bbox → coordenadas chicas (~miles). Todo
+    // (trazada + tiles + view) se desplaza igual, así que la alineación se mantiene.
+    const ox = lonToX(loMin, Z), oy = latToY(laMax, Z);
+    const proj = (la, lo) => ({ x: lonToX(lo, Z) - ox, y: latToY(la, Z) - oy });
+    const sps = pts.map((s) => s.sp).filter((v) => v != null);
+    const spLo = sps.length ? Math.min(...sps) : 0, spHi = sps.length ? Math.max(...sps) : 1;
+    const hueOf = (sp) => (sp != null ? 240 - 240 * ((sp - spLo) / (spHi - spLo || 1)) : 210);
+    const mapPath = lap.samples.map((s) => (s && s.lat != null && s.lon != null ? { ...proj(s.lat, s.lon), sp: s.sp, hue: hueOf(s.sp), th: s.th, br: s.br } : null));
+    const refS = best && best !== lap ? (best.samples || []) : [];
+    let mapPathRef = null;
+    if (refS.length && refS.some((s) => s && s.lat != null && s.lon != null)) {
+      mapPathRef = refS.map((s) => (s && s.lat != null && s.lon != null ? { ...proj(s.lat, s.lon), th: s.th, br: s.br } : null));
+    }
+    const minX = 0, maxX = lonToX(loMax, Z) - ox, minY = 0, maxY = latToY(laMin, Z) - oy;
+    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+    let w = ((maxX - minX) || 1) * 1.12, h = ((maxY - minY) || 1) * 1.12;
+    const target = Math.max(1.3, Math.min(3.2, w / h));
+    if (w / h < target) w = h * target; else h = w / target;
+    const vx = cx - w / 2, vy = cy - h / 2;
+    // Índices de tile en coordenadas ABSOLUTAS (sumamos el origen de vuelta);
+    // posición de cada tile RELATIVA al origen local.
+    const tx0 = Math.floor((vx + ox) / 256), tx1 = Math.floor((vx + w + ox) / 256), ty0 = Math.floor((vy + oy) / 256), ty1 = Math.floor((vy + h + oy) / 256);
+    const nMax = 2 ** Z, tiles = [];
+    for (let tx = tx0; tx <= tx1; tx++) for (let ty = ty0; ty <= ty1; ty++) {
+      if (tx < 0 || ty < 0 || tx >= nMax || ty >= nMax) continue;
+      tiles.push({ x: tx, y: ty, px: tx * 256 - ox, py: ty * 256 - oy, url: `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${Z}/${ty}/${tx}` });
+    }
+    return { mapPath, mapPathRef, tiles, attribution: "Imágenes: Esri, Maxar, Earthstar Geographics", baseView: { x: vx, y: vy, w, h }, roadWidth: 0, outlineMode: null, scrim: true };
+  }, [lap, best]);
+
+  // Fuente de mapa elegible por el usuario: 'svg' = SVG del juego (irdashies) ·
+  // 'osm' = trazado real de OSM · 'sat' = foto satelital (Esri). Si la elegida no
+  // está disponible para esta pista, cae a la primera que sí lo esté.
+  const [mapSource, setMapSource] = useState("svg");
+  const availMaps = { svg: svgMap, osm: gpsMap, sat: satMap };
+  const fallbackOrder = { svg: ["svg", "osm", "sat"], osm: ["osm", "svg", "sat"], sat: ["sat", "osm", "svg"] };
+  const activeMap = (fallbackOrder[mapSource] || ["svg", "osm", "sat"]).map((k) => availMaps[k]).find(Boolean) || null;
+  const mapAvail = { svg: !!svgMap, osm: !!gpsMap, sat: !!satMap };
 
   return (
     <div className="flex-1 flex overflow-hidden">
@@ -1485,7 +1684,8 @@ export function AnalysisView() {
                 {/* Gráficos */}
                 {charts && (
                   <>
-                    <div className="flex items-center justify-end">
+                    <div className="flex items-center justify-between gap-2">
+                      <MapSourceSwitch source={mapSource} setSource={setMapSource} avail={mapAvail} />
                       <button
                         onClick={() => setDetailOpen(true)}
                         title="Abrir análisis detallado a pantalla completa (mapa + gráficos)"
@@ -1496,7 +1696,7 @@ export function AnalysisView() {
                     </div>
                     <AnalysisDetail
                       charts={charts}
-                      svgMap={svgMap}
+                      svgMap={activeMap}
                       corners={corners}
                       hoverIdx={hoverIdx}
                       setHoverIdx={setHoverIdx}
@@ -1539,6 +1739,7 @@ export function AnalysisView() {
                   <RotateCcw className="size-3.5" /> Vuelta completa
                 </button>
               )}
+              <MapSourceSwitch source={mapSource} setSource={setMapSource} avail={mapAvail} />
               <button
                 onClick={closeDetail}
                 title="Cerrar (Esc)"
@@ -1551,7 +1752,7 @@ export function AnalysisView() {
           <div className="flex-1 min-h-0 p-4">
             <AnalysisDetail
               charts={charts}
-              svgMap={svgMap}
+              svgMap={activeMap}
               corners={corners}
               hoverIdx={hoverIdx}
               setHoverIdx={setHoverIdx}
@@ -1586,6 +1787,11 @@ function AnalysisDetail({ charts, svgMap, corners, hoverIdx, setHoverIdx, showLa
       hoverIdx={hoverIdx}
       baseView={svgMap ? svgMap.baseView : undefined}
       outlineD={svgMap ? svgMap.outlineD : undefined}
+      roadWidth={svgMap ? (svgMap.roadWidth || 0) : 0}
+      outlineMode={svgMap ? (svgMap.outlineMode || null) : null}
+      tiles={svgMap ? svgMap.tiles : undefined}
+      attribution={svgMap ? svgMap.attribution : undefined}
+      scrim={svgMap ? svgMap.scrim : false}
       corners={corners}
       fill={split}
       highlightRange={range}

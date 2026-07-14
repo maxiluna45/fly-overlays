@@ -59,6 +59,7 @@ contextBridge.exposeInMainWorld('fly', {
   getRecordingEnabled: () => ipcRenderer.invoke('recording:get'),
   setRecordingEnabled: (v) => ipcRenderer.invoke('recording:set', v),
   // Garage 61
+  getOsmTrack: (req) => ipcRenderer.invoke('osm:track', req),
   getGarage61Url: (trackIdIr, carIdIr) => ipcRenderer.invoke('garage61:url', trackIdIr, carIdIr),
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
   // Mapas de pista (SVG manual)
