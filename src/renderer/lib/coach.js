@@ -15,6 +15,17 @@ function at(lap, i) {
   return lap && lap.samples && lap.samples[i] ? lap.samples[i] : null;
 }
 
+// Reescala un arreglo de muestras a `targetLen` por posición normalizada.
+// Sirve para comparar dos vueltas con distinta cantidad de buckets (p. ej. una
+// grabación vieja de 400 vs una nueva de 800): las alinea por lugar de pista.
+export function resampleSamples(samples, targetLen) {
+  if (!Array.isArray(samples) || samples.length === 0 || samples.length === targetLen || targetLen < 2) return samples;
+  const srcN = samples.length;
+  const out = new Array(targetLen);
+  for (let i = 0; i < targetLen; i++) out[i] = samples[Math.round((i / (targetLen - 1)) * (srcN - 1))] || null;
+  return out;
+}
+
 // Traza de delta acumulado: delta[i] = t(lap) - t(best) en cada bucket.
 // Se hace "carry-forward" del último delta conocido donde falten muestras,
 // para que la línea sea continua.
@@ -224,11 +235,15 @@ function segmentDetail(best, lap, seg, n, trackLength, deltaAt) {
 
 // Analiza una vuelta contra la referencia, anclando a curvas reales.
 // opts: { corners: [{pct,label}], trackLength: metros }.
-export function analyzeLap(best, lap, opts = {}) {
-  if (!best || !lap || !best.samples || !lap.samples) {
+export function analyzeLap(bestIn, lap, opts = {}) {
+  if (!bestIn || !lap || !bestIn.samples || !lap.samples) {
     return { deltaTotal: null, deltaTrace: [], tips: [], insights: [], headline: null };
   }
-  const n = Math.min(best.samples.length, lap.samples.length);
+  // Alineamos la referencia a la longitud de la vuelta (por si tienen distinta
+  // cantidad de muestras) para que la comparación bucket-a-bucket sea correcta.
+  const rs = resampleSamples(bestIn.samples, lap.samples.length);
+  const best = rs === bestIn.samples ? bestIn : { ...bestIn, samples: rs };
+  const n = lap.samples.length;
   const trace = buildDeltaTrace(best, lap);
   const deltaTotal = (lap.lapTime && best.lapTime) ? lap.lapTime - best.lapTime : (trace.length ? trace[trace.length - 1].delta : null);
   const trackLength = opts.trackLength || 0;

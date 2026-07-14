@@ -10,7 +10,7 @@ const path = require('path');
 // Throttle, Brake, SteeringWheelAngle, Gear, RPM, LatAccel, LongAccel, Yaw,
 // Lat, Lon, y una columna de tiempo (SessionTime / LapCurrentLapTime / Time).
 
-const BUCKETS = 400; // resolución de la trazada por distancia (mejor detalle en curvas)
+const BUCKETS = 800; // resolución de la trazada por distancia (mejor detalle en curvas)
 
 function csvToLap(csvText, meta = {}) {
   const lines = csvText.split(/\r?\n/).filter((l) => l.length > 0);

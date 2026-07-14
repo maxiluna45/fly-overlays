@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
-import { Trash2, Trophy, Clock, Activity, Gauge, Upload, FolderOpen, RotateCcw, Pencil, Check, X, Search, ExternalLink } from "lucide-react";
-import { analyzeLap, bestLapOf, consistency, sectorTimes, sessionOptimal, cornerConsistency } from "../lib/coach.js";
+import { Trash2, Trophy, Clock, Activity, Gauge, Upload, FolderOpen, RotateCcw, Pencil, Check, X, Search, ExternalLink, Maximize2, Crop } from "lucide-react";
+import { analyzeLap, bestLapOf, consistency, sectorTimes, sessionOptimal, cornerConsistency, resampleSamples } from "../lib/coach.js";
 import lovelyTracks from "../assets/lovely-tracks.json"; // curvas + sectores por pista (© Lovely Sim Racing, CC BY-NC-SA)
 
 function fmtLap(s) {
@@ -46,14 +46,19 @@ function stTag(sessionType) {
 }
 
 // Construye un path SVG desde una serie (con nulls = huecos).
-function seriesPath(vals, n, yMin, yMax, W, H) {
+function seriesPath(vals, n, yMin, yMax, W, H, range) {
   const span = yMax - yMin || 1;
+  // range = [aFrac, bFrac] (0..1): dibuja solo esa porción, expandida a todo el
+  // ancho (zoom en X). Sin range → toda la vuelta (comportamiento normal).
+  const aF = range && range.length === 2 ? range[0] : 0;
+  const bF = range && range.length === 2 ? range[1] : 1;
+  const aI = aF * (n - 1), bI = bF * (n - 1), denom = (bI - aI) || 1;
   let d = "";
   let pen = false;
   for (let i = 0; i < n; i++) {
     const v = vals[i];
-    if (v == null || !isFinite(v)) { pen = false; continue; }
-    const x = (i / (n - 1)) * W;
+    if (i < aI - 1 || i > bI + 1 || v == null || !isFinite(v)) { pen = false; continue; }
+    const x = ((i - aI) / denom) * W;
     const y = H - ((v - yMin) / span) * H;
     d += `${pen ? " L" : " M"}${x.toFixed(1)},${y.toFixed(1)}`;
     pen = true;
@@ -199,32 +204,58 @@ function applyAffine(T, x, y) {
   return { x: T.a * sx + T.b * sy + T.mu, y: T.c * sx + T.d * sy + T.mv };
 }
 
-function Chart({ title, height = 110, n, hoverIdx, onHover, corners, children, tooltip = null, hasRef = false }) {
+function Chart({ title, height = 110, n, hoverIdx, onHover, corners, children, tooltip = null, hasRef = false, range = null, selecting = false, onSelectRange }) {
+  const aF = range && range.length === 2 ? range[0] : 0;
+  const bF = range && range.length === 2 ? range[1] : 1;
+  const spanF = (bF - aF) || 1;
   const interactive = n > 1 && typeof onHover === "function";
-  const hx = hoverIdx != null && n > 1 ? (hoverIdx / (n - 1)) * 1000 : null;
-  const frac = hoverIdx != null && n > 1 ? hoverIdx / (n - 1) : 0;
-  const handleMove = (e) => {
-    if (!interactive) return;
+  const toView = (frac) => (frac - aF) / spanF; // frac real (0..1) → frac de la vista
+  const hViewFrac = hoverIdx != null && n > 1 ? toView(hoverIdx / (n - 1)) : null;
+  const hx = hViewFrac != null && hViewFrac >= -0.002 && hViewFrac <= 1.002 ? hViewFrac * 1000 : null;
+
+  const dragRef = React.useRef(null);
+  const [sel, setSel] = React.useState(null); // {a,b} en fracs de la vista
+
+  const viewFrac = (e) => {
     const r = e.currentTarget.getBoundingClientRect();
-    const f = (e.clientX - r.left) / r.width;
-    onHover(Math.max(0, Math.min(n - 1, Math.round(f * (n - 1)))));
+    return Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
   };
-  const showTip = tooltip && tooltip.length > 0 && hoverIdx != null;
+  const handleDown = (e) => { if (selecting) { const f = viewFrac(e); dragRef.current = f; setSel({ a: f, b: f }); } };
+  const handleMove = (e) => {
+    if (selecting) { if (dragRef.current != null) setSel({ a: dragRef.current, b: viewFrac(e) }); return; }
+    if (!interactive) return;
+    const actual = aF + viewFrac(e) * spanF;
+    onHover(Math.max(0, Math.min(n - 1, Math.round(actual * (n - 1)))));
+  };
+  const finishSel = () => {
+    if (selecting && dragRef.current != null && sel) {
+      const lo = Math.min(sel.a, sel.b), hi = Math.max(sel.a, sel.b);
+      if (hi - lo > 0.015 && typeof onSelectRange === "function") onSelectRange([aF + lo * spanF, aF + hi * spanF]);
+    }
+    dragRef.current = null; setSel(null);
+  };
+  const handleLeave = () => { if (selecting) finishSel(); else if (interactive) onHover(null); };
+
+  const showTip = !selecting && tooltip && tooltip.length > 0 && hx != null;
+  const tipFrac = hViewFrac != null ? Math.max(0, Math.min(1, hViewFrac)) : 0;
   return (
     <div className="rounded-lg border border-border bg-card/40 p-3">
       <div className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground mb-2">{title}</div>
-      <div className="relative" onMouseMove={handleMove} onMouseLeave={() => interactive && onHover(null)}>
+      <div className="relative" onMouseDown={handleDown} onMouseMove={handleMove} onMouseUp={finishSel} onMouseLeave={handleLeave} style={{ cursor: selecting ? "crosshair" : "default" }}>
         <svg viewBox={`0 0 1000 ${height}`} preserveAspectRatio="none" className="w-full" style={{ height }}>
-          {corners && corners.map((c, i) => (
-            <line key={`c-${i}`} x1={c.pct * 1000} y1="0" x2={c.pct * 1000} y2={height} stroke="rgba(255,255,255,0.08)" strokeWidth="1" />
-          ))}
+          {corners && corners.map((c, i) => {
+            const cf = toView(c.pct);
+            if (cf < 0 || cf > 1) return null;
+            return <line key={`c-${i}`} x1={cf * 1000} y1="0" x2={cf * 1000} y2={height} stroke="rgba(255,255,255,0.08)" strokeWidth="1" />;
+          })}
           {children}
           {hx != null && <line x1={hx} y1="0" x2={hx} y2={height} stroke="rgba(255,255,255,0.55)" strokeWidth="1.5" />}
+          {sel && <rect x={Math.min(sel.a, sel.b) * 1000} y="0" width={Math.abs(sel.b - sel.a) * 1000} height={height} fill="rgba(125,211,252,0.18)" stroke="rgba(125,211,252,0.55)" strokeWidth="1" />}
         </svg>
         {showTip && (
           <div
             className="absolute z-50 pointer-events-none rounded-md border border-border bg-[rgba(12,14,20,0.96)] px-2 py-1.5 shadow-lg text-[10px] space-y-0.5"
-            style={{ top: 4, left: `${frac * 100}%`, transform: frac > 0.55 ? "translateX(calc(-100% - 8px))" : "translateX(8px)" }}
+            style={{ top: 4, left: `${tipFrac * 100}%`, transform: tipFrac > 0.55 ? "translateX(calc(-100% - 8px))" : "translateX(8px)" }}
           >
             {hasRef && (
               <div className="flex items-center justify-end gap-2 text-[8px] uppercase tracking-widest text-muted-foreground/60 pb-0.5 mb-0.5 border-b border-border/60">
@@ -262,7 +293,7 @@ function ToggleBtn({ active, onClick, color, children }) {
 // Capa estática de trazadas (memoizada: no re-renderiza en cada hover).
 // mode 'speed' → color por velocidad; 'compare' → verde/rojo por dónde ganás/
 // perdés tiempo vs la referencia (derivada del delta).
-const TrackLayer = React.memo(function TrackLayer({ segs, refD, showRef, k, mode, maxSlope }) {
+const TrackLayer = React.memo(function TrackLayer({ segs, segsRef = [], refD, showRef, showLap = true, k, mode, maxSlope }) {
   // Gradiente continuo: verde (ganás más) → gris (neutro) → rojo (perdés más).
   const cmpColor = (dv) => {
     const t = Math.max(-1, Math.min(1, dv / (maxSlope || 1e-9)));
@@ -272,21 +303,30 @@ const TrackLayer = React.memo(function TrackLayer({ segs, refD, showRef, k, mode
     const u = Math.abs(t);
     return `rgb(${lerp(grey[0], to[0], u)},${lerp(grey[1], to[1], u)},${lerp(grey[2], to[2], u)})`;
   };
+  // Degradado por intensidad: gris (0%) → color (100%). Separado por canal, así
+  // se ve el % real y el trail-braking (freno y gas a la vez, cada uno en su vista).
+  const BASE = [70, 78, 90];
+  const lerp3 = (a, b, u) => {
+    const c = Math.max(0, Math.min(1, u));
+    return `rgb(${Math.round(a[0] + (b[0] - a[0]) * c)},${Math.round(a[1] + (b[1] - a[1]) * c)},${Math.round(a[2] + (b[2] - a[2]) * c)})`;
+  };
+  const throttleColor = (th) => lerp3(BASE, [46, 204, 113], th ?? 0);
+  const brakeColor = (br) => lerp3(BASE, [239, 68, 68], br ?? 0);
+  const channelColor = mode === "throttle" ? (s) => throttleColor(s.th) : mode === "brake" ? (s) => brakeColor(s.br) : null;
+  const d = (s) => `M${s.x1.toFixed(1)},${s.y1.toFixed(1)}C${s.c1x.toFixed(1)},${s.c1y.toFixed(1)} ${s.c2x.toFixed(1)},${s.c2y.toFixed(1)} ${s.x2.toFixed(1)},${s.y2.toFixed(1)}`;
+  const lapColor = (s) => (mode === "compare" ? cmpColor(s.dv) : channelColor ? channelColor(s) : `hsl(${Math.round(s.hue)},85%,55%)`);
   return (
     <g>
-      {showRef && refD && (
-        <path d={refD} fill="none" stroke="rgba(255,255,255,0.8)" strokeWidth={3} strokeDasharray="7 5" strokeLinecap="round" />
-      )}
-      {segs.map((s, i) => (
-        <path
-          key={i}
-          d={`M${s.x1.toFixed(1)},${s.y1.toFixed(1)}C${s.c1x.toFixed(1)},${s.c1y.toFixed(1)} ${s.c2x.toFixed(1)},${s.c2y.toFixed(1)} ${s.x2.toFixed(1)},${s.y2.toFixed(1)}`}
-          fill="none"
-          stroke={mode === "compare" ? cmpColor(s.dv) : `hsl(${Math.round(s.hue)},85%,55%)`}
-          strokeWidth={4.5}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
+      {/* Referencia: en Acelerador/Freno se colorea por su % (punteada); en los
+          otros modos, punteada blanca neutra. */}
+      {showRef && (channelColor
+        ? segsRef.map((s, i) => (
+            <path key={`r${i}`} d={d(s)} fill="none" stroke={channelColor(s)} strokeWidth={3 * k} strokeDasharray={`${8 * k} ${5 * k}`} strokeLinecap="round" strokeLinejoin="round" />
+          ))
+        : refD ? <path d={refD} fill="none" stroke="rgba(255,255,255,0.8)" strokeWidth={3 * k} strokeDasharray={`${7 * k} ${5 * k}`} strokeLinecap="round" /> : null)}
+      {/* Tu vuelta */}
+      {showLap && segs.map((s, i) => (
+        <path key={i} d={d(s)} fill="none" stroke={lapColor(s)} strokeWidth={4.5 * k} strokeLinecap="round" strokeLinejoin="round" />
       ))}
     </g>
   );
@@ -294,15 +334,16 @@ const TrackLayer = React.memo(function TrackLayer({ segs, refD, showRef, k, mode
 
 // Mapa interactivo: zoom (rueda / +−), pan (arrastrar), toggle de trazadas y
 // marcador del instante bajo el cursor (vinculado a los gráficos de telemetría).
-function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, outlineD, corners }) {
+function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, outlineD, corners, fill = false, highlightRange = null }) {
   const BV = baseView || { x: 0, y: 0, w: 1000, h: 380 };
   const W = BV.w, H = BV.h, X0 = BV.x, Y0 = BV.y;
   const [showLap, setShowLap] = useState(true);
   const [showRef, setShowRef] = useState(true);
-  const [mode, setMode] = useState("speed"); // 'speed' | 'compare'
+  const [mode, setMode] = useState("speed"); // 'speed' | 'compare' | 'inputs'
   const [view, setView] = useState(BV);
   const [dragging, setDragging] = useState(false);
-  const effMode = hasRef ? mode : "speed"; // comparación necesita referencia
+  // 'compare' necesita referencia; 'speed' e 'inputs' funcionan siempre.
+  const effMode = mode === "compare" && !hasRef ? "speed" : mode;
   const wrapRef = useRef(null);
   const dragRef = useRef(null);
   const k = view.w / W; // factor de zoom → escalamos trazos para tamaño ~constante
@@ -372,10 +413,28 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
       const p0 = (pts[k - 2] || prv).p, p3 = (pts[k + 1] || cur).p;
       const c1x = a.x + (b.x - p0.x) / 6, c1y = a.y + (b.y - p0.y) / 6;
       const c2x = b.x - (p3.x - a.x) / 6, c2y = b.y - (p3.y - a.y) / 6;
-      out.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, c1x, c1y, c2x, c2y, hue: b.hue, dv });
+      out.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, c1x, c1y, c2x, c2y, hue: b.hue, dv, th: b.th, br: b.br });
     }
     return out;
   }, [mapPath, showLap, mapDelta]);
+
+  // Segmentos de la REFERENCIA (para colorearla por inputs en el modo Freno/Gas).
+  const segsRef = useMemo(() => {
+    const out = [];
+    if (!mapPathRef) return out;
+    const pts = [];
+    for (let i = 0; i < mapPathRef.length; i++) if (mapPathRef[i]) pts.push({ i, p: mapPathRef[i] });
+    for (let k = 1; k < pts.length; k++) {
+      const prv = pts[k - 1], cur = pts[k];
+      if (cur.i - prv.i > 6) continue;
+      const a = prv.p, b = cur.p;
+      const p0 = (pts[k - 2] || prv).p, p3 = (pts[k + 1] || cur).p;
+      const c1x = a.x + (b.x - p0.x) / 6, c1y = a.y + (b.y - p0.y) / 6;
+      const c2x = b.x - (p3.x - a.x) / 6, c2y = b.y - (p3.y - a.y) / 6;
+      out.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, c1x, c1y, c2x, c2y, th: b.th, br: b.br });
+    }
+    return out;
+  }, [mapPathRef]);
   // Escala robusta para el color de comparación: percentil ~85 de |dv| en vez
   // del máximo. Así un pico aislado (típico con una referencia mucho más rápida,
   // o con tiempos reconstruidos de un CSV) no aplana todo el mapa a gris.
@@ -389,28 +448,37 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
     if (!(showRef && mapPathRef)) return "";
     return smoothPath(mapPathRef);
   }, [mapPathRef, showRef]);
+  // Banda de la porción seleccionada en los gráficos (se pinta la ZONA de pista,
+  // no la trazada, para no molestar el análisis). Sigue los puntos de la vuelta
+  // en el rango [aFrac,bFrac] con un trazo ancho translúcido.
+  const highlightD = useMemo(() => {
+    if (!highlightRange || !mapPath || highlightRange.length !== 2) return "";
+    const len = mapPath.length;
+    const aI = Math.max(0, Math.floor(highlightRange[0] * (len - 1)));
+    const bI = Math.min(len - 1, Math.ceil(highlightRange[1] * (len - 1)));
+    if (bI - aI < 1) return "";
+    return smoothPath(mapPath.slice(aI, bI + 1));
+  }, [highlightRange, mapPath]);
   const hLap = showLap && hoverIdx != null && mapPath && mapPath[hoverIdx];
   const hRef = showRef && hoverIdx != null && mapPathRef && mapPathRef[hoverIdx];
 
   return (
-    <div className="rounded-lg border border-border bg-card/40 p-3">
-      <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+    <div className={`rounded-lg border border-border bg-card/40 p-3 ${fill ? "h-full flex flex-col" : ""}`}>
+      <div className="flex items-center justify-between mb-2 gap-2 flex-wrap shrink-0">
         <div className="flex items-center gap-2">
           <span className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Mapa</span>
-          {hasRef && (
-            <div className="flex border border-border rounded-md overflow-hidden">
-              {[["speed", "Velocidad"], ["compare", "Comparación"]].map(([v, l]) => (
-                <button
-                  key={v}
-                  onClick={() => setMode(v)}
-                  className="px-2 py-0.5 text-[10px] font-bold transition-colors hover:bg-white/5"
-                  style={{ background: effMode === v ? "rgba(125,211,252,0.15)" : "transparent", color: effMode === v ? "rgb(125,211,252)" : "rgba(255,255,255,0.5)" }}
-                >
-                  {l}
-                </button>
-              ))}
-            </div>
-          )}
+          <div className="flex border border-border rounded-md overflow-hidden">
+            {[["speed", "Velocidad"], ...(hasRef ? [["compare", "Comparación"]] : []), ["throttle", "Acelerador"], ["brake", "Freno"]].map(([v, l]) => (
+              <button
+                key={v}
+                onClick={() => setMode(v)}
+                className="px-2 py-0.5 text-[10px] font-bold transition-colors hover:bg-white/5"
+                style={{ background: effMode === v ? "rgba(125,211,252,0.15)" : "transparent", color: effMode === v ? "rgb(125,211,252)" : "rgba(255,255,255,0.5)" }}
+              >
+                {l}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="flex items-center gap-1">
           <ToggleBtn active={showLap} onClick={() => setShowLap((v) => !v)} color="rgb(52,211,153)">Tu vuelta</ToggleBtn>
@@ -420,8 +488,8 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
           <button onClick={reset} className="px-2 py-0.5 rounded-md text-[10px] font-semibold hover:bg-white/10">Reset</button>
         </div>
       </div>
-      <div ref={wrapRef} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp} style={{ cursor: dragging ? "grabbing" : "grab" }}>
-        <svg viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`} preserveAspectRatio="xMidYMid meet" className="w-full block" style={{ aspectRatio: `${W} / ${H}` }}>
+      <div ref={wrapRef} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp} className={fill ? "flex-1 min-h-0" : ""} style={{ cursor: dragging ? "grabbing" : "grab" }}>
+        <svg viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`} preserveAspectRatio="xMidYMid meet" className={fill ? "w-full h-full block" : "w-full block"} style={fill ? undefined : { aspectRatio: `${W} / ${H}` }}>
           {outlineD && (
             <g>
               {/* Bordes REALES de la pista (inside + outside de iRacing). Con dos
@@ -439,7 +507,12 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
               />
             </g>
           )}
-          <TrackLayer segs={segs} refD={refD} showRef={showRef} k={k} mode={effMode} maxSlope={maxSlope} />
+          {/* Zona de pista resaltada (selección de los gráficos): banda ancha
+              translúcida debajo de la trazada, para no taparla. */}
+          {highlightD && (
+            <path d={highlightD} fill="none" stroke="rgba(250,204,21,0.28)" strokeWidth={20 * k} strokeLinecap="round" strokeLinejoin="round" />
+          )}
+          <TrackLayer segs={segs} segsRef={segsRef} refD={refD} showRef={showRef} showLap={showLap} k={k} mode={effMode} maxSlope={maxSlope} />
           {corners && mapPath && corners.map((c, i) => {
             const b = Math.round(c.pct * (mapPath.length - 1));
             const p = mapPath[b];
@@ -468,11 +541,15 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
           {hLap && <circle cx={hLap.x} cy={hLap.y} r={7 * k} fill="rgb(52,211,153)" stroke="black" strokeWidth={1.5 * k} />}
         </svg>
       </div>
-      <div className="text-[9px] text-muted-foreground/60 mt-1">
+      <div className="text-[9px] text-muted-foreground/60 mt-1 shrink-0">
         {effMode === "compare"
           ? "Verde = ganás tiempo · rojo = perdés (vs referencia)"
+          : effMode === "throttle"
+          ? "Acelerador: gris (0%) → verde (100%)"
+          : effMode === "brake"
+          ? "Freno: gris (0%) → rojo (100%)"
           : "Color = velocidad (azul → rojo)"}
-        {mapPathRef ? " · punteada = referencia" : ""} · rueda o +/− zoom · arrastrá para mover · hover en los gráficos = punto en el mapa
+        {mapPathRef ? " · punteada = referencia" : ""} · usá los toggles Tu vuelta / Referencia para aislar una · rueda o +/− zoom
       </div>
     </div>
   );
@@ -492,6 +569,9 @@ export function AnalysisView() {
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleInput, setTitleInput] = useState("");
   const [hoverIdx, setHoverIdx] = useState(null); // bucket bajo el cursor (charts↔mapa)
+  const [detailOpen, setDetailOpen] = useState(false); // vista de análisis detallado (pantalla completa)
+  const [zoomRange, setZoomRange] = useState(null); // [aFrac,bFrac] porción de la vuelta ampliada en los gráficos
+  const [rangeTool, setRangeTool] = useState(false); // herramienta de selección de rango activa
   const [showLapLine, setShowLapLine] = useState(true); // toggles de líneas en gráficos
   const [showRefLine, setShowRefLine] = useState(true);
   const [trackMap, setTrackMap] = useState(null); // { svg } | { error }
@@ -526,6 +606,18 @@ export function AnalysisView() {
     const unsub = window.fly.onRecordingsChange(() => loadList());
     return unsub;
   }, [loadList]);
+
+  const closeDetail = () => { setDetailOpen(false); setZoomRange(null); setRangeTool(false); };
+  // Cerrar el análisis detallado con Escape (o quitar el zoom si hay uno).
+  useEffect(() => {
+    if (!detailOpen) return;
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      if (zoomRange) { setZoomRange(null); setRangeTool(false); } else { closeDetail(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [detailOpen, zoomRange]);
 
   useEffect(() => {
     if (!selectedId) { setSession(null); return; }
@@ -817,7 +909,9 @@ export function AnalysisView() {
   const charts = useMemo(() => {
     if (!lap || !lap.samples) return null;
     const n = lap.samples.length;
-    const spBest = best?.samples || [];
+    // Reescalamos la referencia a la longitud de la vuelta (pueden tener distinta
+    // cantidad de buckets) para que se superpongan alineadas por lugar de pista.
+    const spBest = resampleSamples(best?.samples || [], n);
     const speedLap = lap.samples.map((s) => (s && s.sp != null ? s.sp * 3.6 : null));
     const speedBest = spBest.map((s) => (s && s.sp != null ? s.sp * 3.6 : null));
     const throttle = lap.samples.map((s) => (s ? s.th : null));
@@ -827,7 +921,7 @@ export function AnalysisView() {
     const delta = analysis ? analysis.deltaTrace.map((p) => p.delta) : [];
 
     // Series de la referencia (ghost) para superponer en cada gráfico.
-    const refS = best && best !== lap ? (best.samples || []) : [];
+    const refS = best && best !== lap ? spBest : [];
     const hasRef = refS.length > 0;
     const throttleRef = refS.map((s) => (s ? s.th : null));
     const brakeRef = refS.map((s) => (s ? s.br : null));
@@ -847,8 +941,8 @@ export function AnalysisView() {
     // Mapa: puntos lat/lon alineados POR BUCKET (length n, null donde falta),
     // con bounding box COMPARTIDO entre vuelta y referencia, para que ambas
     // trazadas queden alineadas y podamos marcar el instante del hover.
-    const rawLap = lap.samples.map((s) => (s && s.lat != null && s.lon != null ? { lat: s.lat, lon: s.lon, sp: s.sp } : null));
-    const rawRef = (best && best !== lap ? (best.samples || []) : []).map((s) => (s && s.lat != null && s.lon != null ? { lat: s.lat, lon: s.lon } : null));
+    const rawLap = lap.samples.map((s) => (s && s.lat != null && s.lon != null ? { lat: s.lat, lon: s.lon, sp: s.sp, th: s.th, br: s.br } : null));
+    const rawRef = (best && best !== lap ? (best.samples || []) : []).map((s) => (s && s.lat != null && s.lon != null ? { lat: s.lat, lon: s.lon, th: s.th, br: s.br } : null));
     const nnLap = rawLap.filter(Boolean);
     const nnRef = rawRef.filter(Boolean);
     let mapPath = null, mapPathRef = null;
@@ -866,8 +960,8 @@ export function AnalysisView() {
       const sps = nnLap.map((p) => p.sp).filter((v) => v != null);
       const spLo = sps.length ? Math.min(...sps) : 0;
       const spHi = sps.length ? Math.max(...sps) : 1;
-      mapPath = rawLap.map((p) => (p ? { ...tx(p), sp: p.sp, hue: 240 - 240 * ((p.sp - spLo) / (spHi - spLo || 1)) } : null));
-      mapPathRef = nnRef.length > 20 ? rawRef.map((p) => (p ? tx(p) : null)) : null;
+      mapPath = rawLap.map((p) => (p ? { ...tx(p), sp: p.sp, hue: 240 - 240 * ((p.sp - spLo) / (spHi - spLo || 1)), th: p.th, br: p.br } : null));
+      mapPathRef = nnRef.length > 20 ? rawRef.map((p) => (p ? { ...tx(p), th: p.th, br: p.br } : null)) : null;
     }
 
     // G-G: puntos (gLon lateral X, gLat vertical Y) si hay G grabadas.
@@ -948,15 +1042,15 @@ export function AnalysisView() {
     let mapPath, mapPathRef = null;
     if (trLap) {
       // Trazada REAL: posición GPS transformada por el ajuste afín, sin retoques.
-      mapPath = lap.samples.map((s) => { const p = trLap(s); return p ? { x: p.x, y: p.y, sp: s.sp, hue: hueOf(s.sp) } : null; });
+      mapPath = lap.samples.map((s) => { const p = trLap(s); return p ? { x: p.x, y: p.y, sp: s.sp, hue: hueOf(s.sp), th: s.th, br: s.br } : null; });
     } else {
       // Sin datos de posición: ubicamos por LapDistPct sobre la línea central.
-      mapPath = lap.samples.map((s, i) => { const p = center(i / (n - 1)); return p ? { x: p.x, y: p.y, sp: s ? s.sp : null, hue: hueOf(s ? s.sp : null) } : null; });
+      mapPath = lap.samples.map((s, i) => { const p = center(i / (n - 1)); return p ? { x: p.x, y: p.y, sp: s ? s.sp : null, hue: hueOf(s ? s.sp : null), th: s ? s.th : null, br: s ? s.br : null } : null; });
     }
     const refS = best && best !== lap ? (best.samples || []) : [];
     if (refS.length) {
       const trRef = alignSamples(refS);
-      if (trRef) mapPathRef = refS.map((s) => trRef(s));
+      if (trRef) mapPathRef = refS.map((s) => { const p = trRef(s); return p ? { x: p.x, y: p.y, th: s ? s.th : null, br: s ? s.br : null } : null; });
     }
 
     // Contorno = los DOS bordes reales del SVG (inside + outside), que están en
@@ -1391,90 +1485,26 @@ export function AnalysisView() {
                 {/* Gráficos */}
                 {charts && (
                   <>
-                    {/* Mapa full width con trazadas, zoom/pan y marcador de hover */}
-                    {(svgMap || charts.hasMap) && (
-                      <MapPanel
-                        mapPath={svgMap ? svgMap.mapPath : charts.mapPath}
-                        mapPathRef={svgMap ? svgMap.mapPathRef : charts.mapPathRef}
-                        mapDelta={charts.delta}
-                        hasRef={charts.hasRef}
-                        hoverIdx={hoverIdx}
-                        baseView={svgMap ? svgMap.baseView : undefined}
-                        outlineD={svgMap ? svgMap.outlineD : undefined}
-                        corners={corners}
-                      />
-                    )}
-
-                    {/* Toggle de líneas (tu vuelta / referencia) para todos los gráficos */}
-                    {charts.hasRef && (
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[10px] text-muted-foreground uppercase tracking-widest">Líneas:</span>
-                        <ToggleBtn active={showLapLine} onClick={() => setShowLapLine((v) => !v)} color="rgb(52,211,153)">Tu vuelta</ToggleBtn>
-                        <ToggleBtn active={showRefLine} onClick={() => setShowRefLine((v) => !v)} color="rgb(168,85,247)">Referencia</ToggleBtn>
-                      </div>
-                    )}
-
-                    <Chart title="Delta vs mejor vuelta (s)" n={charts.n} hoverIdx={hoverIdx} onHover={setHoverIdx} corners={corners}
-                      tooltip={[{ label: "Delta (s)", value: tSec(atv(charts.delta, hoverIdx)), color: "rgb(125,211,252)" }]}>
-                      <line x1="0" y1="55" x2="1000" y2="55" stroke="rgba(255,255,255,0.15)" strokeWidth="1" strokeDasharray="4 4" />
-                      <path d={seriesPath(charts.delta, charts.n, -charts.dMax, charts.dMax, 1000, 110)} fill="none" stroke="rgb(125,211,252)" strokeWidth="2" />
-                    </Chart>
-
-                    <Chart title="Velocidad (km/h) — vuelta vs mejor" n={charts.n} hoverIdx={hoverIdx} onHover={setHoverIdx} corners={corners}
-                      hasRef={charts.hasRef}
-                      tooltip={[{ label: "Vel (km/h)", value: tKmh(atv(charts.speedLap, hoverIdx)), ref: tKmh(atv(charts.speedBest, hoverIdx)), color: "rgb(52,211,153)" }]}>
-                      {showRefLine && charts.hasRef && <path d={seriesPath(charts.speedBest, charts.n, charts.spMin, charts.spMax, 1000, 110)} fill="none" stroke="rgba(168,85,247,0.7)" strokeWidth="1.5" strokeDasharray="5 3" />}
-                      {showLapLine && <path d={seriesPath(charts.speedLap, charts.n, charts.spMin, charts.spMax, 1000, 110)} fill="none" stroke="rgb(52,211,153)" strokeWidth="2" />}
-                    </Chart>
-
-                    <Chart title="Acelerador (verde) y freno (rojo)" n={charts.n} hoverIdx={hoverIdx} onHover={setHoverIdx} corners={corners}
-                      hasRef={charts.hasRef}
-                      tooltip={[
-                        { label: "Acelerador", value: tPct(atv(charts.throttle, hoverIdx)), ref: tPct(atv(charts.throttleRef, hoverIdx)), color: "rgb(52,211,153)" },
-                        { label: "Freno", value: tPct(atv(charts.brake, hoverIdx)), ref: tPct(atv(charts.brakeRef, hoverIdx)), color: "rgb(239,68,68)" },
-                      ]}>
-                      {showRefLine && charts.hasRef && <path d={seriesPath(charts.throttleRef, charts.n, 0, 1, 1000, 110)} fill="none" stroke="rgba(52,211,153,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
-                      {showRefLine && charts.hasRef && <path d={seriesPath(charts.brakeRef, charts.n, 0, 1, 1000, 110)} fill="none" stroke="rgba(239,68,68,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
-                      {showLapLine && <path d={seriesPath(charts.throttle, charts.n, 0, 1, 1000, 110)} fill="none" stroke="rgb(52,211,153)" strokeWidth="2" />}
-                      {showLapLine && <path d={seriesPath(charts.brake, charts.n, 0, 1, 1000, 110)} fill="none" stroke="rgb(239,68,68)" strokeWidth="2" />}
-                    </Chart>
-
-                    <Chart title="Volante (ángulo)" n={charts.n} hoverIdx={hoverIdx} onHover={setHoverIdx} corners={corners}
-                      hasRef={charts.hasRef}
-                      tooltip={[{ label: "Volante", value: tDeg(atv(charts.steer, hoverIdx)), ref: tDeg(atv(charts.steerRef, hoverIdx)), color: "rgb(234,179,8)" }]}>
-                      <line x1="0" y1="55" x2="1000" y2="55" stroke="rgba(255,255,255,0.15)" strokeWidth="1" strokeDasharray="4 4" />
-                      {showRefLine && charts.hasRef && <path d={seriesPath(charts.steerRef, charts.n, -charts.stMax, charts.stMax, 1000, 110)} fill="none" stroke="rgba(234,179,8,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
-                      {showLapLine && <path d={seriesPath(charts.steer, charts.n, -charts.stMax, charts.stMax, 1000, 110)} fill="none" stroke="rgb(234,179,8)" strokeWidth="2" />}
-                    </Chart>
-
-                    <Chart title="RPM" n={charts.n} hoverIdx={hoverIdx} onHover={setHoverIdx} corners={corners}
-                      hasRef={charts.hasRef}
-                      tooltip={[{ label: "RPM", value: tRpm(atv(charts.rpm, hoverIdx)), ref: tRpm(atv(charts.rpmRef, hoverIdx)), color: "rgb(129,140,248)" }]}>
-                      {showRefLine && charts.hasRef && <path d={seriesPath(charts.rpmRef, charts.n, 0, charts.rpmMax, 1000, 110)} fill="none" stroke="rgba(129,140,248,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
-                      {showLapLine && <path d={seriesPath(charts.rpm, charts.n, 0, charts.rpmMax, 1000, 110)} fill="none" stroke="rgb(129,140,248)" strokeWidth="2" />}
-                    </Chart>
-
-                    <div className="text-[10px] text-muted-foreground/60">
-                      Eje X = distancia de la vuelta (inicio → meta). Línea punteada = referencia. Pasá el mouse por un gráfico para ver el punto en el mapa.
+                    <div className="flex items-center justify-end">
+                      <button
+                        onClick={() => setDetailOpen(true)}
+                        title="Abrir análisis detallado a pantalla completa (mapa + gráficos)"
+                        className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold bg-accent/60 hover:bg-accent transition-colors"
+                      >
+                        <Maximize2 className="size-3" /> Análisis detallado
+                      </button>
                     </div>
-
-                    {charts.hasG && (
-                      <div className="rounded-lg border border-border bg-card/40 p-3">
-                        <div className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground mb-2">G-G (uso del neumático)</div>
-                        <div style={{ maxWidth: 260, margin: "0 auto" }}>
-                          <svg viewBox="0 0 200 200" className="w-full" style={{ height: 240 }}>
-                            <circle cx="100" cy="100" r="80" fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
-                            <circle cx="100" cy="100" r="40" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="1" />
-                            <line x1="100" y1="20" x2="100" y2="180" stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
-                            <line x1="20" y1="100" x2="180" y2="100" stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
-                            {charts.gPts.map((p, i) => (
-                              <circle key={i} cx={100 + (p.x / charts.gMax) * 80} cy={100 - (p.y / charts.gMax) * 80} r="1.4" fill="rgba(52,211,153,0.5)" />
-                            ))}
-                          </svg>
-                        </div>
-                        <div className="text-[9px] text-muted-foreground/60 text-center">X = G lateral · Y = G longitudinal (frenada/aceleración)</div>
-                      </div>
-                    )}
+                    <AnalysisDetail
+                      charts={charts}
+                      svgMap={svgMap}
+                      corners={corners}
+                      hoverIdx={hoverIdx}
+                      setHoverIdx={setHoverIdx}
+                      showLapLine={showLapLine}
+                      setShowLapLine={setShowLapLine}
+                      showRefLine={showRefLine}
+                      setShowRefLine={setShowRefLine}
+                    />
                   </>
                 )}
               </div>
@@ -1482,8 +1512,169 @@ export function AnalysisView() {
           </div>
         )}
       </main>
+
+      {/* Vista de análisis detallado a pantalla completa: mapa (izq) + gráficos (der) */}
+      {detailOpen && session && charts && (
+        <div className="fixed inset-0 z-50 bg-background/98 backdrop-blur-sm flex flex-col">
+          <div className="flex items-center justify-between px-4 py-2 border-b border-border shrink-0">
+            <div className="flex items-baseline gap-2 min-w-0">
+              <span className="text-sm font-bold truncate">{titleOf(session)}</span>
+              {lap && <span className="text-[11px] text-muted-foreground font-mono">L{lap.lap} · {fmtLap(lap.lapTime)}</span>}
+              {best && best !== lap && <span className="text-[11px] text-muted-foreground">vs ref {fmtLap(best.lapTime)}</span>}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setRangeTool((v) => !v)}
+                title="Zoom de tramo: activá y arrastrá sobre un gráfico para ampliar esa porción de la vuelta (se resalta en el mapa)"
+                className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold transition-colors ${rangeTool ? "bg-sky-500/25 text-sky-300 border border-sky-500/50" : "bg-accent/60 hover:bg-accent"}`}
+              >
+                <Crop className="size-3.5" /> {rangeTool ? "Seleccioná un tramo…" : "Zoom de tramo"}
+              </button>
+              {zoomRange && (
+                <button
+                  onClick={() => { setZoomRange(null); setRangeTool(false); }}
+                  title="Ver la vuelta completa"
+                  className="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold bg-accent/60 hover:bg-accent transition-colors"
+                >
+                  <RotateCcw className="size-3.5" /> Vuelta completa
+                </button>
+              )}
+              <button
+                onClick={closeDetail}
+                title="Cerrar (Esc)"
+                className="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold bg-accent/60 hover:bg-accent transition-colors"
+              >
+                <X className="size-4" /> Cerrar
+              </button>
+            </div>
+          </div>
+          <div className="flex-1 min-h-0 p-4">
+            <AnalysisDetail
+              charts={charts}
+              svgMap={svgMap}
+              corners={corners}
+              hoverIdx={hoverIdx}
+              setHoverIdx={setHoverIdx}
+              showLapLine={showLapLine}
+              setShowLapLine={setShowLapLine}
+              showRefLine={showRefLine}
+              setShowRefLine={setShowRefLine}
+              split
+              range={zoomRange}
+              selecting={rangeTool}
+              onSelectRange={(r) => { setZoomRange(r); setRangeTool(false); }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+// Mapa + gráficos de telemetría (con hover vinculado). `split` = layout a dos
+// mitades (mapa izq / gráficos der) para la vista de análisis detallado; si no,
+// apilado (mapa arriba, gráficos abajo) para la vista normal.
+function AnalysisDetail({ charts, svgMap, corners, hoverIdx, setHoverIdx, showLapLine, setShowLapLine, showRefLine, setShowRefLine, split = false, range = null, selecting = false, onSelectRange }) {
+  if (!charts) return null;
+
+  const mapPanel = (svgMap || charts.hasMap) ? (
+    <MapPanel
+      mapPath={svgMap ? svgMap.mapPath : charts.mapPath}
+      mapPathRef={svgMap ? svgMap.mapPathRef : charts.mapPathRef}
+      mapDelta={charts.delta}
+      hasRef={charts.hasRef}
+      hoverIdx={hoverIdx}
+      baseView={svgMap ? svgMap.baseView : undefined}
+      outlineD={svgMap ? svgMap.outlineD : undefined}
+      corners={corners}
+      fill={split}
+      highlightRange={range}
+    />
+  ) : null;
+
+  // Props comunes a todos los gráficos (incluye rango/selección) + helper de path.
+  const cp = { n: charts.n, hoverIdx, onHover: setHoverIdx, corners, range, selecting, onSelectRange };
+  const sp = (vals, yMin, yMax) => seriesPath(vals, charts.n, yMin, yMax, 1000, 110, range);
+
+  const chartsCol = (
+    <>
+      {charts.hasRef && (
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] text-muted-foreground uppercase tracking-widest">Líneas:</span>
+          <ToggleBtn active={showLapLine} onClick={() => setShowLapLine((v) => !v)} color="rgb(52,211,153)">Tu vuelta</ToggleBtn>
+          <ToggleBtn active={showRefLine} onClick={() => setShowRefLine((v) => !v)} color="rgb(168,85,247)">Referencia</ToggleBtn>
+        </div>
+      )}
+
+      <Chart title="Delta vs mejor vuelta (s)" {...cp}
+        tooltip={[{ label: "Delta (s)", value: tSec(atv(charts.delta, hoverIdx)), color: "rgb(125,211,252)" }]}>
+        <line x1="0" y1="55" x2="1000" y2="55" stroke="rgba(255,255,255,0.15)" strokeWidth="1" strokeDasharray="4 4" />
+        <path d={sp(charts.delta, -charts.dMax, charts.dMax)} fill="none" stroke="rgb(125,211,252)" strokeWidth="2" />
+      </Chart>
+
+      <Chart title="Velocidad (km/h) — vuelta vs mejor" {...cp} hasRef={charts.hasRef}
+        tooltip={[{ label: "Vel (km/h)", value: tKmh(atv(charts.speedLap, hoverIdx)), ref: tKmh(atv(charts.speedBest, hoverIdx)), color: "rgb(52,211,153)" }]}>
+        {showRefLine && charts.hasRef && <path d={sp(charts.speedBest, charts.spMin, charts.spMax)} fill="none" stroke="rgba(168,85,247,0.7)" strokeWidth="1.5" strokeDasharray="5 3" />}
+        {showLapLine && <path d={sp(charts.speedLap, charts.spMin, charts.spMax)} fill="none" stroke="rgb(52,211,153)" strokeWidth="2" />}
+      </Chart>
+
+      <Chart title="Acelerador (verde) y freno (rojo)" {...cp} hasRef={charts.hasRef}
+        tooltip={[
+          { label: "Acelerador", value: tPct(atv(charts.throttle, hoverIdx)), ref: tPct(atv(charts.throttleRef, hoverIdx)), color: "rgb(52,211,153)" },
+          { label: "Freno", value: tPct(atv(charts.brake, hoverIdx)), ref: tPct(atv(charts.brakeRef, hoverIdx)), color: "rgb(239,68,68)" },
+        ]}>
+        {showRefLine && charts.hasRef && <path d={sp(charts.throttleRef, 0, 1)} fill="none" stroke="rgba(52,211,153,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
+        {showRefLine && charts.hasRef && <path d={sp(charts.brakeRef, 0, 1)} fill="none" stroke="rgba(239,68,68,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
+        {showLapLine && <path d={sp(charts.throttle, 0, 1)} fill="none" stroke="rgb(52,211,153)" strokeWidth="2" />}
+        {showLapLine && <path d={sp(charts.brake, 0, 1)} fill="none" stroke="rgb(239,68,68)" strokeWidth="2" />}
+      </Chart>
+
+      <Chart title="Volante (ángulo)" {...cp} hasRef={charts.hasRef}
+        tooltip={[{ label: "Volante", value: tDeg(atv(charts.steer, hoverIdx)), ref: tDeg(atv(charts.steerRef, hoverIdx)), color: "rgb(234,179,8)" }]}>
+        <line x1="0" y1="55" x2="1000" y2="55" stroke="rgba(255,255,255,0.15)" strokeWidth="1" strokeDasharray="4 4" />
+        {showRefLine && charts.hasRef && <path d={sp(charts.steerRef, -charts.stMax, charts.stMax)} fill="none" stroke="rgba(234,179,8,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
+        {showLapLine && <path d={sp(charts.steer, -charts.stMax, charts.stMax)} fill="none" stroke="rgb(234,179,8)" strokeWidth="2" />}
+      </Chart>
+
+      <Chart title="RPM" {...cp} hasRef={charts.hasRef}
+        tooltip={[{ label: "RPM", value: tRpm(atv(charts.rpm, hoverIdx)), ref: tRpm(atv(charts.rpmRef, hoverIdx)), color: "rgb(129,140,248)" }]}>
+        {showRefLine && charts.hasRef && <path d={sp(charts.rpmRef, 0, charts.rpmMax)} fill="none" stroke="rgba(129,140,248,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
+        {showLapLine && <path d={sp(charts.rpm, 0, charts.rpmMax)} fill="none" stroke="rgb(129,140,248)" strokeWidth="2" />}
+      </Chart>
+
+      <div className="text-[10px] text-muted-foreground/60">
+        Eje X = distancia de la vuelta (inicio → meta). Línea punteada = referencia. Pasá el mouse por un gráfico para ver el punto en el mapa.
+      </div>
+
+      {!split && charts.hasG && (
+        <div className="rounded-lg border border-border bg-card/40 p-3">
+          <div className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground mb-2">G-G (uso del neumático)</div>
+          <div style={{ maxWidth: 260, margin: "0 auto" }}>
+            <svg viewBox="0 0 200 200" className="w-full" style={{ height: 240 }}>
+              <circle cx="100" cy="100" r="80" fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
+              <circle cx="100" cy="100" r="40" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="1" />
+              <line x1="100" y1="20" x2="100" y2="180" stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
+              <line x1="20" y1="100" x2="180" y2="100" stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
+              {charts.gPts.map((p, i) => (
+                <circle key={i} cx={100 + (p.x / charts.gMax) * 80} cy={100 - (p.y / charts.gMax) * 80} r="1.4" fill="rgba(52,211,153,0.5)" />
+              ))}
+            </svg>
+          </div>
+          <div className="text-[9px] text-muted-foreground/60 text-center">X = G lateral · Y = G longitudinal (frenada/aceleración)</div>
+        </div>
+      )}
+    </>
+  );
+
+  if (split) {
+    return (
+      <div className="flex gap-4 h-full min-h-0">
+        <div className="w-1/2 min-w-0 h-full">{mapPanel}</div>
+        <div className="w-1/2 min-w-0 overflow-y-auto pr-1 space-y-4">{chartsCol}</div>
+      </div>
+    );
+  }
+  return (<>{mapPanel}{chartsCol}</>);
 }
 
 function Metric({ label, value, icon: Icon }) {

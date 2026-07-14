@@ -5,7 +5,7 @@ const path = require('path');
 // correspondiente a su LapDistPct (0..1). Muestrear por DISTANCIA (y no por
 // tiempo) alinea las trazas entre vueltas: el punto i de dos vueltas es el
 // mismo lugar de la pista, así se pueden superponer y calcular el delta.
-const BUCKETS = 400;         // resolución de la trazada por distancia (mejor detalle en curvas)
+const BUCKETS = 800;         // resolución de la trazada por distancia (mejor detalle en curvas)
 const MAX_LAPS = 250;        // tope de vueltas guardadas por sesión
 const MAX_SESSIONS_ON_DISK = 60;
 
