@@ -292,7 +292,7 @@ class IrsdkClient {
         // Simulación EN MOVIMIENTO: relative animado (gaps que respiran, autos que
         // se acercan/alejan), spotter alternando, y tiempos para el header.
         this._cachedData.relative = this._getMockRelative(t, lap, currentLap);
-        this._cachedData.carLeftRight = [0, 1, 2, 3][Math.floor(t / 2) % 4];
+        this._cachedData.carLeftRight = [1, 2, 3, 4][Math.floor(t / 2) % 4];
         this._cachedData.lapTimes = { currentLap, bestLap: LAP_DURATION - 1.2, lastLap: LAP_DURATION, lastLapInvalid: false };
       }
       this._emitLight();

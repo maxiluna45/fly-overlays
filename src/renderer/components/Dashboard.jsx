@@ -473,7 +473,7 @@ function simFrame(id, t) {
   const base = { connected: true, onTrack: true, preview: true };
   if (id === "delta") return { ...base, delta: Math.sin(t * 0.7) * 0.5 - 0.05, deltaRate: Math.cos(t * 0.7) * 0.2, refLapTime: 92.3, deltaRefs: {} };
   if (id === "sectors") return { ...base, ...simSectors(t) };
-  if (id === "radar") return { ...base, carLeftRight: [0, 1, 2, 3][Math.floor(t / 1.5) % 4], relative: simRelative(t) };
+  if (id === "radar") return { ...base, carLeftRight: [1, 2, 3, 4][Math.floor(t / 1.5) % 4], relative: simRelative(t) };
   return { ...base, relative: simRelative(t) }; // relative / standings
 }
 

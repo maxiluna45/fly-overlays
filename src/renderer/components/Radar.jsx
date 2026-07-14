@@ -101,11 +101,13 @@ export function Radar({ previewMode = false, injectedTelemetry = null, settings 
 
   // Spotter del juego (izq/der). Enum irsdk (raw de memoria compartida, 0-based):
   // 0 Clear · 1 Left · 2 Right · 3 LeftRight · 4 2Left · 5 2Right.
+  // Enum OFICIAL irsdk_CarLeftRight: 0 Off · 1 Clear · 2 CarLeft · 3 CarRight ·
+  // 4 CarLeftRight · 5 2CarsLeft · 6 2CarsRight.
   const clr = telemetry.carLeftRight | 0;
-  const hasLeft = clr === 1 || clr === 3 || clr === 4;
-  const hasRight = clr === 2 || clr === 3 || clr === 5;
-  const twoLeft = clr === 4;
-  const twoRight = clr === 5;
+  const hasLeft = clr === 2 || clr === 4 || clr === 5;
+  const hasRight = clr === 3 || clr === 4 || clr === 6;
+  const twoLeft = clr === 5;
+  const twoRight = clr === 6;
 
   // ── Modelo en PORCENTAJE del contenedor (HTML/CSS: degradados + transiciones
   // suaves, fondo transparente). Escala CERCANA: cada auto a su LARGO REAL, así la
