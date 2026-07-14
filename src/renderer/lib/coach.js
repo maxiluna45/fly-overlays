@@ -31,17 +31,35 @@ export function resampleSamples(samples, targetLen) {
 // para que la línea sea continua.
 export function buildDeltaTrace(best, lap) {
   const n = Math.max(best?.samples?.length || 0, lap?.samples?.length || 0);
+  // Tiempos "limpios" (monótonos desde ~0). Corrige el arrastre del cronómetro:
+  // los .ibt suelen traer los primeros buckets de la vuelta con el t de la vuelta
+  // ANTERIOR (~lapTime) antes de que el cronómetro resetee → eso metía un pico
+  // enorme en el delta y aplanaba todo. cleanTimes lo neutraliza.
+  const bt = cleanTimes(best?.samples);
+  const lt = cleanTimes(lap?.samples);
   const out = [];
   let last = 0;
   for (let i = 0; i < n; i++) {
-    const b = at(best, i);
-    const l = at(lap, i);
-    if (b && l && b.t != null && l.t != null) {
-      last = l.t - b.t;
-    }
+    if (bt[i] != null && lt[i] != null) last = lt[i] - bt[i];
     out.push({ i, d: i / n, delta: last });
   }
   return out;
+}
+
+// Devuelve el array de tiempos (t) de una vuelta, saneado a monótono desde ~0:
+// detecta el reset del cronómetro (caída brusca de t) y reemplaza los buckets
+// iniciales "arrastrados" (con el t de la vuelta anterior) por una rampa 0→t(reset).
+function cleanTimes(samples) {
+  const arr = Array.isArray(samples) ? samples.map((s) => (s && s.t != null ? s.t : null)) : [];
+  let reset = -1;
+  for (let i = 1; i < arr.length; i++) {
+    if (arr[i] != null && arr[i - 1] != null && arr[i] < arr[i - 1] - 5) { reset = i; break; }
+  }
+  if (reset > 0) {
+    const t0 = arr[reset] != null ? arr[reset] : 0;
+    for (let i = 0; i < reset; i++) arr[i] = t0 * (i / reset);
+  }
+  return arr;
 }
 
 // Consistencia sobre las vueltas válidas: media, desviación estándar y spread.

@@ -510,7 +510,7 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
           {/* Zona de pista resaltada (selección de los gráficos): banda ancha
               translúcida debajo de la trazada, para no taparla. */}
           {highlightD && (
-            <path d={highlightD} fill="none" stroke="rgba(250,204,21,0.28)" strokeWidth={20 * k} strokeLinecap="round" strokeLinejoin="round" />
+            <path d={highlightD} fill="none" stroke="rgba(250,204,21,0.12)" strokeWidth={44 * k} strokeLinecap="round" strokeLinejoin="round" />
           )}
           <TrackLayer segs={segs} segsRef={segsRef} refD={refD} showRef={showRef} showLap={showLap} k={k} mode={effMode} maxSlope={maxSlope} />
           {corners && mapPath && corners.map((c, i) => {
