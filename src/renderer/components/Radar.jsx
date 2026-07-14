@@ -147,7 +147,7 @@ export function Radar({ previewMode = false, injectedTelemetry = null, settings 
     const dir = side === "left" ? "to left" : "to right";
     return (
       <div key={side} style={{
-        position: "absolute", [side]: 0, width: "52%", top: `${top}%`, height: `${carH}%`,
+        position: "absolute", [side]: 0, width: "50%", top: `${top}%`, height: `${carH}%`,
         background: `linear-gradient(${dir}, rgba(239,68,68,0.95), rgba(239,68,68,0))`,
         opacity: op, transition: "top 140ms linear, opacity 200ms ease", pointerEvents: "none", willChange: "top, opacity",
       }} />
