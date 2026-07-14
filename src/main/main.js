@@ -410,7 +410,15 @@ ipcMain.handle('ibt:import', async () => {
   }
 });
 
-ipcMain.handle('ibt:list', () => {
+// Caché de metadatos por archivo, con clave path+mtime+size. Los .ibt/.csv son
+// inmutables una vez escritos, así que el parseo pesado (YAML + sampleo de mejor
+// vuelta) se hace UNA sola vez por archivo; los listados posteriores son casi
+// instantáneos. Sin esto, cada `ibt:list` (al abrir y en cada `recordings:changed`
+// durante una sesión en vivo) re-parseaba todo, bloqueando el proceso principal.
+const ibtMetaCache = new Map();
+const yieldToLoop = () => new Promise((r) => setImmediate(r));
+
+ipcMain.handle('ibt:list', async () => {
   const dir = iracingTelemetryDir();
   let files = [];
   try {
@@ -424,13 +432,22 @@ ipcMain.handle('ibt:list', () => {
   const out = [];
   for (const f of files) {
     const full = path.join(dir, f);
-    if (f.toLowerCase().endsWith('.csv')) {
-      const meta = parseCsvMeta(full);
-      if (meta) out.push({ id: `csv:${f}`, source: 'csv', file: f, ...meta });
-    } else {
-      const meta = parseIbtMeta(full);
-      if (meta) out.push({ id: `ibt:${f}`, source: 'ibt', file: f, ...meta });
+    let st;
+    try { st = fs.statSync(full); } catch (_) { continue; }
+    const key = `${full}|${st.mtimeMs}|${st.size}`;
+    let entry = ibtMetaCache.get(key);
+    if (entry === undefined) {
+      const isCsv = f.toLowerCase().endsWith('.csv');
+      const meta = isCsv ? parseCsvMeta(full) : parseIbtMeta(full);
+      entry = meta
+        ? (isCsv ? { id: `csv:${f}`, source: 'csv', file: f, ...meta } : { id: `ibt:${f}`, source: 'ibt', file: f, ...meta })
+        : null; // cacheamos también el fallo para no reintentar cada vez
+      ibtMetaCache.set(key, entry);
+      // Cedemos el hilo entre archivos nuevos para que la UI y los overlays no se
+      // congelen durante el primer escaneo (o al aparecer archivos nuevos).
+      await yieldToLoop();
     }
+    if (entry) out.push(entry);
   }
   out.sort((a, b) => b.startedAt - a.startedAt);
   return out;

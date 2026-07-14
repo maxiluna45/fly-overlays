@@ -661,8 +661,14 @@ export function AnalysisView() {
   useEffect(() => {
     loadList();
     if (!window.fly?.onRecordingsChange) return;
-    const unsub = window.fly.onRecordingsChange(() => loadList());
-    return unsub;
+    // Debounce: durante una sesión en vivo `recordings:changed` llega seguido (una
+    // por vuelta). Coalescemos para no re-listar/re-renderizar en cada evento.
+    let t = null;
+    const unsub = window.fly.onRecordingsChange(() => {
+      if (t) clearTimeout(t);
+      t = setTimeout(() => { t = null; loadList(); }, 400);
+    });
+    return () => { if (t) clearTimeout(t); unsub && unsub(); };
   }, [loadList]);
 
   const closeDetail = () => { setDetailOpen(false); setZoomRange(null); setRangeTool(false); };

@@ -21,6 +21,7 @@ class SessionRecorder {
     this._bucketCount = 0;
     this._writeTimer = null;
     this._listeners = new Set();
+    this._summaryCache = new Map(); // clave archivo|mtime|size → resumen para el listado
   }
 
   _ensureDir() {
@@ -162,6 +163,10 @@ class SessionRecorder {
 
   // === API para el renderer (vía IPC) ===
 
+  // Devuelve un resumen por sesión (sin las trazas). Antes hacía JSON.parse del
+  // archivo COMPLETO de cada sesión (vueltas × 800 buckets) en cada llamada — muy
+  // caro y en el proceso principal. Ahora cacheamos el resumen por mtime+size, así
+  // solo se re-parsea un archivo si cambió (la sesión en curso mientras se graba).
   listSessions() {
     let files = [];
     try {
@@ -169,19 +174,27 @@ class SessionRecorder {
     } catch (_) { return []; }
     const out = [];
     for (const f of files) {
+      const full = path.join(this.dir, f);
       try {
-        const raw = JSON.parse(fs.readFileSync(path.join(this.dir, f), 'utf-8'));
-        const valid = raw.laps.filter((l) => l.valid && l.lapTime > 0);
-        const best = valid.reduce((m, l) => (m == null || l.lapTime < m ? l.lapTime : m), null);
-        out.push({
-          id: raw.id,
-          startedAt: raw.startedAt,
-          track: raw.track,
-          car: raw.car,
-          sessionType: raw.sessionType,
-          lapCount: raw.laps.length,
-          bestLap: best,
-        });
+        const st = fs.statSync(full);
+        const key = `${f}|${st.mtimeMs}|${st.size}`;
+        let summary = this._summaryCache.get(key);
+        if (summary === undefined) {
+          const raw = JSON.parse(fs.readFileSync(full, 'utf-8'));
+          const valid = raw.laps.filter((l) => l.valid && l.lapTime > 0);
+          const best = valid.reduce((m, l) => (m == null || l.lapTime < m ? l.lapTime : m), null);
+          summary = {
+            id: raw.id,
+            startedAt: raw.startedAt,
+            track: raw.track,
+            car: raw.car,
+            sessionType: raw.sessionType,
+            lapCount: raw.laps.length,
+            bestLap: best,
+          };
+          this._summaryCache.set(key, summary);
+        }
+        out.push(summary);
       } catch (_) {}
     }
     out.sort((a, b) => b.startedAt - a.startedAt);

@@ -152,11 +152,13 @@ function parseIbtMeta(filePath) {
           const rec = Buffer.alloc(h.bufLen);
           fs.readSync(fd, rec, 0, h.bufLen, h.bufOffset);
           if (sn) sessionNum = readVar(rec, 0, sn);
-          // LapLastLapTime queda constante durante toda la vuelta siguiente, así
-          // que muestrear cada ~1s (step) capta el tiempo de cada vuelta completada.
-          // Tomamos el mínimo (> 1s para descartar valores basura/parciales).
+          // LapLastLapTime queda constante durante TODA la vuelta siguiente (miles
+          // de muestras a 60 Hz), así que con ~1500 lecturas espaciadas alcanza para
+          // captar el tiempo de cada vuelta. Tomamos el mínimo (> 1s, descarta basura).
+          // Antes hacíamos hasta 5000 readSync por archivo → decenas de miles de
+          // seeks síncronos con muchos .ibt, congelando el proceso principal.
           if (vLast) {
-            const step = Math.max(30, Math.ceil(numSamples / 5000));
+            const step = Math.max(60, Math.ceil(numSamples / 1500));
             for (let s = 0; s < numSamples; s += step) {
               fs.readSync(fd, rec, 0, h.bufLen, h.bufOffset + s * h.bufLen);
               const t = readVar(rec, 0, vLast);
