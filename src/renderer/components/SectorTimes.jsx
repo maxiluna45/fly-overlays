@@ -374,13 +374,16 @@ function SectorColumn({ index, sectors, showDelta = true }) {
     best: sectors.best?.[offset + i] ?? null,
   }));
 
-  // Tono del sector entero (null si aún no terminó)
-  const sectorTone = getSectorTone(index, sectors);
+  // Delta del sector vs. referencia (best si existe, si no last). Lo usamos tanto
+  // para el número como para el COLOR, así ambos son coherentes: no puede haber
+  // "verde con +delta". Púrpura = igualás/batís tu mejor · verde = más rápido que
+  // la referencia · amarillo = más lento.
+  const sectorDelta = getSectorDelta(index, sectors);
+  const sectorTone = sectorDelta == null ? null
+    : (sectorDelta.vsBest && sectorDelta.delta <= 0.0005) ? "purple"
+    : sectorDelta.delta <= -0.0005 ? "green"
+    : "yellow";
   const hasTone = sectorTone != null;
-
-  // Delta numérico del sector vs. referencia (se muestra junto al label para
-  // no aumentar la altura del overlay).
-  const sectorDelta = showDelta ? getSectorDelta(index, sectors) : null;
 
   return (
     <div
@@ -397,7 +400,7 @@ function SectorColumn({ index, sectors, showDelta = true }) {
         style={{ color: hasTone ? SECTOR_LABEL_COLOR[sectorTone] : "rgba(255,255,255,0.5)" }}
       >
         <span>S{index + 1}</span>
-        {sectorDelta && (
+        {showDelta && sectorDelta && (
           <span
             className="font-mono tnum"
             style={{

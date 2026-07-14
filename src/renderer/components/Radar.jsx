@@ -136,9 +136,8 @@ export function Radar({ previewMode = false, injectedTelemetry = null, settings 
   const besideIdx = (hasLeft || hasRight) && besideCar ? besideCar.carIdx : null;
   const besideM = besideCar ? besideCar.relMeters : 0;
 
-  // Listas para el render.
-  const longCars = nearby.filter((d) => inWin(d.relMeters) && d.carIdx !== besideIdx); // adelante/atrás
-  const farCars = nearby.filter((d) => !inWin(d.relMeters));                            // aproximándose
+  // Autos adelante/atrás dentro de la ventana (para los semicírculos amarillos).
+  const longCars = nearby.filter((d) => inWin(d.relMeters) && d.carIdx !== besideIdx);
 
   // Franja lateral (roja) para un lado. Siempre montada; opacidad 0 si no hay auto
   // → transición suave de aparición/desaparición. Corte recto en trompa/cola.
@@ -231,18 +230,6 @@ export function Radar({ previewMode = false, injectedTelemetry = null, settings 
           boxShadow: "0 0 5px rgba(0,0,0,0.55)", pointerEvents: "none",
         }} />
 
-        {/* Autos que se aproximan de más lejos que la ventana: marca sutil en el
-            borde (arriba = adelante, abajo = atrás), sin números ni flechas. */}
-        {farCars.map((d) => {
-          const ahead = d.relMeters >= 0;
-          return (
-            <div key={`far-${d.carIdx}`} style={{
-              position: "absolute", left: "50%", transform: "translateX(-50%)",
-              [ahead ? "top" : "bottom"]: 1, width: "26%", height: 3, borderRadius: 2,
-              background: proxColor(d.relMeters), opacity: 0.7, pointerEvents: "none",
-            }} />
-          );
-        })}
 
         {/* Sin datos aún */}
         {!rel && (
