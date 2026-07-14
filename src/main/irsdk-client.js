@@ -122,6 +122,7 @@ class IrsdkClient {
     this._refCarId = null;
     this._refPrevLap = null;
     this._trackLengthM = null;  // largo de pista en metros (para el radar)
+    this._onTrackLatchUntil = 0; // ms hasta cuándo mantener visibles los overlays
     this._sectorPcts = null;   // límites de sectores reales (SplitTimeInfo)
     this._trackLength = null;  // largo de pista en km
   }
@@ -550,11 +551,18 @@ class IrsdkClient {
     }
 
     const speed = this._read(telemetry, 'Speed') || 0;
-    // IsOnTrack de iRacing: true si el player está EN el auto en pista (aunque
-    // esté detenido). Antes usábamos speed>0.5, por eso los overlays se ocultaban
-    // con el auto quieto. Fallback a velocidad si el SDK no expone el flag.
-    const isOnTrackRaw = this._read(telemetry, 'IsOnTrack');
-    const isOnTrack = isOnTrackRaw != null ? !!isOnTrackRaw : speed > 0.5;
+    // Visibilidad de overlays: mostramos si el player está EN el auto en pista,
+    // AUNQUE esté detenido. Antes se usaba speed>0.5 → se ocultaban al parar.
+    // Usamos IsOnTrack o IsOnTrackCar (cualquiera true = en pista); si el SDK no
+    // los expone, caemos a velocidad. Ocultamos en garage. Un latch de 4s evita
+    // que un parpadeo del flag esconda los overlays al frenar/parar.
+    const rawOn = this._read(telemetry, 'IsOnTrack');
+    const rawOnCar = this._read(telemetry, 'IsOnTrackCar');
+    const rawGarage = this._read(telemetry, 'IsInGarage');
+    const inGarage = rawGarage === true || rawGarage === 1;
+    const onNow = (rawOn != null || rawOnCar != null) ? (!!rawOn || !!rawOnCar) : speed > 0.5;
+    if (onNow && !inGarage) this._onTrackLatchUntil = Date.now() + 4000;
+    const isOnTrack = (onNow && !inGarage) || (this._onTrackLatchUntil || 0) > Date.now();
     const lap = this._read(telemetry, 'Lap') || 0;
     const bestLap = this._read(telemetry, 'LapBestLapTime') || 0;
     const currentLap = this._read(telemetry, 'LapCurrentLapTime') || 0;
