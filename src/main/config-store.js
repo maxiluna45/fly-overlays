@@ -32,6 +32,7 @@ const OVERLAY_DEFAULT_SETTINGS = {
     showLicense: true,       // mostrar el badge de licencia (LicLevel)
     showCarNumber: true,     // mostrar número del auto
     showLaps: true,          // mostrar la caja de last lap
+    nameFormat: "full",      // full | short | initials
     rowsAbove: 3,            // competidores arriba del player
     rowsBelow: 3,            // competidores abajo del player
     borderRadius: 8,         // radio del contenedor
@@ -43,6 +44,9 @@ const OVERLAY_DEFAULT_SETTINGS = {
     showIRating: true,       // columna de iRating
     showCarNumber: true,     // número del auto
     showBestLap: true,       // columna de best lap
+    showLastLap: false,      // columna de last lap
+    showPositionChange: true,// ▲/▼ posiciones ganadas vs qualy (solo carrera)
+    nameFormat: "full",      // full | short | initials
     gapMode: "leader",       // 'leader' (gap al líder) | 'interval' (al de adelante)
     maxRows: 24,             // máximo de filas
     rowHeight: 24,           // alto de fila
@@ -101,6 +105,12 @@ const DEFAULTS = {
   sessionLabels: {},
   // Auth de iRacing Data API: { email, enc } (password cifrado con safeStorage).
   iracingAuth: null,
+  // Etiquetas de pilotos (amigos/peligrosos/streamers). Cada una:
+  // { id, name, label, color }. Se muestran en Relative/Standings junto al nombre.
+  driverTags: [],
+  // Grabación de sesiones en vivo por iFly. Si el usuario ya loguea telemetría
+  // desde iRacing (.ibt), puede apagar esto para no generar duplicados.
+  recordingEnabled: true,
 };
 
 class ConfigStore {
@@ -122,6 +132,8 @@ class ConfigStore {
           telemetryDir: parsed.telemetryDir ?? DEFAULTS.telemetryDir,
           sessionLabels: parsed.sessionLabels || {},
           iracingAuth: parsed.iracingAuth || null,
+          driverTags: Array.isArray(parsed.driverTags) ? parsed.driverTags : [],
+          recordingEnabled: parsed.recordingEnabled !== false, // default: true
         };
       }
     } catch (err) {
@@ -175,6 +187,28 @@ class ConfigStore {
     this.data.iracingAuth = auth || null;
     this._save();
     return this.data.iracingAuth;
+  }
+
+  getDriverTags() {
+    return Array.isArray(this.data.driverTags) ? this.data.driverTags : [];
+  }
+
+  setDriverTags(tags) {
+    this.data.driverTags = Array.isArray(tags) ? tags : [];
+    this._save();
+    this._emit();
+    return this.data.driverTags;
+  }
+
+  isRecordingEnabled() {
+    return this.data.recordingEnabled !== false;
+  }
+
+  setRecordingEnabled(v) {
+    this.data.recordingEnabled = !!v;
+    this._save();
+    this._emit();
+    return this.data.recordingEnabled;
   }
 
   setSessionLabel(id, label) {

@@ -5,6 +5,8 @@ import {
   Eye,
   EyeOff,
   Power,
+  X,
+  Plus,
 } from "lucide-react";
 import { OVERLAY_META } from "../overlay-catalog.js";
 import { Relative } from "./Relative.jsx";
@@ -38,6 +40,7 @@ export function Dashboard() {
   const [preview, setPreview] = useState(false);
   const [previewShowAll, setPreviewShowAll] = useState(false);
   const [scale, setScale] = useState(0.6);
+  const [recordingEnabled, setRecordingEnabled] = useState(true);
   const toast = useToast();
 
   const load = useCallback(async () => {
@@ -45,7 +48,14 @@ export function Dashboard() {
     const p = await window.fly.getPreview();
     setConfig(c);
     setPreview(p);
+    if (window.fly?.getRecordingEnabled) setRecordingEnabled(await window.fly.getRecordingEnabled());
   }, []);
+
+  const handleRecordingToggle = async () => {
+    if (!window.fly?.setRecordingEnabled) return;
+    const next = await window.fly.setRecordingEnabled(!recordingEnabled);
+    setRecordingEnabled(next);
+  };
 
   useEffect(() => {
     load();
@@ -325,6 +335,21 @@ export function Dashboard() {
             </span>
             <div className="flex-1" />
             <Button
+              variant={recordingEnabled ? "default" : "outline"}
+              size="sm"
+              className="h-8 gap-1.5"
+              onClick={handleRecordingToggle}
+              title={recordingEnabled
+                ? "iFly graba cada vuelta automáticamente. Apagalo si ya logueás la telemetría desde iRacing (para no duplicar sesiones)."
+                : "Grabación en vivo APAGADA. iFly no va a grabar sesiones."}
+            >
+              <span
+                className="size-2.5 rounded-full"
+                style={{ background: recordingEnabled ? "rgb(239,68,68)" : "rgba(255,255,255,0.3)" }}
+              />
+              {recordingEnabled ? "Grabando" : "Grabación off"}
+            </Button>
+            <Button
               variant={previewShowAll ? "default" : "outline"}
               size="sm"
               className="h-8 gap-1.5"
@@ -411,6 +436,9 @@ export function Dashboard() {
               settings={ov.settings || {}}
               onChange={handleSettingChange}
             />
+
+            {/* DRIVER TAGS (Relative / Standings) */}
+            {(selectedId === "relative" || selectedId === "standings") && <DriverTagsManager />}
           </div>
         </aside>
       </div>
@@ -817,6 +845,69 @@ const SettingField = ({ label, suffix, children }) => (
   </div>
 );
 
+// Gestor de etiquetas de pilotos (amigos/peligrosos/streamers). Se muestran en
+// Relative y Standings junto al nombre del piloto (match por nombre).
+const TAG_COLORS = ["#38bdf8", "#22c55e", "#ef4444", "#eab308", "#a855f7", "#f97316"];
+function DriverTagsManager() {
+  const [tags, setTags] = React.useState([]);
+  const [name, setName] = React.useState("");
+  const [label, setLabel] = React.useState("");
+  const [color, setColor] = React.useState(TAG_COLORS[0]);
+
+  React.useEffect(() => {
+    if (window.fly?.getDriverTags) window.fly.getDriverTags().then((t) => setTags(Array.isArray(t) ? t : []));
+  }, []);
+
+  const persist = async (next) => {
+    setTags(next);
+    if (window.fly?.setDriverTags) await window.fly.setDriverTags(next);
+  };
+  const add = () => {
+    const nm = name.trim(), lb = (label.trim() || "TAG").toUpperCase().slice(0, 8);
+    if (nm.length < 3) return;
+    persist([...tags, { id: `t${Date.now()}`, name: nm, label: lb, color }]);
+    setName(""); setLabel("");
+  };
+  const remove = (id) => persist(tags.filter((t) => t.id !== id));
+
+  return (
+    <div className="space-y-2 border-t border-border pt-3">
+      <div className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Etiquetas de pilotos</div>
+      <p className="text-[10px] text-muted-foreground/70 leading-tight">
+        Marcá pilotos por nombre (amigo, peligroso, streamer…). Aparecen junto al nombre en Relative y Standings.
+      </p>
+      <div className="space-y-1">
+        {tags.length === 0 && <div className="text-[10px] text-muted-foreground/60">Sin etiquetas todavía.</div>}
+        {tags.map((t) => (
+          <div key={t.id} className="flex items-center gap-1.5 text-[11px]">
+            <span className="font-bold uppercase px-1 rounded-sm shrink-0" style={{ fontSize: "8px", background: `${t.color}33`, color: t.color, border: `1px solid ${t.color}66` }}>{t.label}</span>
+            <span className="flex-1 truncate text-foreground/90" title={t.name}>{t.name}</span>
+            <button onClick={() => remove(t.id)} title="Eliminar" className="text-muted-foreground/60 hover:text-red-400 shrink-0"><X className="size-3" /></button>
+          </div>
+        ))}
+      </div>
+      <div className="space-y-1.5">
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nombre del piloto (ej. John Smith)"
+          className="w-full bg-background border border-border rounded-md text-[11px] px-2 py-1 text-foreground" />
+        <div className="flex items-center gap-1.5">
+          <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Etiqueta" maxLength={8}
+            className="flex-1 min-w-0 bg-background border border-border rounded-md text-[11px] px-2 py-1 text-foreground" />
+          <div className="flex items-center gap-1 shrink-0">
+            {TAG_COLORS.map((c) => (
+              <button key={c} onClick={() => setColor(c)} title={c}
+                className="size-4 rounded-full border" style={{ background: c, borderColor: color === c ? "white" : "transparent" }} />
+            ))}
+          </div>
+        </div>
+        <button onClick={add} disabled={name.trim().length < 3}
+          className="w-full flex items-center justify-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold bg-accent/60 hover:bg-accent transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+          <Plus className="size-3" /> Agregar etiqueta
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // Diccionario de labels legibles para los settings de cada overlay.
 // Si la key no está, se muestra la key original (camelCase).
 const SETTING_LABELS = {
@@ -849,6 +940,8 @@ const SETTING_LABELS = {
     showIRating: "Mostrar iRating",
     showCarNumber: "Mostrar número de auto",
     showBestLap: "Mostrar best lap",
+    showLastLap: "Mostrar last lap",
+    showPositionChange: "Cambio de posición (vs qualy)",
     maxRows: "Máximo de filas",
     rowHeight: "Alto de fila",
     fontSize: "Tamaño de fuente",
@@ -933,6 +1026,34 @@ const ToggleField = React.memo(function ToggleField({ overlayId, overlayKey, k, 
   );
 });
 
+// Selector de formato de nombre (full / apellido / iniciales).
+function NameFormatField({ overlayId, value, onChange }) {
+  const cur = value || "full";
+  return (
+    <div className="space-y-1">
+      <span className="text-[11px] text-muted-foreground">Formato de nombre</span>
+      <div className="flex border border-border rounded-md overflow-hidden">
+        {[["full", "Completo"], ["short", "Apellido"], ["initials", "Iniciales"]].map(([val, label], i) => (
+          <button
+            key={val}
+            type="button"
+            className="flex-1 px-2 py-1 text-[10px] font-mono font-bold transition-colors hover:bg-white/5"
+            style={{
+              background: cur === val ? "rgba(125,211,252,0.15)" : "transparent",
+              color: cur === val ? "rgb(125,211,252)" : "rgba(255,255,255,0.5)",
+              borderRight: i < 2 ? "1px solid rgba(255,255,255,0.08)" : "none",
+              cursor: "pointer",
+            }}
+            onClick={() => onChange(overlayId, "nameFormat", val)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function AppearanceSettings({ overlayId, overlayKey, settings = {}, onChange }) {
   const isDelta = overlayKey === "delta";
   const isSectors = overlayKey === "sectors";
@@ -1010,6 +1131,9 @@ function AppearanceSettings({ overlayId, overlayKey, settings = {}, onChange }) 
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showIRating" value={settings.showIRating} onChange={onChange} />
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showCarNumber" value={settings.showCarNumber} onChange={onChange} />
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showBestLap" value={settings.showBestLap} onChange={onChange} />
+          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showLastLap" value={settings.showLastLap} onChange={onChange} />
+          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showPositionChange" value={settings.showPositionChange} onChange={onChange} />
+          <NameFormatField overlayId={overlayId} value={settings.nameFormat} onChange={onChange} />
           <div className="space-y-1">
             <span className="text-[11px] text-muted-foreground">Columna de gap (carrera)</span>
             <div className="flex border border-border rounded-md overflow-hidden">
@@ -1044,6 +1168,7 @@ function AppearanceSettings({ overlayId, overlayKey, settings = {}, onChange }) 
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showIRating" value={settings.showIRating} onChange={onChange} />
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showCarNumber" value={settings.showCarNumber} onChange={onChange} />
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showLaps" value={settings.showLaps} onChange={onChange} />
+          <NameFormatField overlayId={overlayId} value={settings.nameFormat} onChange={onChange} />
           <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="rowsAbove" min={0} max={6} step={1} unit="" value={settings.rowsAbove} onChange={onChange} />
           <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="rowsBelow" min={0} max={6} step={1} unit="" value={settings.rowsBelow} onChange={onChange} />
           <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="rowHeight" min={20} max={48} step={2} unit="px" value={settings.rowHeight} onChange={onChange} />

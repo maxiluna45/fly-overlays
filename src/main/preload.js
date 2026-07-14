@@ -52,6 +52,12 @@ contextBridge.exposeInMainWorld('fly', {
   importIbt: () => ipcRenderer.invoke('ibt:import'),
   getSessionLabels: () => ipcRenderer.invoke('sessions:labels'),
   setSessionLabel: (id, label) => ipcRenderer.invoke('sessions:set-label', { id, label }),
+  // Driver tags
+  getDriverTags: () => ipcRenderer.invoke('tags:get'),
+  setDriverTags: (tags) => ipcRenderer.invoke('tags:set', tags),
+  // Grabación de sesiones en vivo (on/off global)
+  getRecordingEnabled: () => ipcRenderer.invoke('recording:get'),
+  setRecordingEnabled: (v) => ipcRenderer.invoke('recording:set', v),
   // Garage 61
   getGarage61Url: (trackIdIr, carIdIr) => ipcRenderer.invoke('garage61:url', trackIdIr, carIdIr),
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),

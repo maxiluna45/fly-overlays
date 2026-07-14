@@ -28,6 +28,14 @@ function fmtShortDate(ms) {
   } catch (_) { return ""; }
 }
 
+// Helpers para los tooltips de los gráficos (valor en un bucket + formato).
+const atv = (arr, i) => (arr && i != null && arr[i] != null && isFinite(arr[i]) ? arr[i] : null);
+const tPct = (v) => (v != null ? `${Math.round(v * 100)}%` : "—");
+const tKmh = (v) => (v != null ? `${Math.round(v)}` : "—");
+const tDeg = (v) => (v != null ? `${Math.round((v * 180) / Math.PI)}°` : "—");
+const tRpm = (v) => (v != null ? `${Math.round(v)}` : "—");
+const tSec = (v) => (v != null ? `${v >= 0 ? "+" : ""}${v.toFixed(2)}` : "—");
+
 // Tag corto de tipo de sesión: Q (qualy), R (race), P (practice/test).
 function stTag(sessionType) {
   const t = (sessionType || "").toLowerCase();
@@ -51,6 +59,30 @@ function seriesPath(vals, n, yMin, yMax, W, H) {
     pen = true;
   }
   return d.trim();
+}
+
+// Construye un path SVG suave (Bézier cúbica con tangentes Catmull-Rom, tensión
+// 1/6) a partir de una lista de puntos {x,y}; los null cortan en subtrazados.
+function smoothPath(pts) {
+  if (!Array.isArray(pts)) return "";
+  let d = "", i = 0;
+  const f = (n) => n.toFixed(1);
+  while (i < pts.length) {
+    if (!pts[i]) { i++; continue; }
+    let j = i;
+    const run = [];
+    while (j < pts.length && pts[j]) { run.push(pts[j]); j++; }
+    d += `M${f(run[0].x)},${f(run[0].y)}`;
+    for (let k = 1; k < run.length; k++) {
+      const a = run[k - 1], b = run[k];
+      const p0 = run[k - 2] || a, p3 = run[k + 1] || b;
+      const c1x = a.x + (b.x - p0.x) / 6, c1y = a.y + (b.y - p0.y) / 6;
+      const c2x = b.x - (p3.x - a.x) / 6, c2y = b.y - (p3.y - a.y) / 6;
+      d += `C${f(c1x)},${f(c1y)} ${f(c2x)},${f(c2y)} ${f(b.x)},${f(b.y)}`;
+    }
+    i = j;
+  }
+  return d;
 }
 
 // ── Mapa de pista desde SVG de iRacing ──
@@ -167,19 +199,21 @@ function applyAffine(T, x, y) {
   return { x: T.a * sx + T.b * sy + T.mu, y: T.c * sx + T.d * sy + T.mv };
 }
 
-function Chart({ title, height = 110, n, hoverIdx, onHover, corners, children }) {
+function Chart({ title, height = 110, n, hoverIdx, onHover, corners, children, tooltip = null, hasRef = false }) {
   const interactive = n > 1 && typeof onHover === "function";
   const hx = hoverIdx != null && n > 1 ? (hoverIdx / (n - 1)) * 1000 : null;
+  const frac = hoverIdx != null && n > 1 ? hoverIdx / (n - 1) : 0;
   const handleMove = (e) => {
     if (!interactive) return;
     const r = e.currentTarget.getBoundingClientRect();
-    const frac = (e.clientX - r.left) / r.width;
-    onHover(Math.max(0, Math.min(n - 1, Math.round(frac * (n - 1)))));
+    const f = (e.clientX - r.left) / r.width;
+    onHover(Math.max(0, Math.min(n - 1, Math.round(f * (n - 1)))));
   };
+  const showTip = tooltip && tooltip.length > 0 && hoverIdx != null;
   return (
     <div className="rounded-lg border border-border bg-card/40 p-3">
       <div className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground mb-2">{title}</div>
-      <div onMouseMove={handleMove} onMouseLeave={() => interactive && onHover(null)}>
+      <div className="relative" onMouseMove={handleMove} onMouseLeave={() => interactive && onHover(null)}>
         <svg viewBox={`0 0 1000 ${height}`} preserveAspectRatio="none" className="w-full" style={{ height }}>
           {corners && corners.map((c, i) => (
             <line key={`c-${i}`} x1={c.pct * 1000} y1="0" x2={c.pct * 1000} y2={height} stroke="rgba(255,255,255,0.08)" strokeWidth="1" />
@@ -187,6 +221,26 @@ function Chart({ title, height = 110, n, hoverIdx, onHover, corners, children })
           {children}
           {hx != null && <line x1={hx} y1="0" x2={hx} y2={height} stroke="rgba(255,255,255,0.55)" strokeWidth="1.5" />}
         </svg>
+        {showTip && (
+          <div
+            className="absolute z-50 pointer-events-none rounded-md border border-border bg-[rgba(12,14,20,0.96)] px-2 py-1.5 shadow-lg text-[10px] space-y-0.5"
+            style={{ top: 4, left: `${frac * 100}%`, transform: frac > 0.55 ? "translateX(calc(-100% - 8px))" : "translateX(8px)" }}
+          >
+            {hasRef && (
+              <div className="flex items-center justify-end gap-2 text-[8px] uppercase tracking-widest text-muted-foreground/60 pb-0.5 mb-0.5 border-b border-border/60">
+                <span>vuelta</span><span>ref</span>
+              </div>
+            )}
+            {tooltip.map((r, i) => (
+              <div key={i} className="flex items-center gap-1.5 whitespace-nowrap">
+                <span className="size-1.5 rounded-full shrink-0" style={{ background: r.color }} />
+                <span className="text-muted-foreground mr-auto">{r.label}</span>
+                <span className="font-mono font-semibold text-foreground tabular-nums">{r.value}</span>
+                {hasRef && <span className="font-mono text-muted-foreground/70 tabular-nums">{r.ref != null ? r.ref : "—"}</span>}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -224,7 +278,15 @@ const TrackLayer = React.memo(function TrackLayer({ segs, refD, showRef, k, mode
         <path d={refD} fill="none" stroke="rgba(255,255,255,0.8)" strokeWidth={3} strokeDasharray="7 5" strokeLinecap="round" />
       )}
       {segs.map((s, i) => (
-        <line key={i} x1={s.x1} y1={s.y1} x2={s.x2} y2={s.y2} stroke={mode === "compare" ? cmpColor(s.dv) : `hsl(${Math.round(s.hue)},85%,55%)`} strokeWidth={4.5} strokeLinecap="round" />
+        <path
+          key={i}
+          d={`M${s.x1.toFixed(1)},${s.y1.toFixed(1)}C${s.c1x.toFixed(1)},${s.c1y.toFixed(1)} ${s.c2x.toFixed(1)},${s.c2y.toFixed(1)} ${s.x2.toFixed(1)},${s.y2.toFixed(1)}`}
+          fill="none"
+          stroke={mode === "compare" ? cmpColor(s.dv) : `hsl(${Math.round(s.hue)},85%,55%)`}
+          strokeWidth={4.5}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
       ))}
     </g>
   );
@@ -291,23 +353,40 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
   const segs = useMemo(() => {
     const out = [];
     if (showLap && mapPath) {
+      const W = 3; // ventana de suavizado del delta (reduce ruido bucket a bucket)
       for (let i = 1; i < mapPath.length; i++) {
         const a = mapPath[i - 1], b = mapPath[i];
         if (a && b) {
-          // dv = derivada del delta = tiempo ganado/perdido en este tramo vs ref.
-          const dv = mapDelta && mapDelta[i] != null && mapDelta[i - 1] != null ? mapDelta[i] - mapDelta[i - 1] : 0;
-          out.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, hue: b.hue, dv });
+          // dv = pendiente del delta (tiempo ganado/perdido) promediada sobre W
+          // buckets → verde si ganás, rojo si perdés, sin saltar por ruido.
+          const j = Math.max(0, i - W);
+          const dv = mapDelta && mapDelta[i] != null && mapDelta[j] != null && i > j
+            ? (mapDelta[i] - mapDelta[j]) / (i - j)
+            : 0;
+          // Puntos de control Catmull-Rom (tensión 1/6) usando los vecinos, para
+          // dibujar cada tramo como una curva suave con uniones continuas.
+          const p0 = mapPath[i - 2] || a;
+          const p3 = mapPath[i + 1] || b;
+          const c1x = a.x + (b.x - p0.x) / 6, c1y = a.y + (b.y - p0.y) / 6;
+          const c2x = b.x - (p3.x - a.x) / 6, c2y = b.y - (p3.y - a.y) / 6;
+          out.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, c1x, c1y, c2x, c2y, hue: b.hue, dv });
         }
       }
     }
     return out;
   }, [mapPath, showLap, mapDelta]);
-  const maxSlope = useMemo(() => segs.reduce((m, s) => Math.max(m, Math.abs(s.dv || 0)), 0) || 1e-9, [segs]);
+  // Escala robusta para el color de comparación: percentil ~85 de |dv| en vez
+  // del máximo. Así un pico aislado (típico con una referencia mucho más rápida,
+  // o con tiempos reconstruidos de un CSV) no aplana todo el mapa a gris.
+  const maxSlope = useMemo(() => {
+    const vals = segs.map((s) => Math.abs(s.dv || 0)).filter((v) => v > 1e-6).sort((a, b) => a - b);
+    if (!vals.length) return 1e-9;
+    const p = vals[Math.min(vals.length - 1, Math.floor(vals.length * 0.85))];
+    return Math.max(p, 1e-4);
+  }, [segs]);
   const refD = useMemo(() => {
     if (!(showRef && mapPathRef)) return "";
-    let d = "", pen = false;
-    for (const p of mapPathRef) { if (!p) { pen = false; continue; } d += `${pen ? "L" : "M"}${p.x.toFixed(1)},${p.y.toFixed(1)}`; pen = true; }
-    return d;
+    return smoothPath(mapPathRef);
   }, [mapPathRef, showRef]);
   const hLap = showLap && hoverIdx != null && mapPath && mapPath[hoverIdx];
   const hRef = showRef && hoverIdx != null && mapPathRef && mapPathRef[hoverIdx];
@@ -357,8 +436,21 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
             if (!p) return null;
             return (
               <g key={`cn-${i}`}>
-                <circle cx={p.x} cy={p.y} r={3 * k} fill="rgba(255,255,255,0.55)" />
-                <text x={p.x + 5 * k} y={p.y - 4 * k} fontSize={13 * k} fill="rgba(255,255,255,0.75)" style={{ userSelect: "none" }}>{c.label}</text>
+                <circle cx={p.x} cy={p.y} r={3.5 * k} fill="white" stroke="black" strokeWidth={1.5 * k} />
+                <text
+                  x={p.x + 7 * k}
+                  y={p.y - 6 * k}
+                  fontSize={22 * k}
+                  fontWeight="bold"
+                  fill="white"
+                  stroke="black"
+                  strokeWidth={5 * k}
+                  strokeLinejoin="round"
+                  paintOrder="stroke"
+                  style={{ userSelect: "none", paintOrder: "stroke" }}
+                >
+                  {c.label}
+                </text>
               </g>
             );
           })}
@@ -385,6 +477,8 @@ export function AnalysisView() {
   const [telemetryDir, setTelemetryDir] = useState(null);
   const [labels, setLabels] = useState({});          // títulos personalizados por id
   const [query, setQuery] = useState("");            // búsqueda en el listado
+  const [srcFilter, setSrcFilter] = useState([]);    // fuentes activas: ibt|csv|live
+  const [typeFilter, setTypeFilter] = useState([]);  // tipos activos: race|qual|practice
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleInput, setTitleInput] = useState("");
   const [hoverIdx, setHoverIdx] = useState(null); // bucket bajo el cursor (charts↔mapa)
@@ -471,12 +565,38 @@ export function AnalysisView() {
   // Datos de pista de Lovely (curvas + sectores reales) por nombre de circuito.
   const trackData = useMemo(() => {
     if (!session) return null;
-    const key = (session.track || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-    if (!key) return null;
-    const t = lovelyTracks.tracks[key];
-    if (t) return t;
-    for (const k in lovelyTracks.tracks) if (k.includes(key) || key.includes(k)) return lovelyTracks.tracks[k];
-    return null;
+    const nrm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    // Usamos el nombre interno con config (trackKey) si está; si no, el display.
+    const target = nrm(session.trackKey || session.track);
+    if (!target) return null;
+    const tracks = lovelyTracks.tracks;
+    if (tracks[target]) return tracks[target];
+    // Match tolerante. Las claves de Lovely varían el orden ("snetterton circuit
+    // 300" vs "snetterton 300 circuit"), así que combinamos: prefijo común ×3
+    // (prioriza la base distintiva, ej "snetterton") + subsecuencia común (LCS,
+    // desambigua la config: "2000 full" vs "2000 moto") + bonus por config igual.
+    const cp = (a, b) => { let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++; return i; };
+    const lcs = (a, b) => {
+      const nA = a.length, nB = b.length;
+      let prev = new Array(nB + 1).fill(0);
+      for (let i = 1; i <= nA; i++) {
+        const cur = new Array(nB + 1).fill(0);
+        for (let j = 1; j <= nB; j++) cur[j] = a[i - 1] === b[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], cur[j - 1]);
+        prev = cur;
+      }
+      return prev[nB];
+    };
+    const digits = (s) => (s.match(/\d+/g) || []);
+    const dt = digits(target);
+    let best = null, bestScore = 0;
+    for (const k in tracks) {
+      let score = cp(k, target) * 3 + lcs(k, target);
+      if (k.includes(target) || target.includes(k)) score += Math.min(k.length, target.length);
+      const dk = digits(k);
+      if (dt.length && dk.length && dt.some((d) => dk.includes(d))) score += 50;
+      if (score > bestScore) { bestScore = score; best = tracks[k]; }
+    }
+    return bestScore >= 12 ? best : null;
   }, [session]);
   // Límites de sector reales (de Lovely) o el fallback de la sesión.
   const realSectorPcts = useMemo(() => {
@@ -594,14 +714,26 @@ export function AnalysisView() {
     if (window.fly?.getSessionLabels) window.fly.getSessionLabels().then((m) => setLabels(m || {}));
   }, []);
 
-  // Listado filtrado por la búsqueda (título/auto/tipo).
+  // Tipo de sesión normalizado a race|qual|practice (para el filtro por pills).
+  const sessionKind = (s) => {
+    const t = (s?.sessionType || "").toLowerCase();
+    if (/qual/.test(t)) return "qual";
+    if (/race/.test(t)) return "race";
+    if (/practice|test|warm/.test(t)) return "practice";
+    return "other";
+  };
+
+  // Listado filtrado por búsqueda + pills (fuente y tipo). Dentro de cada grupo
+  // los pills suman (OR); entre grupos se combinan (AND). Sin pills = todo.
   const shownSessions = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return sessions;
-    return sessions.filter((s) =>
-      `${labels[s.id] || ""} ${s.track || ""} ${s.car || ""} ${s.sessionType || ""}`.toLowerCase().includes(q)
-    );
-  }, [sessions, query, labels]);
+    return sessions.filter((s) => {
+      if (q && !`${labels[s.id] || ""} ${s.track || ""} ${s.car || ""} ${s.sessionType || ""}`.toLowerCase().includes(q)) return false;
+      if (srcFilter.length && !srcFilter.includes(s.source)) return false;
+      if (typeFilter.length && !typeFilter.includes(sessionKind(s))) return false;
+      return true;
+    });
+  }, [sessions, query, labels, srcFilter, typeFilter]);
 
   // Opciones de referencia (ghost): solo MISMO circuito + mismo auto que la
   // sesión actual. Match tolerante (igualdad, contención o prefijo común ≥6)
@@ -842,6 +974,43 @@ export function AnalysisView() {
               <ExternalLink className="size-3.5" />
             </button>
           </div>
+          {/* Pills de filtro: fuente + tipo de sesión */}
+          <div className="flex flex-wrap gap-1 mt-1.5">
+            {[
+              { g: "src", v: "ibt", label: "iRacing" },
+              { g: "src", v: "csv", label: "CSV" },
+              { g: "src", v: "live", label: "Grabado" },
+              { g: "type", v: "race", label: "Race" },
+              { g: "type", v: "qual", label: "Qualy" },
+              { g: "type", v: "practice", label: "Practice" },
+            ].map((p) => {
+              const sel = p.g === "src" ? srcFilter : typeFilter;
+              const setSel = p.g === "src" ? setSrcFilter : setTypeFilter;
+              const active = sel.includes(p.v);
+              return (
+                <button
+                  key={`${p.g}-${p.v}`}
+                  onClick={() => setSel((cur) => (cur.includes(p.v) ? cur.filter((x) => x !== p.v) : [...cur, p.v]))}
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border transition-colors ${
+                    active
+                      ? "bg-sky-500/20 border-sky-500/50 text-sky-300"
+                      : "bg-transparent border-border text-muted-foreground hover:bg-accent/50"
+                  }`}
+                >
+                  {p.label}
+                </button>
+              );
+            })}
+            {(srcFilter.length > 0 || typeFilter.length > 0) && (
+              <button
+                onClick={() => { setSrcFilter([]); setTypeFilter([]); }}
+                title="Limpiar filtros"
+                className="px-2 py-0.5 rounded-full text-[10px] font-semibold text-muted-foreground/70 hover:text-foreground"
+              >
+                ✕ limpiar
+              </button>
+            )}
+          </div>
         </div>
         <div className="flex-1 overflow-y-auto px-1.5 pb-2 space-y-1">
           {sessions.length === 0 && (
@@ -850,7 +1019,9 @@ export function AnalysisView() {
             </div>
           )}
           {sessions.length > 0 && shownSessions.length === 0 && (
-            <div className="px-2 py-4 text-[11px] text-muted-foreground">Sin resultados para "{query}".</div>
+            <div className="px-2 py-4 text-[11px] text-muted-foreground">
+              {query ? `Sin resultados para "${query}".` : "Ninguna sesión coincide con los filtros."}
+            </div>
           )}
           {shownSessions.map((s) => (
             <button
@@ -1169,30 +1340,42 @@ export function AnalysisView() {
                       </div>
                     )}
 
-                    <Chart title="Delta vs mejor vuelta (s)" n={charts.n} hoverIdx={hoverIdx} onHover={setHoverIdx} corners={corners}>
+                    <Chart title="Delta vs mejor vuelta (s)" n={charts.n} hoverIdx={hoverIdx} onHover={setHoverIdx} corners={corners}
+                      tooltip={[{ label: "Delta (s)", value: tSec(atv(charts.delta, hoverIdx)), color: "rgb(125,211,252)" }]}>
                       <line x1="0" y1="55" x2="1000" y2="55" stroke="rgba(255,255,255,0.15)" strokeWidth="1" strokeDasharray="4 4" />
                       <path d={seriesPath(charts.delta, charts.n, -charts.dMax, charts.dMax, 1000, 110)} fill="none" stroke="rgb(125,211,252)" strokeWidth="2" />
                     </Chart>
 
-                    <Chart title="Velocidad (km/h) — vuelta vs mejor" n={charts.n} hoverIdx={hoverIdx} onHover={setHoverIdx} corners={corners}>
+                    <Chart title="Velocidad (km/h) — vuelta vs mejor" n={charts.n} hoverIdx={hoverIdx} onHover={setHoverIdx} corners={corners}
+                      hasRef={charts.hasRef}
+                      tooltip={[{ label: "Vel (km/h)", value: tKmh(atv(charts.speedLap, hoverIdx)), ref: tKmh(atv(charts.speedBest, hoverIdx)), color: "rgb(52,211,153)" }]}>
                       {showRefLine && charts.hasRef && <path d={seriesPath(charts.speedBest, charts.n, charts.spMin, charts.spMax, 1000, 110)} fill="none" stroke="rgba(168,85,247,0.7)" strokeWidth="1.5" strokeDasharray="5 3" />}
                       {showLapLine && <path d={seriesPath(charts.speedLap, charts.n, charts.spMin, charts.spMax, 1000, 110)} fill="none" stroke="rgb(52,211,153)" strokeWidth="2" />}
                     </Chart>
 
-                    <Chart title="Acelerador (verde) y freno (rojo)" n={charts.n} hoverIdx={hoverIdx} onHover={setHoverIdx} corners={corners}>
+                    <Chart title="Acelerador (verde) y freno (rojo)" n={charts.n} hoverIdx={hoverIdx} onHover={setHoverIdx} corners={corners}
+                      hasRef={charts.hasRef}
+                      tooltip={[
+                        { label: "Acelerador", value: tPct(atv(charts.throttle, hoverIdx)), ref: tPct(atv(charts.throttleRef, hoverIdx)), color: "rgb(52,211,153)" },
+                        { label: "Freno", value: tPct(atv(charts.brake, hoverIdx)), ref: tPct(atv(charts.brakeRef, hoverIdx)), color: "rgb(239,68,68)" },
+                      ]}>
                       {showRefLine && charts.hasRef && <path d={seriesPath(charts.throttleRef, charts.n, 0, 1, 1000, 110)} fill="none" stroke="rgba(52,211,153,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
                       {showRefLine && charts.hasRef && <path d={seriesPath(charts.brakeRef, charts.n, 0, 1, 1000, 110)} fill="none" stroke="rgba(239,68,68,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
                       {showLapLine && <path d={seriesPath(charts.throttle, charts.n, 0, 1, 1000, 110)} fill="none" stroke="rgb(52,211,153)" strokeWidth="2" />}
                       {showLapLine && <path d={seriesPath(charts.brake, charts.n, 0, 1, 1000, 110)} fill="none" stroke="rgb(239,68,68)" strokeWidth="2" />}
                     </Chart>
 
-                    <Chart title="Volante (ángulo)" n={charts.n} hoverIdx={hoverIdx} onHover={setHoverIdx} corners={corners}>
+                    <Chart title="Volante (ángulo)" n={charts.n} hoverIdx={hoverIdx} onHover={setHoverIdx} corners={corners}
+                      hasRef={charts.hasRef}
+                      tooltip={[{ label: "Volante", value: tDeg(atv(charts.steer, hoverIdx)), ref: tDeg(atv(charts.steerRef, hoverIdx)), color: "rgb(234,179,8)" }]}>
                       <line x1="0" y1="55" x2="1000" y2="55" stroke="rgba(255,255,255,0.15)" strokeWidth="1" strokeDasharray="4 4" />
                       {showRefLine && charts.hasRef && <path d={seriesPath(charts.steerRef, charts.n, -charts.stMax, charts.stMax, 1000, 110)} fill="none" stroke="rgba(234,179,8,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
                       {showLapLine && <path d={seriesPath(charts.steer, charts.n, -charts.stMax, charts.stMax, 1000, 110)} fill="none" stroke="rgb(234,179,8)" strokeWidth="2" />}
                     </Chart>
 
-                    <Chart title="RPM" n={charts.n} hoverIdx={hoverIdx} onHover={setHoverIdx} corners={corners}>
+                    <Chart title="RPM" n={charts.n} hoverIdx={hoverIdx} onHover={setHoverIdx} corners={corners}
+                      hasRef={charts.hasRef}
+                      tooltip={[{ label: "RPM", value: tRpm(atv(charts.rpm, hoverIdx)), ref: tRpm(atv(charts.rpmRef, hoverIdx)), color: "rgb(129,140,248)" }]}>
                       {showRefLine && charts.hasRef && <path d={seriesPath(charts.rpmRef, charts.n, 0, charts.rpmMax, 1000, 110)} fill="none" stroke="rgba(129,140,248,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
                       {showLapLine && <path d={seriesPath(charts.rpm, charts.n, 0, charts.rpmMax, 1000, 110)} fill="none" stroke="rgb(129,140,248)" strokeWidth="2" />}
                     </Chart>

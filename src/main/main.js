@@ -199,10 +199,17 @@ app.whenReady().then(() => {
   }
 
   irsdk = new IrsdkClient();
+  // Etiquetas de pilotos: sincronizar al iniciar y ante cambios de config.
+  try { irsdk.setDriverTags(configStore.getDriverTags()); } catch (_) {}
+  configStore.onChange((data) => {
+    try { irsdk.setDriverTags((data && data.driverTags) || []); } catch (_) {}
+  });
 
   // Grabador de sesiones: recibe frames del SDK real y persiste por vuelta.
+  // Se puede desactivar (config.recordingEnabled) para no duplicar sesiones si
+  // el usuario ya loguea la telemetría desde iRacing (.ibt).
   recorder = new SessionRecorder(path.join(app.getPath('userData'), 'recordings'));
-  irsdk.setFrameSink((frame) => recorder.handleFrame(frame));
+  irsdk.setFrameSink((frame) => { if (configStore.isRecordingEnabled()) recorder.handleFrame(frame); });
   recorder.onChange(() => {
     if (dashboardWindow && !dashboardWindow.isDestroyed()) {
       dashboardWindow.webContents.send('recordings:changed');
@@ -313,6 +320,18 @@ ipcMain.handle('sectors:get', () => {
 ipcMain.handle('trackmap:get', (_e, trackName) => trackmapStore.getForTrack(trackName));
 ipcMain.handle('trackmap:dir', () => ({ dir: trackmapStore.dir() }));
 ipcMain.handle('trackmap:open', () => { shell.openPath(trackmapStore.dir()); return true; });
+
+ipcMain.handle('tags:get', () => (configStore ? configStore.getDriverTags() : []));
+ipcMain.handle('tags:set', (_e, tags) => (configStore ? configStore.setDriverTags(tags) : []));
+
+ipcMain.handle('recording:get', () => (configStore ? configStore.isRecordingEnabled() : true));
+ipcMain.handle('recording:set', (_e, v) => {
+  if (!configStore) return true;
+  const on = configStore.setRecordingEnabled(v);
+  // Al apagar, cerramos la sesión en curso para no dejar una parcial abierta.
+  if (!on && recorder) recorder.endSession();
+  return on;
+});
 
 ipcMain.handle('sessions:labels', () => (configStore ? configStore.get().sessionLabels || {} : {}));
 ipcMain.handle('sessions:set-label', (_e, { id, label }) => (configStore ? configStore.setSessionLabel(id, label) : {}));

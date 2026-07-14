@@ -1,10 +1,52 @@
 const { IRacingSDK } = require('irsdk-node');
 const { getSectorPoints, getTrackInfo } = require('./session-parser');
+const { ReferenceLapStore } = require('./reference-lap-store');
 
 const TIMEOUT = Math.floor((1 / 60) * 1000); // 60fps
 const MOCK_MODE = process.env.FLY_MOCK === '1';
 
 const TOTAL_SUBS = 24; // 3 sectores × 8 micro-sectores
+
+// Arregla mojibake: nombres de iRacing en UTF-8 que llegaron leídos como Latin-1
+// (ej. "José" → "José", "Müller" → "MÃ¼ller"). Detectamos el patrón típico
+// (bytes de continuación UTF-8 mostrados como Â/Ã…) y re-decodificamos. Si no hay
+// indicios de mojibake, devolvemos el string tal cual (no rompe nombres correctos).
+function fixMojibake(s) {
+  if (!s || typeof s !== 'string') return s;
+  // Delator: byte lider UTF-8 (U+00C2-U+00EF) seguido de uno de continuacion
+  // (U+0080-U+00BF). Code points explicitos para no depender de la codificacion.
+  if (!/[Â-ï][-¿]/.test(s)) return s;
+  try {
+    const fixed = Buffer.from(s, 'latin1').toString('utf8');
+    if (!fixed.includes('�')) return fixed; // sin caracter de reemplazo -> OK
+  } catch (_) {}
+  return s;
+}
+
+// Predicción del cambio de iRating al final de una carrera (algoritmo de
+// iRacing, port de irating-rs vía irdashies). `entries` = [{carIdx, rank, rating}]
+// con rank = posición de clase (1 = primero). Devuelve { carIdx: cambioRedondeado }.
+function predictIratingChanges(entries) {
+  const starters = entries.filter((e) => e.rating > 0 && e.rank > 0);
+  const N = starters.length;
+  if (N < 2) return {};
+  const BR = 1600 / Math.LN2; // ≈ 2308.09
+  const chance = (a, b) => {
+    const ea = Math.exp(-a / BR), eb = Math.exp(-b / BR);
+    const den = (1 - eb) * ea + (1 - ea) * eb;
+    return den > 0 ? ((1 - ea) * eb) / den : 0.5;
+  };
+  const out = {};
+  for (const e of starters) {
+    // expected = Σ chance(e, o) sobre todos (incluye self=0.5) menos 0.5.
+    let expected = -0.5;
+    for (const o of starters) expected += chance(e.rating, o.rating);
+    const fudge = (N / 2 - e.rank) / 100;
+    // actualScore = N - rank (a cuántos les ganaste). change ∝ actual - expected.
+    out[e.carIdx] = Math.round(((N - e.rank - expected - fudge) * 200) / N);
+  }
+  return out;
+}
 
 class IrsdkClient {
   constructor() {
@@ -72,6 +114,13 @@ class IrsdkClient {
     this._trackIdIr = null;    // TrackID de iRacing (para mapear a Garage 61)
     this._carIdIr = null;      // CarID de iRacing (para mapear a Garage 61)
     this._carName = null;      // cacheado del DriverInfo
+    // Etiquetas de pilotos (se setean desde main al cambiar la config).
+    this._driverTags = [];
+    // Reference-lap store (gaps relativos precisos por interpolación de tiempo).
+    this._refStore = null;
+    this._refTrackId = null;
+    this._refCarId = null;
+    this._refPrevLap = null;
     this._sectorPcts = null;   // límites de sectores reales (SplitTimeInfo)
     this._trackLength = null;  // largo de pista en km
   }
@@ -448,11 +497,39 @@ class IrsdkClient {
     this._trackIdIr = null;
     this._carIdIr = null;
     this._carName = null;
+    this._refTrackId = null;
+    this._refCarId = null;
+    this._refPrevLap = null;
+    if (this._refStore) this._refStore.reset();
     this._sectorPcts = null;
     this._trackLength = null;
     this._emitLight();
     this._emitHeavy();
     this._scheduleReconnect();
+  }
+
+  _refs() {
+    if (!this._refStore) { try { this._refStore = new ReferenceLapStore(); } catch (_) { this._refStore = null; } }
+    return this._refStore;
+  }
+
+  // Recibe las etiquetas de pilotos desde la config (main) y las precomputa
+  // normalizadas para el match por nombre.
+  setDriverTags(tags) {
+    const list = Array.isArray(tags) ? tags : [];
+    this._driverTags = list
+      .filter((t) => t && t.name && String(t.name).trim().length >= 3)
+      .map((t) => ({ norm: String(t.name).toLowerCase().replace(/[^a-z0-9]/g, ''), label: t.label || '', color: t.color || '#38bdf8' }));
+  }
+
+  _tagForName(name) {
+    if (!name || !this._driverTags.length) return null;
+    const nn = String(name).toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!nn) return null;
+    for (const t of this._driverTags) {
+      if (nn === t.norm || nn.includes(t.norm)) return { label: t.label, color: t.color };
+    }
+    return null;
   }
 
   _updateCache() {
@@ -491,13 +568,38 @@ class IrsdkClient {
     const lat = this._read(telemetry, 'Lat');
     const lon = this._read(telemetry, 'Lon');
 
-    // Detectar tipo de sesión del SessionInfo
-    // iRacing expone SessionType como string. Valores comunes:
-    //   "Practice", "Qualify", "Race"
-    const sessionType = (session && typeof session === 'object' && (session.SessionType || session.SessionName)) || 'Practice';
+    // Detectar tipo de sesión de la SESIÓN ACTUAL (por SessionNum). El YAML
+    // lista todas las sesiones del fin de semana en SessionInfo.Sessions; hay
+    // que elegir la del SessionNum actual (antes se leía session.SessionType,
+    // que NO existe en la raíz → siempre caía en "Practice").
+    const sessionType = this._resolveSessionType(session, this._read(telemetry, 'SessionNum'));
     const isRace = /race/i.test(sessionType);
     const isQual = /qual/i.test(sessionType);
     const isPractice = !isRace && !isQual;
+
+    // Reference-lap store: capturar trackId/carId una vez y alimentar la vuelta
+    // en curso del player; al cruzar meta, promover si es la mejor.
+    try {
+      if (this._refTrackId == null && session) {
+        const tid = parseInt(session?.WeekendInfo?.TrackID, 10);
+        if (isFinite(tid)) this._refTrackId = tid;
+      }
+      if (this._refCarId == null) {
+        const di = this.sdk.getDriverInfo();
+        const pIdx = this._read(telemetry, 'PlayerCarIdx') ?? 0;
+        const pd = di && di.Drivers && di.Drivers.find((d) => d.CarIdx === pIdx);
+        const cid = pd ? parseInt(pd.CarID, 10) : NaN;
+        if (isFinite(cid)) this._refCarId = cid;
+      }
+      const store = this._refs();
+      if (store && this._refTrackId != null && this._refCarId != null) {
+        store.feed(this._refTrackId, this._refCarId, lapDistPct, currentLap);
+        if (this._refPrevLap != null && lap > this._refPrevLap) {
+          store.commit(this._refTrackId, this._refCarId, lastLapTime);
+        }
+        this._refPrevLap = lap;
+      }
+    } catch (_) {}
 
     // Selección de la fuente de delta (mismo criterio que benofficial2 / bo2):
     //   - Qualify:  vs tu all-time best personal (LapDeltaToBestLap)
@@ -1087,7 +1189,12 @@ class IrsdkClient {
         const driverInfo = this.sdk.getDriverInfo();
         if (telemetry && driverInfo && driverInfo.Drivers && driverInfo.Drivers.length > 0) {
           const n = driverInfo.Drivers.length;
-          const playerIdx = this._read(telemetry, 'PlayerCarIdx') ?? 0;
+          // Auto de FOCO: el que sigue la cámara (CamCarIdx) si es válido, si no
+          // el propio (PlayerCarIdx). Así el relative se centra bien también en
+          // repetición / spectate (como irdashies).
+          const realPlayerIdx = this._read(telemetry, 'PlayerCarIdx') ?? 0;
+          const camIdx = this._read(telemetry, 'CamCarIdx');
+          const playerIdx = (typeof camIdx === 'number' && camIdx >= 0) ? camIdx : realPlayerIdx;
           // Si por alguna razón el array viene vacío, fallback
           const playerDriver = driverInfo.Drivers.find((d) => d.CarIdx === playerIdx) || driverInfo.Drivers[0];
           const playerRealClass = playerDriver ? playerDriver.CarClassID : 0;
@@ -1099,15 +1206,14 @@ class IrsdkClient {
             const lapDistPct = this._readCarIdxArray(telemetry, 'CarIdxLapDistPct', n, playerIdx);
             const trackSurfaceRaw = this._read(telemetry, 'CarIdxTrackSurface');
             const trackSurface = this._readCarIdxArray(telemetry, 'CarIdxTrackSurface', n, playerIdx);
-            // Sanity check: si el wrapper solo expone el surface del player
-            // (escalar), todos los demás índices vienen en 0 y se confunden
-            // con "not in world". Solo confiamos en el array si tiene
-            // valores plausibles (mezcla de 1/2/3, no todos 0 ni todos 3).
+            // Enum OFICIAL de iRacing (irsdk_TrkLoc): -1 NotInWorld · 0 OffTrack
+            // · 1 InPitStall · 2 ApproachingPits · 3 OnTrack.
+            // El array es fiable si el wrapper expone valores de OTROS autos
+            // (no solo el escalar del player). Si no, no filtramos por surface.
             const trackSurfaceIsReliable =
               Array.isArray(trackSurfaceRaw) &&
               trackSurfaceRaw.length > 1 &&
-              trackSurfaceRaw.some((v) => v === 1 || v === 2 || v === 3) &&
-              !(trackSurfaceRaw.every((v) => v === 3)); // no todos off-track
+              trackSurfaceRaw.some((v, idx) => idx !== playerIdx && v > -1);
             const onPitRoad = this._readCarIdxArray(telemetry, 'CarIdxOnPitRoad', n, playerIdx);
             const estTime = this._readCarIdxArray(telemetry, 'CarIdxEstTime', n, playerIdx);
             const lastLapTime = this._readCarIdxArray(telemetry, 'CarIdxLastLapTime', n, playerIdx);
@@ -1160,10 +1266,19 @@ class IrsdkClient {
           const pctSelf = lapDistPct[playerIdx];
           const estSelf = estA[playerIdx];
 
+          // ── Vuelta de referencia para gaps precisos (interpolación de tiempo
+          // por posición de pista). Preferida sobre EstTime cuando existe.
+          const refStore = this._refs();
+          const refReady = refStore && this._refTrackId != null && this._refCarId != null &&
+            refStore.has(this._refTrackId, this._refCarId);
+          const refLapT = refReady ? refStore.lapTime(this._refTrackId, this._refCarId) : 0;
+          const tSelf = refReady ? refStore.interp(this._refTrackId, this._refCarId, pctSelf) : null;
+          const playerOnPit = !!onPitRoad[playerIdx];
+
           // Construir la lista. En multiclase incluimos TODAS las clases: un
           // relative muestra a quien tenés cerca en pista, sea de tu clase o no.
           // Filtro por CarIdxTrackSurface para descartar "fantasmas" de slots viejos.
-          //   -1 inactivo · 0 not in world · 1 pit stall · 2 on track · 3 off track
+          //   -1 NotInWorld · 0 OffTrack · 1 InPitStall · 2 ApproachingPits · 3 OnTrack
           const drivers = [];
           for (let i = 0; i < n; i++) {
             const d = driverInfo.Drivers[i];
@@ -1174,13 +1289,15 @@ class IrsdkClient {
             const surface = trackSurface[i] ?? -1;
             const onPit = !!onPitRoad[i];
             const isPlayer = i === playerIdx;
-            // El player se muestra siempre (puede tener surface=-1 transitorio).
-            if (!isPlayer && (surface === -1 || surface === 0)) continue;
+            // Solo filtramos los que NO están en el mundo (garage/desconectado).
+            // Un auto off-track (0) sigue en pista y debe mostrarse (antes se
+            // filtraba por error, y desaparecía al irse largo).
+            if (!isPlayer && trackSurfaceIsReliable && surface === -1) continue;
 
-            const onTrack = trackSurfaceIsReliable ? surface === 2 : (isPlayer ? surface === 2 : true);
+            const onTrack = trackSurfaceIsReliable ? surface === 3 : true;
             const inPitStall = surface === 1;
-            const offTrack = trackSurfaceIsReliable ? surface === 3 : false;
-            const out = surface === -1 || surface === 0;
+            const offTrack = trackSurfaceIsReliable ? surface === 0 : false;
+            const out = trackSurfaceIsReliable ? surface === -1 : false;
 
             // ── Gap relativo con signo (algoritmo iRon) ──
             let relDelta = null;
@@ -1191,14 +1308,27 @@ class IrsdkClient {
             if (dPct > 0.5) dPct -= 1;
             else if (dPct < -0.5) dPct += 1;
 
+            let gapSource = null;
             if (isPlayer) {
               relDelta = 0;
-            } else if (estReal && estSelf > 0) {
+            } else if (refReady && tSelf != null && !onPit && !playerOnPit && refLapT > 0) {
+              // Vuelta de referencia: t(otro) − t(self), con wrap por meta. Es el
+              // método más preciso (respeta el ritmo real punto a punto).
+              const tCar = refStore.interp(this._refTrackId, this._refCarId, pctCar);
+              if (tCar != null) {
+                let dd = tCar - tSelf;
+                if (pctCar - pctSelf <= -0.5) dd += refLapT;
+                else if (pctCar - pctSelf >= 0.5) dd -= refLapT;
+                relDelta = dd;
+                gapSource = 'ref';
+              }
+            }
+            if (relDelta == null && !isPlayer && estReal && estSelf > 0) {
               // EstTime real: respeta el pace no uniforme a lo largo de la vuelta.
               const S = estSelf;
               const C = estA[i];
               relDelta = wrap ? (S > C ? (C - S) + L : (C - S) - L) : (C - S);
-            } else if (pctReal) {
+            } else if (relDelta == null && pctReal) {
               // Fallback robusto: distancia_relativa × tiempo_de_vuelta.
               relDelta = dPct * L;
             }
@@ -1214,15 +1344,16 @@ class IrsdkClient {
               lapDelta = Math.round(progCar - progSelf);
             }
 
+            const uname = fixMojibake(d.UserName || d.CarScreenName || "Driver");
             drivers.push({
               carIdx: i,
               position: pos,
               classPosition: cpos,
-              name: d.UserName || d.CarScreenName || "Driver",
-              abbrev: d.AbbrevName || null,
-              initials: d.Initials || null,
+              name: uname,
+              abbrev: fixMojibake(d.AbbrevName) || null,
+              initials: fixMojibake(d.Initials) || null,
               carNumber: d.CarNumber || "",
-              teamName: d.TeamName || "",
+              teamName: fixMojibake(d.TeamName) || "",
               irating: d.IRating || 0,
               licString: d.LicString || "",
               licColor: d.LicColor || 0,
@@ -1250,14 +1381,15 @@ class IrsdkClient {
               isFastest: bestLapTime[i] > 0 && bestLapByClass[d.CarClassID] != null &&
                 Math.abs(bestLapTime[i] - bestLapByClass[d.CarClassID]) < 0.001,
               sessionFlags: sessionFlagsArr[i] || 0,
+              tag: this._tagForName(uname),
             });
           }
 
-          // Total overall (solo slots con trackSurface válido)
-          let totalOverall = 0;
-          for (let i = 0; i < n; i++) {
-            const s = trackSurface[i] ?? -1;
-            if (s !== -1 && s !== 0) totalOverall++;
+          // Total overall = autos EN EL MUNDO (surface > -1), si el array es fiable.
+          let totalOverall = drivers.length;
+          if (trackSurfaceIsReliable) {
+            totalOverall = 0;
+            for (let i = 0; i < n; i++) { if ((trackSurface[i] ?? -1) > -1) totalOverall++; }
           }
           const totalInClass = drivers.filter((x) => x.isPlayerClass).length;
 
@@ -1269,6 +1401,51 @@ class IrsdkClient {
             if (cls.some((d) => !d.classPosition)) {
               cls.slice().sort((a, b) => (a.bestLapTime || 1e9) - (b.bestLapTime || 1e9))
                 .forEach((d, k) => { if (!d.classPosition) d.classPosition = k + 1; });
+            }
+          }
+
+          // ── Live positions: en carrera, recalculamos la posición de CLASE por
+          // progreso real (vuelta completada + fracción), así los adelantamientos
+          // se ven al instante (la posición oficial de iRacing tarda un poco).
+          if (isRace && lapReal) {
+            for (const cls of Object.values(byClass)) {
+              const prog = (d) => (lapCompleted[d.carIdx] || 0) + (d.lapDistPct || 0);
+              cls.slice().sort((a, b) => prog(b) - prog(a)).forEach((d, k) => {
+                d.classPosition = k + 1;
+                d.livePosition = true;
+              });
+            }
+          }
+
+          // ── Posiciones de clasificación (para el cambio de posición vs qualy)
+          // + flag de carrera oficial (para la predicción de iRating).
+          let official = false;
+          const qualPosByCarIdx = {};
+          try {
+            const sd = this.sdk.getSessionData();
+            official = !!(sd && sd.WeekendInfo && sd.WeekendInfo.Official);
+            const qr = sd && sd.QualifyResultsInfo && sd.QualifyResultsInfo.Results;
+            if (Array.isArray(qr)) {
+              for (const r of qr) {
+                if (r && r.CarIdx != null) {
+                  const cp = parseInt(r.ClassPosition, 10);
+                  qualPosByCarIdx[r.CarIdx] = isFinite(cp) ? cp + 1 : (parseInt(r.Position, 10) || null);
+                }
+              }
+            }
+          } catch (_) {}
+          for (const dr of drivers) {
+            const qp = qualPosByCarIdx[dr.carIdx];
+            if (qp != null && qp > 0) dr.qualClassPos = qp;
+          }
+          if (isRace && official) {
+            const byCls2 = {};
+            for (const dr of drivers) {
+              if (dr.irating > 0 && dr.classPosition > 0) (byCls2[dr.carClassId] ||= []).push(dr);
+            }
+            for (const list of Object.values(byCls2)) {
+              const changes = predictIratingChanges(list.map((d) => ({ carIdx: d.carIdx, rank: d.classPosition, rating: d.irating })));
+              for (const dr of list) if (changes[dr.carIdx] != null) dr.iratingChange = changes[dr.carIdx];
             }
           }
 
@@ -1319,6 +1496,23 @@ class IrsdkClient {
     return out;
   }
 
+  // Resuelve el objeto de la sesión actual (por SessionNum) desde el YAML raíz.
+  _currentSession(session, sessionNum) {
+    const sessions = session && session.SessionInfo && session.SessionInfo.Sessions;
+    if (!Array.isArray(sessions) || sessions.length === 0) return null;
+    if (sessionNum != null) {
+      const s = sessions.find((x) => x.SessionNum === sessionNum);
+      if (s) return s;
+      if (sessions[sessionNum]) return sessions[sessionNum];
+    }
+    return sessions[sessions.length - 1];
+  }
+
+  _resolveSessionType(session, sessionNum) {
+    const s = this._currentSession(session, sessionNum);
+    return (s && (s.SessionType || s.SessionName)) || 'Practice';
+  }
+
   _getSessionInfo() {
     const session = {
       type: "Practice",
@@ -1333,6 +1527,7 @@ class IrsdkClient {
     };
     if (this.sdk && this._connected) {
       // Telemetría (no falla por YAML)
+      let sessionNum = null;
       try {
         this.sdk.waitForData(0);
         const tel = this.sdk.getTelemetry();
@@ -1341,30 +1536,32 @@ class IrsdkClient {
           session.timeRemain = this._read(tel, 'SessionTimeRemain') || 0;
           session.lapCurrent = this._read(tel, 'Lap') || 0;
           session.incidents = this._read(tel, 'PlayerCarMyIncidentCount') || 0;
+          sessionNum = this._read(tel, 'SessionNum');
         }
       } catch (_) {}
       // SessionData puede tirar excepción por YAML malformado;
       // lo aíslamos en su propio try para que la telemetría siga funcionando.
       try {
         const sd = this.sdk.getSessionData();
-        if (sd) {
-          session.type = sd.SessionType || "Practice";
-          session.lapsTotal = parseInt(sd.SessionLapsTotal || "0", 10) || 0;
-          // MaxIncidents puede venir como "17", "unlimited", 0, etc.
-          if (sd.MaxIncidents != null) {
-            const m = parseInt(sd.MaxIncidents, 10);
-            if (!Number.isNaN(m) && m > 0) session.maxIncidents = m;
-          } else if (sd.SessionMaxIncidentCount != null) {
-            const m = parseInt(sd.SessionMaxIncidentCount, 10);
-            if (!Number.isNaN(m) && m > 0) session.maxIncidents = m;
+        const cur = this._currentSession(sd, sessionNum);
+        if (cur) {
+          session.type = cur.SessionType || cur.SessionName || "Practice";
+          // Vueltas totales: SessionLaps puede ser número o "unlimited".
+          const laps = parseInt(cur.SessionLaps, 10);
+          if (!Number.isNaN(laps) && laps > 0) session.lapsTotal = laps;
+          // Tiempo límite de la sesión: SessionTime en segundos (o "unlimited").
+          const tlim = parseFloat(cur.SessionTime);
+          if (isFinite(tlim) && tlim > 0) {
+            session.timeTotal = tlim;
+            session.timeRemain = Math.max(0, tlim - session.time);
           }
-          if (sd.SessionTimeLimit) {
-            const t = parseFloat(sd.SessionTimeLimit);
-            if (t > 0) {
-              session.timeRemain = Math.max(0, t - session.time);
-              session.timeTotal = t;
-            }
-          }
+        }
+        // Límite de incidentes: bajo WeekendInfo.WeekendOptions (o raíz).
+        const wo = sd && sd.WeekendInfo && sd.WeekendInfo.WeekendOptions;
+        const incRaw = (wo && (wo.IncidentLimit ?? wo.MaxIncidents)) ?? (sd && sd.MaxIncidents);
+        if (incRaw != null) {
+          const m = parseInt(incRaw, 10);
+          if (!Number.isNaN(m) && m > 0) session.maxIncidents = m;
         }
       } catch (_) {}
       // Si el sim no publicó timeRemain pero sí tenemos time + timeTotal, lo derivamos

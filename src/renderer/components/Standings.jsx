@@ -38,6 +38,26 @@ function formatIrating(ir) {
   return `${(ir / 1000).toFixed(1)}k`;
 }
 
+// Nombre según formato configurado: full | short (apellido, inicial) | initials.
+function fmtName(d, format) {
+  if (format === "initials" && d.initials) return d.initials;
+  if (format === "short" && d.abbrev) return d.abbrev;
+  return d.name;
+}
+
+// Cambio proyectado de iRating (solo carrera oficial).
+function RatingChange({ value, fontSize }) {
+  if (value == null || !isFinite(value)) return null;
+  const zero = value === 0;
+  const color = zero ? "rgba(255,255,255,0.4)" : value > 0 ? "rgb(74,222,128)" : "rgb(248,113,113)";
+  const arrow = zero ? "–" : value > 0 ? "▲" : "▼";
+  return (
+    <span className="font-mono font-bold text-right flex-shrink-0" style={{ color, width: "32px", fontSize: `${fontSize - 2}px` }} title="Cambio proyectado de iRating">
+      {zero ? "–" : `${arrow}${Math.abs(value)}`}
+    </span>
+  );
+}
+
 function formatLap(seconds) {
   if (seconds == null || !isFinite(seconds) || seconds <= 0) return "—";
   const m = Math.floor(seconds / 60);
@@ -173,7 +193,8 @@ export function Standings({ previewMode = false, injectedTelemetry = null, setti
             gap = d.bestLapTime - classFastestBest;
           }
         }
-        out.push({ ...d, _gap: gap, _lapsDown: lapsDown, _classId: cid, _isClassLeader: idx === 0 });
+        const posChange = isRace && d.qualClassPos > 0 && d.classPosition > 0 ? d.qualClassPos - d.classPosition : null;
+        out.push({ ...d, _gap: gap, _lapsDown: lapsDown, _classId: cid, _isClassLeader: idx === 0, _posChange: posChange });
       });
     }
 
@@ -291,6 +312,17 @@ const StandingsRow = React.memo(function StandingsRow({ driver: d, isPlayer, cfg
         {d.classPosition || "—"}
       </span>
 
+      {/* Cambio de posición vs qualy (solo carrera) */}
+      {cfg.showPositionChange && d._posChange != null && (
+        <span
+          className="font-mono font-bold text-center flex-shrink-0"
+          style={{ width: "22px", fontSize: `${cfg.fontSize - 2}px`, color: d._posChange > 0 ? "rgb(74,222,128)" : d._posChange < 0 ? "rgb(248,113,113)" : "rgba(255,255,255,0.4)" }}
+          title="Posiciones ganadas/perdidas vs clasificación"
+        >
+          {d._posChange === 0 ? "–" : `${d._posChange > 0 ? "▲" : "▼"}${Math.abs(d._posChange)}`}
+        </span>
+      )}
+
       {/* Número de auto */}
       {cfg.showCarNumber && (
         <span className="font-mono flex-shrink-0" style={{ color: "rgba(255,255,255,0.5)", minWidth: "22px", fontSize: `${cfg.fontSize - 1}px` }}>
@@ -305,8 +337,17 @@ const StandingsRow = React.memo(function StandingsRow({ driver: d, isPlayer, cfg
           style={{ color: isPlayer ? "white" : d.out ? "rgba(255,200,80,0.55)" : "rgba(255,255,255,0.92)" }}
           title={d.name}
         >
-          {d.name}
+          {fmtName(d, cfg.nameFormat)}
         </span>
+        {d.tag && d.tag.label && (
+          <span
+            className="font-bold tracking-wide px-1 rounded-sm flex-shrink-0 uppercase"
+            style={{ fontSize: "8px", background: `${d.tag.color}33`, color: d.tag.color, border: `1px solid ${d.tag.color}66` }}
+            title={`Etiqueta: ${d.tag.label}`}
+          >
+            {d.tag.label}
+          </span>
+        )}
         {d.onPit && (
           <span className="font-bold tracking-widest px-1 rounded-sm flex-shrink-0" style={{ fontSize: "8px", background: "rgba(249,115,22,0.18)", color: "rgb(249,115,22)" }}>
             PIT
@@ -332,10 +373,22 @@ const StandingsRow = React.memo(function StandingsRow({ driver: d, isPlayer, cfg
         </span>
       )}
 
+      {/* iRating proyectado (carrera oficial) */}
+      {cfg.showIRating && d.iratingChange != null && (
+        <RatingChange value={d.iratingChange} fontSize={cfg.fontSize} />
+      )}
+
       {/* Best lap */}
       {cfg.showBestLap && (
         <span className="font-mono flex-shrink-0 text-right" style={{ width: "58px", color: "rgba(255,255,255,0.85)", fontSize: `${cfg.fontSize - 1}px` }}>
           {formatLap(d.bestLapTime)}
+        </span>
+      )}
+
+      {/* Last lap */}
+      {cfg.showLastLap && (
+        <span className="font-mono flex-shrink-0 text-right" style={{ width: "58px", color: "rgba(255,255,255,0.6)", fontSize: `${cfg.fontSize - 1}px` }}>
+          {formatLap(d.lastLapTime)}
         </span>
       )}
 
@@ -354,12 +407,17 @@ const StandingsRow = React.memo(function StandingsRow({ driver: d, isPlayer, cfg
     a.classPosition === b.classPosition &&
     a._gap === b._gap &&
     a._lapsDown === b._lapsDown &&
+    a._posChange === b._posChange &&
     a.bestLapTime === b.bestLapTime &&
+    a.lastLapTime === b.lastLapTime &&
     a.irating === b.irating &&
+    a.iratingChange === b.iratingChange &&
     a.name === b.name &&
     a.onPit === b.onPit &&
     a.out === b.out &&
     a.carClassColor === b.carClassColor &&
+    (a.tag?.label || "") === (b.tag?.label || "") &&
+    (a.tag?.color || "") === (b.tag?.color || "") &&
     prev.isPlayer === next.isPlayer &&
     prev.multiClass === next.multiClass &&
     prev.cfg === next.cfg

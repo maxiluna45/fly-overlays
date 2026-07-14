@@ -67,10 +67,14 @@ function round6(v) { return v == null || !isFinite(v) ? null : Math.round(v * 1e
 
 // Extrae track / car / tipo de sesión + sectores + largo del YAML (o del nombre).
 function metaFromSessionInfo(yamlStr, fileName, sessionNum) {
-  const meta = { track: null, car: null, sessionType: null, sectorPcts: null, trackLength: null, bestLap: null, trackIdIr: null, carIdIr: null };
+  const meta = { track: null, trackKey: null, car: null, sessionType: null, sectorPcts: null, trackLength: null, bestLap: null, trackIdIr: null, carIdIr: null };
   const parsed = parseSessionInfo(yamlStr);
   if (parsed) {
     meta.track = parsed?.WeekendInfo?.TrackDisplayName || parsed?.WeekendInfo?.TrackName || null;
+    // Nombre interno con config (ej. "snetterton 300") para emparejar mapa/curvas.
+    meta.trackKey = parsed?.WeekendInfo?.TrackName
+      || [parsed?.WeekendInfo?.TrackDisplayName, parsed?.WeekendInfo?.TrackConfigName].filter(Boolean).join(' ')
+      || null;
     // IDs numéricos de iRacing (para mapear a Garage 61 por platform_id).
     const tid = parseInt(parsed?.WeekendInfo?.TrackID, 10);
     if (isFinite(tid)) meta.trackIdIr = tid;
@@ -166,6 +170,7 @@ function parseIbtMeta(filePath) {
     const meta = metaFromSessionInfo(yamlStr, fileName, sessionNum);
     return {
       track: meta.track,
+      trackKey: meta.trackKey,
       car: meta.car,
       sessionType: meta.sessionType,
       startedAt: Math.floor(stat.mtimeMs),
@@ -286,6 +291,7 @@ function parseIbtSession(filePath) {
 
   return {
     track: meta.track,
+    trackKey: meta.trackKey,
     car: meta.car,
     sessionType: meta.sessionType,
     sectorPcts: meta.sectorPcts,

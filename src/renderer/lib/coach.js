@@ -55,8 +55,14 @@ function nearestSample(lap, b) {
   return null;
 }
 function tAtBucket(lap, b) {
-  const s = nearestSample(lap, b);
-  return s && s.t != null ? s.t : null;
+  // Busca hacia afuera la muestra más cercana que tenga tiempo (t) válido —
+  // no basta con que exista la muestra (puede tener posición sin tiempo).
+  const n = lap?.samples?.length || 0;
+  for (let d = 0; d < n; d++) {
+    const a = at(lap, b - d); if (a && a.t != null) return a.t;
+    const c = at(lap, b + d); if (c && c.t != null) return c.t;
+  }
+  return null;
 }
 
 // Límites de sectores en índices de bucket. sectorPcts = puntos interiores
@@ -74,7 +80,9 @@ export function sectorTimes(lap, sectorPcts) {
   const b = sectorBoundaries(sectorPcts, n);
   const out = [];
   for (let i = 0; i < b.length - 1; i++) {
-    const t0 = tAtBucket(lap, b[i]);
+    // El primer sector arranca en la meta (t=0), no en el bucket 0 (que puede
+    // no tener dato). Los demás usan el tiempo acumulado en el límite anterior.
+    const t0 = i === 0 ? 0 : tAtBucket(lap, b[i]);
     const t1 = tAtBucket(lap, b[i + 1]);
     // El último sector cierra en meta: usamos lapTime como t final.
     const tEnd = i === b.length - 2 ? (lap.lapTime || t1) : t1;

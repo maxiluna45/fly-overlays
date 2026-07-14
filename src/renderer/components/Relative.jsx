@@ -70,6 +70,31 @@ function formatIrating(ir) {
   return `${(ir / 1000).toFixed(1)}k`;
 }
 
+// Nombre según formato: full | short (apellido, inicial) | initials.
+function fmtName(d, format) {
+  if (format === "initials" && d.initials) return d.initials;
+  if (format === "short" && d.abbrev) return d.abbrev;
+  return d.name;
+}
+
+// Cambio proyectado de iRating (▲ gana / ▼ pierde / – neutro). Solo en carrera
+// oficial (el payload solo trae iratingChange en ese caso).
+function RatingChange({ value, fontSize }) {
+  if (value == null || !isFinite(value)) return null;
+  const zero = value === 0;
+  const color = zero ? "rgba(255,255,255,0.4)" : value > 0 ? "rgb(74,222,128)" : "rgb(248,113,113)";
+  const arrow = zero ? "–" : value > 0 ? "▲" : "▼";
+  return (
+    <span
+      className="font-mono font-bold text-right flex-shrink-0"
+      style={{ color, fontSize: `${fontSize - 2}px`, minWidth: "34px" }}
+      title="Cambio proyectado de iRating"
+    >
+      {zero ? "–" : `${arrow}${Math.abs(value)}`}
+    </span>
+  );
+}
+
 // Convierte CarClassColor de iRacing a CSS. Puede venir como índice de paleta
 // (valores chicos, p.ej. el mock) o como entero RGB de 24 bits (p.ej. 0xFFFFFF).
 const CLASS_PALETTE = { 1: "#f6c915", 2: "#3b82f6", 3: "#ef4444", 4: "#22c55e", 5: "#a855f7", 6: "#f97316", 7: "#06b6d4" };
@@ -258,10 +283,20 @@ export function Relative({ previewMode = false, injectedTelemetry = null, settin
     const selfPos = sorted.findIndex((d) => d.carIdx === playerIdx);
     if (selfPos < 0) return [SELF_PLACEHOLDER];
 
-    const rows = [];
-    for (let i = ROWS_ABOVE; i >= 1; i--) rows.push(sorted[selfPos - i] || null);
-    rows.push(sorted[selfPos]); // player al centro
-    for (let i = 1; i <= ROWS_BELOW; i++) rows.push(sorted[selfPos + i] || null);
+    // Ventana centrada en el player, pero DESLIZADA cerca de los extremos para
+    // no dejar filas vacías (como iRon/iOverlay): solo queda hueco si el total
+    // de autos es menor que el tamaño de la ventana.
+    const total = ROWS_ABOVE + ROWS_BELOW + 1;
+    let start = selfPos - ROWS_ABOVE;
+    let end = selfPos + ROWS_BELOW; // inclusive
+    if (start < 0) { end += -start; start = 0; }
+    if (end > sorted.length - 1) { start -= end - (sorted.length - 1); end = sorted.length - 1; }
+    start = Math.max(0, start);
+
+    const rows = sorted.slice(start, end + 1);
+    // Si el campo es más chico que la ventana, completamos con null (huecos
+    // reales, inevitables) para mantener una altura estable.
+    while (rows.length < total) rows.push(null);
     return rows;
   }, [drivers, playerIdx, ROWS_ABOVE, ROWS_BELOW, SELF_PLACEHOLDER]);
 
@@ -271,14 +306,16 @@ export function Relative({ previewMode = false, injectedTelemetry = null, settin
     [drivers]
   );
 
-  // Strength of Field = promedio de iRating de los pilotos de LA CLASE del
-  // player (en multiclase no tiene sentido promediar clases distintas).
+  // Strength of Field de LA CLASE del player, con la fórmula oficial de iRacing
+  // (no un promedio simple): SoF = 1600/ln2 · ln( n / Σ 2^(-iR/1600) ).
   const sof = useMemo(() => {
     if (drivers.length === 0) return null;
     const pool = drivers.filter((d) => d.isPlayerClass !== false && (d.irating || 0) > 0);
-    const list = pool.length > 0 ? pool : drivers;
-    const sum = list.reduce((acc, d) => acc + (d.irating || 0), 0);
-    return list.length > 0 ? sum / list.length : null;
+    const list = (pool.length > 0 ? pool : drivers).filter((d) => (d.irating || 0) > 0);
+    if (list.length === 0) return null;
+    const BR = 1600 / Math.LN2;
+    const denom = list.reduce((acc, d) => acc + Math.pow(2, -d.irating / 1600), 0);
+    return denom > 0 ? Math.round(BR * Math.log(list.length / denom)) : null;
   }, [drivers]);
 
   return (
@@ -556,8 +593,20 @@ const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg, multiCl
           style={{ color: nameColor, fontSize: `${cfg.fontSize + 0.5}px` }}
           title={d.name}
         >
-          {d.name}
+          {fmtName(d, cfg.nameFormat)}
         </span>
+        {d.tag && d.tag.label && (
+          <span
+            className="font-bold tracking-wide px-1 rounded-sm flex-shrink-0 uppercase"
+            style={{
+              fontSize: "8px", height: "13px", display: "inline-flex", alignItems: "center",
+              background: `${d.tag.color}33`, color: d.tag.color, border: `1px solid ${d.tag.color}66`,
+            }}
+            title={`Etiqueta: ${d.tag.label}`}
+          >
+            {d.tag.label}
+          </span>
+        )}
         {d.out && (
           <span
             className="font-bold tracking-widest px-1 rounded-sm flex-shrink-0"
@@ -671,6 +720,11 @@ const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg, multiCl
         </div>
       )}
 
+      {/* iRating proyectado a ganar/perder (carrera oficial) */}
+      {cfg.showIRating && d.iratingChange != null && (
+        <RatingChange value={d.iratingChange} fontSize={cfg.fontSize} />
+      )}
+
       {/* Vueltas de diferencia en carrera (+1L = te va a doblar, -1L = lo doblás) */}
       {!isPlayer && d.lapDelta ? (
         <span
@@ -705,6 +759,7 @@ const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg, multiCl
     prev.driver.gapToPlayer === next.driver.gapToPlayer &&
     prev.driver.isAhead === next.driver.isAhead &&
     prev.driver.lapDelta === next.driver.lapDelta &&
+    prev.driver.iratingChange === next.driver.iratingChange &&
     prev.driver.onPit === next.driver.onPit &&
     prev.driver.offTrack === next.driver.offTrack &&
     prev.driver.out === next.driver.out &&
@@ -715,6 +770,8 @@ const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg, multiCl
     prev.driver.carNumber === next.driver.carNumber &&
     prev.driver.name === next.driver.name &&
     prev.driver.carClassColor === next.driver.carClassColor &&
+    (prev.driver.tag?.label || "") === (next.driver.tag?.label || "") &&
+    (prev.driver.tag?.color || "") === (next.driver.tag?.color || "") &&
     prev.isPlayer === next.isPlayer &&
     prev.multiClass === next.multiClass &&
     prev.cfg === next.cfg
