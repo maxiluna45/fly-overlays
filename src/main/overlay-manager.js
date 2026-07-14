@@ -40,7 +40,7 @@ const REGISTRY = {
     name: 'Radar',
     description: 'Proximidad de autos cercanos (spotter)',
     entry: 'radar.html',
-    minWidth: 160,
+    minWidth: 70,
     minHeight: 200,
   },
 };

@@ -7,6 +7,8 @@ import {
   Power,
   X,
   Plus,
+  Pencil,
+  Check,
 } from "lucide-react";
 import { OVERLAY_META } from "../overlay-catalog.js";
 import { Relative } from "./Relative.jsx";
@@ -898,47 +900,87 @@ const SettingField = ({ label, suffix, children }) => (
 const TAG_COLORS = ["#38bdf8", "#22c55e", "#ef4444", "#eab308", "#a855f7", "#f97316"];
 function DriverTagsManager() {
   const [tags, setTags] = React.useState([]);
+  const [editingId, setEditingId] = React.useState(null); // null = agregando nueva
   const [name, setName] = React.useState("");
   const [label, setLabel] = React.useState("");
   const [color, setColor] = React.useState(TAG_COLORS[0]);
+  const [saved, setSaved] = React.useState(false); // confirmación "Guardado ✓"
+  const savedTimer = React.useRef(null);
 
-  React.useEffect(() => {
+  const load = React.useCallback(() => {
     if (window.fly?.getDriverTags) window.fly.getDriverTags().then((t) => setTags(Array.isArray(t) ? t : []));
   }, []);
+  // Cargamos al montar y cada vez que la ventana recupera foco (por si se
+  // editaron desde otro lado), así la lista nunca queda desactualizada.
+  React.useEffect(() => {
+    load();
+    window.addEventListener("focus", load);
+    return () => window.removeEventListener("focus", load);
+  }, [load]);
+  React.useEffect(() => () => { if (savedTimer.current) clearTimeout(savedTimer.current); }, []);
 
+  const flashSaved = () => {
+    setSaved(true);
+    if (savedTimer.current) clearTimeout(savedTimer.current);
+    savedTimer.current = setTimeout(() => setSaved(false), 1800);
+  };
+  // Escribe a disco vía IPC y confirma. La lista ES el estado persistido.
   const persist = async (next) => {
     setTags(next);
-    if (window.fly?.setDriverTags) await window.fly.setDriverTags(next);
+    if (window.fly?.setDriverTags) { await window.fly.setDriverTags(next); flashSaved(); }
   };
-  const add = () => {
+
+  const resetForm = () => { setEditingId(null); setName(""); setLabel(""); setColor(TAG_COLORS[0]); };
+  const startEdit = (t) => { setEditingId(t.id); setName(t.name); setLabel(t.label); setColor(t.color || TAG_COLORS[0]); };
+  const save = () => {
     const nm = name.trim(), lb = (label.trim() || "TAG").toUpperCase().slice(0, 8);
     if (nm.length < 3) return;
-    persist([...tags, { id: `t${Date.now()}`, name: nm, label: lb, color }]);
-    setName(""); setLabel("");
+    if (editingId) {
+      persist(tags.map((t) => (t.id === editingId ? { ...t, name: nm, label: lb, color } : t)));
+    } else {
+      persist([...tags, { id: `t${Date.now()}`, name: nm, label: lb, color }]);
+    }
+    resetForm();
   };
-  const remove = (id) => persist(tags.filter((t) => t.id !== id));
+  const remove = (id) => { if (editingId === id) resetForm(); persist(tags.filter((t) => t.id !== id)); };
+
+  const canSave = name.trim().length >= 3;
 
   return (
     <div className="space-y-2 border-t border-border pt-3">
-      <div className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Etiquetas de pilotos</div>
+      <div className="flex items-center justify-between">
+        <div className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Etiquetas de pilotos</div>
+        {/* Estado de persistencia: confirma que quedó guardado en disco. */}
+        {saved
+          ? <span className="flex items-center gap-1 text-[9px] font-semibold text-emerald-400"><Check className="size-3" /> Guardado</span>
+          : <span className="text-[9px] text-muted-foreground/50">{tags.length} guardada{tags.length === 1 ? "" : "s"}</span>}
+      </div>
       <p className="text-[10px] text-muted-foreground/70 leading-tight">
-        Marcá pilotos por nombre (amigo, peligroso, streamer…). Aparecen junto al nombre en Relative y Standings.
+        Marcá pilotos por nombre (amigo, peligroso, streamer…). Aparecen junto al nombre en Relative y Standings. Se guardan al presionar <span className="font-semibold text-foreground/80">Guardar</span> y quedan persistidas.
       </p>
+
+      {/* Lista de etiquetas guardadas: editar o quitar cada una. */}
       <div className="space-y-1">
         {tags.length === 0 && <div className="text-[10px] text-muted-foreground/60">Sin etiquetas todavía.</div>}
         {tags.map((t) => (
-          <div key={t.id} className="flex items-center gap-1.5 text-[11px]">
+          <div key={t.id} className={`flex items-center gap-1.5 text-[11px] rounded-md px-1 py-0.5 ${editingId === t.id ? "bg-accent/50" : ""}`}>
             <span className="font-bold uppercase px-1 rounded-sm shrink-0" style={{ fontSize: "8px", background: `${t.color}33`, color: t.color, border: `1px solid ${t.color}66` }}>{t.label}</span>
             <span className="flex-1 truncate text-foreground/90" title={t.name}>{t.name}</span>
-            <button onClick={() => remove(t.id)} title="Eliminar" className="text-muted-foreground/60 hover:text-red-400 shrink-0"><X className="size-3" /></button>
+            <button onClick={() => startEdit(t)} title="Editar" className="text-muted-foreground/60 hover:text-sky-400 shrink-0"><Pencil className="size-3" /></button>
+            <button onClick={() => remove(t.id)} title="Quitar" className="text-muted-foreground/60 hover:text-red-400 shrink-0"><X className="size-3" /></button>
           </div>
         ))}
       </div>
-      <div className="space-y-1.5">
+
+      {/* Formulario de alta / edición. */}
+      <div className="space-y-1.5 rounded-md border border-border bg-card/40 p-2">
+        <div className="text-[9px] uppercase tracking-widest text-muted-foreground/70">{editingId ? "Editar etiqueta" : "Nueva etiqueta"}</div>
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nombre del piloto (ej. John Smith)"
+          onKeyDown={(e) => { if (e.key === "Enter" && canSave) save(); }}
           className="w-full bg-background border border-border rounded-md text-[11px] px-2 py-1 text-foreground" />
         <div className="flex items-center gap-1.5">
           <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Etiqueta" maxLength={8}
+            onKeyDown={(e) => { if (e.key === "Enter" && canSave) save(); }}
             className="flex-1 min-w-0 bg-background border border-border rounded-md text-[11px] px-2 py-1 text-foreground" />
           <div className="flex items-center gap-1 shrink-0">
             {TAG_COLORS.map((c) => (
@@ -947,10 +989,18 @@ function DriverTagsManager() {
             ))}
           </div>
         </div>
-        <button onClick={add} disabled={name.trim().length < 3}
-          className="w-full flex items-center justify-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold bg-accent/60 hover:bg-accent transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
-          <Plus className="size-3" /> Agregar etiqueta
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button onClick={save} disabled={!canSave}
+            className="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold bg-emerald-600/80 hover:bg-emerald-600 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+            {editingId ? <><Check className="size-3" /> Guardar cambios</> : <><Plus className="size-3" /> Guardar etiqueta</>}
+          </button>
+          {editingId && (
+            <button onClick={resetForm}
+              className="px-2 py-1 rounded-md text-[10px] font-semibold bg-accent/60 hover:bg-accent transition-colors">
+              Cancelar
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

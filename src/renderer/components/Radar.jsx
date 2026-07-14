@@ -16,6 +16,16 @@ function classColorCss(c) {
   return `#${hex}`;
 }
 
+// Líneas de la grilla con forma de "huso": gruesas al medio, afinándose a una
+// punta en los extremos. Combinado con un gradiente de opacidad, se desvanecen
+// suavemente hacia las puntas. (viewBox en unidades 0..100.)
+function vLens(cx, cy, L, w) {
+  return `M ${cx} ${cy - L} C ${cx + w} ${cy - L * 0.45} ${cx + w} ${cy + L * 0.45} ${cx} ${cy + L} C ${cx - w} ${cy + L * 0.45} ${cx - w} ${cy - L * 0.45} ${cx} ${cy - L} Z`;
+}
+function hLens(cx, cy, L, w) {
+  return `M ${cx - L} ${cy} C ${cx - L * 0.45} ${cy - w} ${cx + L * 0.45} ${cy - w} ${cx + L} ${cy} C ${cx + L * 0.45} ${cy + w} ${cx - L * 0.45} ${cy + w} ${cx - L} ${cy} Z`;
+}
+
 // Color por cercanía (metros): más cerca = más urgente.
 function proxColor(dist) {
   const d = Math.abs(dist);
@@ -27,7 +37,10 @@ function proxColor(dist) {
 
 export function Radar({ previewMode = false, injectedTelemetry = null, settings = {} }) {
   const cfg = useMemo(() => ({
-    range: 60,               // alcance adelante/atrás en metros
+    range: 60,               // alcance adelante/atrás en metros (para el aviso de aproximación)
+    carLength: 4.6,          // largo del auto en metros. iRacing NO lo expone; con este
+                             // valor dibujamos ambos autos a escala y se ve el solape
+                             // nariz-a-cola exacto (monomarca F4 → ajustá acá si hace falta).
     showClassColors: true,
     showDistance: true,
     fontSize: 12,
@@ -94,15 +107,53 @@ export function Radar({ previewMode = false, injectedTelemetry = null, settings 
   const twoLeft = clr === 4;
   const twoRight = clr === 5;
 
-  // ── Geometría del radar (viewBox 120×160, player al centro) ──
-  const W = 120, H = 160, CX = 60, CY = 80, PAD = 12;
-  const yFor = (m) => Math.max(PAD, Math.min(H - PAD, CY - (m / range) * (H / 2 - PAD)));
+  // ── Modelo en PORCENTAJE del contenedor (HTML/CSS: degradados + transiciones
+  // suaves, fondo transparente). Escala CERCANA: cada auto a su LARGO REAL, así la
+  // trompa/cola quedan a escala y el solape lado a lado es exacto. ──
+  const carLength = Math.max(2, cfg.carLength || 4.6);            // m
+  const winM = Math.max(6, cfg.spotterRange || carLength * 3);    // m visibles (±) a escala
+  const carH = (carLength / (2 * winM)) * 100;                    // alto del auto en % del alto
+  const clamp01 = (v) => Math.max(0, Math.min(100, v));
+  const yPct = (m) => 50 - (m / winM) * 50;                       // metros → % (adelante=arriba)
+  const bandTop = (m) => yPct(m + carLength / 2);                 // % del borde delantero (trompa)
+  const inWin = (m) => Math.abs(m) <= winM + carLength / 2;
+  // Opacidad por cercanía: más cerca = más opaco.
+  const proxOp = (m, max) => Math.max(0.1, Math.min(max, max * (1 - Math.abs(m) / (winM + carLength))));
 
   const nearest = useMemo(() => {
     let best = null;
     for (const d of nearby) if (best == null || Math.abs(d.relMeters) < Math.abs(best.relMeters)) best = d;
     return best;
   }, [nearby]);
+
+  // Auto de al lado: CarLeftRight da el LADO; la ALTURA (y qué auto) la tomamos del
+  // solapado más cercano. iRacing no dice qué auto puntual hay a cada lado.
+  let besideCar = null;
+  for (const d of nearby) {
+    if (Math.abs(d.relMeters) > winM + carLength) continue;
+    if (besideCar == null || Math.abs(d.relMeters) < Math.abs(besideCar.relMeters)) besideCar = d;
+  }
+  const besideIdx = (hasLeft || hasRight) && besideCar ? besideCar.carIdx : null;
+  const besideM = besideCar ? besideCar.relMeters : 0;
+
+  // Listas para el render.
+  const longCars = nearby.filter((d) => inWin(d.relMeters) && d.carIdx !== besideIdx); // adelante/atrás
+  const farCars = nearby.filter((d) => !inWin(d.relMeters));                            // aproximándose
+
+  // Franja lateral (roja) para un lado. Siempre montada; opacidad 0 si no hay auto
+  // → transición suave de aparición/desaparición. Corte recto en trompa/cola.
+  const redBand = (side, active) => {
+    const op = active ? proxOp(besideM, 0.82) : 0;
+    const top = clamp01(active ? bandTop(besideM) : 50 - carH / 2);
+    const dir = side === "left" ? "to left" : "to right";
+    return (
+      <div key={side} style={{
+        position: "absolute", [side]: 0, width: "52%", top: `${top}%`, height: `${carH}%`,
+        background: `linear-gradient(${dir}, rgba(239,68,68,0.95), rgba(239,68,68,0))`,
+        opacity: op, transition: "top 140ms linear, opacity 200ms ease", pointerEvents: "none", willChange: "top, opacity",
+      }} />
+    );
+  };
 
   return (
     <div
@@ -118,75 +169,80 @@ export function Radar({ previewMode = false, injectedTelemetry = null, settings 
         <div className="absolute top-1 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded text-[9px] font-bold tracking-widest z-50 shadow" style={{ pointerEvents: "none", background: "rgb(59,130,246)", color: "white" }}>EDIT MODE · F7 TO LOCK</div>
       )}
 
-      <div className="absolute inset-0 flex flex-col p-1">
-        <div
-          className="flex-1 relative overflow-hidden"
-          style={{
-            borderRadius: 10,
-            background: "rgba(14,16,22,0.86)",
-            border: "1px solid rgba(255,255,255,0.06)",
-            boxShadow: "0 8px 28px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.04)",
-            backdropFilter: "blur(10px)",
-          }}
-        >
-          <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" className="w-full h-full block">
-            {/* Zonas de aviso lateral (spotter). Se encienden con CarLeftRight. */}
-            <rect x="0" y="0" width="14" height={H} fill={hasLeft ? (twoLeft ? "rgba(239,68,68,0.30)" : "rgba(249,115,22,0.26)") : "rgba(255,255,255,0.02)"} />
-            <rect x={W - 14} y="0" width="14" height={H} fill={hasRight ? (twoRight ? "rgba(239,68,68,0.30)" : "rgba(249,115,22,0.26)") : "rgba(255,255,255,0.02)"} />
+      {/* Radar estilo RaceLab: SIN FONDO (transparente sobre el juego). */}
+      <div className="absolute inset-0 overflow-hidden" style={{ pointerEvents: "none" }}>
+        {/* Degradados AMARILLOS de autos adelante/atrás: llenan el hueco entre tu
+            auto y el rival. Más OPACO pegado a TU auto (centro) y se desvanece a
+            medida que se aleja hacia el rival. Opacidad total según cercanía. */}
+        {longCars.map((d) => {
+          const m = d.relMeters, ahead = m >= 0;
+          const nearEdge = clamp01(yPct(m - (ahead ? 1 : -1) * (carLength / 2))); // borde que te enfrenta
+          const top = ahead ? nearEdge : 50;
+          const height = Math.max(0, ahead ? 50 - nearEdge : nearEdge - 50);
+          const dir = ahead ? "to top" : "to bottom"; // opaco en TU auto (centro) → transparente hacia el rival
+          return (
+            <div key={d.carIdx} style={{
+              position: "absolute", left: 0, width: "100%", top: `${top}%`, height: `${height}%`,
+              background: `linear-gradient(${dir}, rgba(250,204,21,0.9), rgba(250,204,21,0))`,
+              opacity: proxOp(m, 0.6), transition: "top 140ms linear, height 140ms linear, opacity 200ms ease",
+              pointerEvents: "none",
+            }} />
+          );
+        })}
 
-            {/* Ejes/guías */}
-            <line x1={CX} y1={PAD} x2={CX} y2={H - PAD} stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
-            <line x1="16" y1={CY} x2={W - 16} y2={CY} stroke="rgba(255,255,255,0.06)" strokeWidth="1" strokeDasharray="3 3" />
+        {/* Degradados ROJOS laterales (auto al lado), a su altura real. */}
+        {redBand("left", hasLeft)}
+        {redBand("right", hasRight)}
 
-            {/* Autos cercanos (columna central, por distancia longitudinal real) */}
-            {nearby.map((d) => {
-              const y = yFor(d.relMeters);
-              const col = cfg.showClassColors && multiClass ? (classColorCss(d.carClassColor) || proxColor(d.relMeters)) : proxColor(d.relMeters);
-              return (
-                <g key={d.carIdx}>
-                  <rect x={CX - 8} y={y - 6} width="16" height="12" rx="3"
-                    fill={col} stroke="rgba(0,0,0,0.5)" strokeWidth="1" />
-                  {d.carNumber ? (
-                    <text x={CX} y={y + 3.2} textAnchor="middle" fontSize="8" fontWeight="bold"
-                      fill="rgba(0,0,0,0.85)" style={{ userSelect: "none" }}>{d.carNumber}</text>
-                  ) : null}
-                </g>
-              );
-            })}
+        {/* Grilla: 1 línea vertical + 3 horizontales, con forma de huso (gruesas al
+            medio, afinándose y desvaneciéndose hacia las puntas). Cortas. */}
+        <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="absolute inset-0 w-full h-full" style={{ pointerEvents: "none" }}>
+          <defs>
+            <linearGradient id="gLineV" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stopColor="white" stopOpacity="0" />
+              <stop offset="0.5" stopColor="white" stopOpacity="0.55" />
+              <stop offset="1" stopColor="white" stopOpacity="0" />
+            </linearGradient>
+            <linearGradient id="gLineH" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0" stopColor="white" stopOpacity="0" />
+              <stop offset="0.5" stopColor="white" stopOpacity="0.45" />
+              <stop offset="1" stopColor="white" stopOpacity="0" />
+            </linearGradient>
+          </defs>
+          <path d={vLens(50, 50, 24, 0.55)} fill="url(#gLineV)" />
+          {/* Horizontales: superior e inferior EXACTAS en la trompa/cola de tu
+              auto (50 ∓ carH/2); la del medio en el centro. */}
+          {[50 - carH / 2, 50, 50 + carH / 2].map((y, i) => (
+            <path key={i} d={hLens(50, y, 20, 0.45)} fill="url(#gLineH)" />
+          ))}
+        </svg>
 
-            {/* Marcadores de auto AL LADO (del spotter del juego) */}
-            {hasLeft && (
-              <>
-                <rect x="20" y={CY - 7} width="16" height="14" rx="3" fill={twoLeft ? "rgb(239,68,68)" : "rgb(249,115,22)"} stroke="rgba(0,0,0,0.5)" strokeWidth="1" />
-                {twoLeft && <rect x="20" y={CY - 24} width="16" height="14" rx="3" fill="rgb(239,68,68)" stroke="rgba(0,0,0,0.5)" strokeWidth="1" />}
-              </>
-            )}
-            {hasRight && (
-              <>
-                <rect x={W - 36} y={CY - 7} width="16" height="14" rx="3" fill={twoRight ? "rgb(239,68,68)" : "rgb(249,115,22)"} stroke="rgba(0,0,0,0.5)" strokeWidth="1" />
-                {twoRight && <rect x={W - 36} y={CY - 24} width="16" height="14" rx="3" fill="rgb(239,68,68)" stroke="rgba(0,0,0,0.5)" strokeWidth="1" />}
-              </>
-            )}
+        {/* Tu auto: rectángulo blanco con forma de auto (más largo que ancho),
+            bordes redondeados, al centro y a escala real. */}
+        <div style={{
+          position: "absolute", left: "50%", top: "50%", height: `${carH}%`, aspectRatio: "0.42",
+          transform: "translate(-50%,-50%)", background: "white", borderRadius: "16%",
+          boxShadow: "0 0 5px rgba(0,0,0,0.55)", pointerEvents: "none",
+        }} />
 
-            {/* Auto del player (al centro, apuntando hacia arriba) */}
-            <g>
-              <polygon points={`${CX},${CY - 11} ${CX + 8},${CY + 8} ${CX - 8},${CY + 8}`} fill="rgb(234,179,8)" stroke="rgba(0,0,0,0.6)" strokeWidth="1" />
-            </g>
-          </svg>
+        {/* Aviso de autos que se aproximan de más lejos que la ventana a escala. */}
+        {farCars.map((d) => {
+          const ahead = d.relMeters >= 0;
+          return (
+            <div key={`far-${d.carIdx}`} className="font-mono font-bold" style={{
+              position: "absolute", left: "50%", transform: "translateX(-50%)",
+              [ahead ? "top" : "bottom"]: 2, fontSize: "10px", color: proxColor(d.relMeters),
+              textShadow: "0 1px 2px rgba(0,0,0,0.8)", pointerEvents: "none",
+            }}>{ahead ? "▲" : "▼"}{Math.abs(d.relMeters).toFixed(0)}</div>
+          );
+        })}
 
-          {/* Distancia del más cercano */}
-          {cfg.showDistance && nearest && (
-            <div className="absolute bottom-1 left-1/2 -translate-x-1/2 font-mono font-bold" style={{ fontSize: `${cfg.fontSize}px`, color: proxColor(nearest.relMeters) }}>
-              {nearest.relMeters >= 0 ? "▲" : "▼"} {Math.abs(nearest.relMeters).toFixed(0)}m
-            </div>
-          )}
-          {/* Sin datos aún */}
-          {!rel && (
-            <div className="absolute inset-0 flex items-center justify-center text-center px-2" style={{ color: "rgba(255,255,255,0.4)", fontSize: `${cfg.fontSize - 1}px` }}>
-              {telemetry.connected ? "Esperando autos…" : "Sin conexión con iRacing"}
-            </div>
-          )}
-        </div>
+        {/* Sin datos aún */}
+        {!rel && (
+          <div className="absolute inset-0 flex items-center justify-center text-center px-2" style={{ color: "rgba(255,255,255,0.45)", fontSize: `${cfg.fontSize - 1}px`, textShadow: "0 1px 2px rgba(0,0,0,0.8)" }}>
+            {telemetry.connected ? "Esperando autos…" : "Sin conexión con iRacing"}
+          </div>
+        )}
       </div>
     </div>
   );
