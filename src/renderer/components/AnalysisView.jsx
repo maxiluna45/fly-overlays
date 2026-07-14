@@ -566,8 +566,13 @@ export function AnalysisView() {
   const trackData = useMemo(() => {
     if (!session) return null;
     const nrm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    // Quita prefijos genéricos ("circuit de", "autódromo", etc.) que hacen que
+    // nombres distintos colisionen (ej. "Circuit de Spa" vs "Circuit de
+    // Barcelona" comparten "circuitde" → matcheaba mal). Solo prefijo, seguro.
+    const GEN = ["circuitde", "circuito", "circuit", "autodromonazionale", "autodromointernacional", "autodromo", "autodrome", "the"];
+    const strip = (s) => { for (const p of GEN) if (s.startsWith(p)) return s.slice(p.length); return s; };
     // Usamos el nombre interno con config (trackKey) si está; si no, el display.
-    const target = nrm(session.trackKey || session.track);
+    const target = strip(nrm(session.trackKey || session.track));
     if (!target) return null;
     const tracks = lovelyTracks.tracks;
     if (tracks[target]) return tracks[target];
@@ -589,12 +594,13 @@ export function AnalysisView() {
     const digits = (s) => (s.match(/\d+/g) || []);
     const dt = digits(target);
     let best = null, bestScore = 0;
-    for (const k in tracks) {
+    for (const kRaw in tracks) {
+      const k = strip(kRaw);
       let score = cp(k, target) * 3 + lcs(k, target);
       if (k.includes(target) || target.includes(k)) score += Math.min(k.length, target.length);
       const dk = digits(k);
       if (dt.length && dk.length && dt.some((d) => dk.includes(d))) score += 50;
-      if (score > bestScore) { bestScore = score; best = tracks[k]; }
+      if (score > bestScore) { bestScore = score; best = tracks[kRaw]; }
     }
     return bestScore >= 12 ? best : null;
   }, [session]);
