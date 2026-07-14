@@ -97,6 +97,10 @@ const DEFAULTS = {
   // Carpeta de telemetría .ibt de iRacing. null = usar la ruta por defecto
   // (Documentos/iRacing/telemetry). El usuario puede sobreescribirla.
   telemetryDir: null,
+  // Títulos personalizados por sesión de análisis, keyed por id de sesión.
+  sessionLabels: {},
+  // Auth de iRacing Data API: { email, enc } (password cifrado con safeStorage).
+  iracingAuth: null,
 };
 
 class ConfigStore {
@@ -116,6 +120,8 @@ class ConfigStore {
           overlays: { ...DEFAULTS.overlays, ...(parsed.overlays || {}) },
           hotkeys: { ...DEFAULTS.hotkeys, ...(parsed.hotkeys || {}) },
           telemetryDir: parsed.telemetryDir ?? DEFAULTS.telemetryDir,
+          sessionLabels: parsed.sessionLabels || {},
+          iracingAuth: parsed.iracingAuth || null,
         };
       }
     } catch (err) {
@@ -163,6 +169,22 @@ class ConfigStore {
     this._save();
     this._emit();
     return this.data.telemetryDir;
+  }
+
+  setIracingAuth(auth) {
+    this.data.iracingAuth = auth || null;
+    this._save();
+    return this.data.iracingAuth;
+  }
+
+  setSessionLabel(id, label) {
+    if (!id) return this.data.sessionLabels;
+    if (!this.data.sessionLabels) this.data.sessionLabels = {};
+    const clean = (label || '').trim();
+    if (clean) this.data.sessionLabels[id] = clean;
+    else delete this.data.sessionLabels[id]; // vacío = volver al nombre por defecto
+    this._save();
+    return this.data.sessionLabels;
   }
 
   setBounds(id, bounds) {

@@ -307,8 +307,21 @@ export function Dashboard() {
           </div>
 
           <div className="h-12 border-t border-border bg-card/40 flex items-center px-3 gap-2 shrink-0">
-            <span className="text-xs text-muted-foreground">
+            <span className="text-xs text-muted-foreground shrink-0">
               {Object.values(config.overlays).filter((o) => o.enabled).length} activo
+            </span>
+            <span className="hidden md:flex items-center gap-2 text-[10px] text-muted-foreground/70 ml-1 overflow-hidden">
+              {[
+                [config.hotkeys?.toggleLock || "F7", "mover overlays"],
+                [config.hotkeys?.openPanel || "F8", "panel"],
+                ["F6", "forzar mostrar"],
+                ["F9", "preview"],
+              ].map(([k, label]) => (
+                <span key={k} className="flex items-center gap-1 whitespace-nowrap">
+                  <kbd className="px-1 py-px rounded bg-muted/60 border border-border font-mono text-[9px] text-foreground/80">{k}</kbd>
+                  {label}
+                </span>
+              ))}
             </span>
             <div className="flex-1" />
             <Button

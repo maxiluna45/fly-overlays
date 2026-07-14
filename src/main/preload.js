@@ -48,7 +48,17 @@ contextBridge.exposeInMainWorld('fly', {
   deleteRecording: (id) => ipcRenderer.invoke('recordings:delete', id),
   getIbtSessions: () => ipcRenderer.invoke('ibt:list'),
   getIbtSession: (id) => ipcRenderer.invoke('ibt:get', id),
+  deleteTelemetry: (id) => ipcRenderer.invoke('ibt:delete', id),
   importIbt: () => ipcRenderer.invoke('ibt:import'),
+  getSessionLabels: () => ipcRenderer.invoke('sessions:labels'),
+  setSessionLabel: (id, label) => ipcRenderer.invoke('sessions:set-label', { id, label }),
+  // Garage 61
+  getGarage61Url: (trackIdIr, carIdIr) => ipcRenderer.invoke('garage61:url', trackIdIr, carIdIr),
+  openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
+  // Mapas de pista (SVG manual)
+  getTrackMap: (trackName) => ipcRenderer.invoke('trackmap:get', trackName),
+  getTrackmapDir: () => ipcRenderer.invoke('trackmap:dir'),
+  openTrackmapFolder: () => ipcRenderer.invoke('trackmap:open'),
   getTelemetryDir: () => ipcRenderer.invoke('ibt:telemetry-dir'),
   pickTelemetryDir: () => ipcRenderer.invoke('ibt:pick-folder'),
   resetTelemetryDir: () => ipcRenderer.invoke('ibt:reset-folder'),

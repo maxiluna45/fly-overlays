@@ -124,6 +124,17 @@ class OverlayManager {
     return next;
   }
 
+  // Bloquea/desbloquea TODOS los overlays con un estado uniforme: si alguno
+  // está desbloqueado, bloquea todos; si están todos bloqueados, desbloquea
+  // todos. Evita que se desincronicen (que unos queden movibles y otros no).
+  toggleAllUnlocked() {
+    const ids = [...this.windows.keys()];
+    const anyUnlocked = ids.some((id) => this.isUnlocked(id));
+    const next = !anyUnlocked;
+    for (const id of ids) this.setUnlocked(id, next);
+    return next;
+  }
+
   // Aplica updates a un overlay: actualiza config + ventana correspondiente
   applyOverlayUpdate(id, updates) {
     const ov = this.config.getOverlay(id);

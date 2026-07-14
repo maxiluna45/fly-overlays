@@ -1,4 +1,5 @@
 const { IRacingSDK } = require('irsdk-node');
+const { getSectorPoints, getTrackInfo } = require('./session-parser');
 
 const TIMEOUT = Math.floor((1 / 60) * 1000); // 60fps
 const MOCK_MODE = process.env.FLY_MOCK === '1';
@@ -66,8 +67,13 @@ class IrsdkClient {
     // Sink al que enviamos un frame de telemetría por tick (solo con SDK real).
     this._frameSink = null;
     this._recPrevLap = null;   // para detectar cruce de meta (vuelta completada)
-    this._trackName = null;    // cacheado del SessionInfo
+    this._trackName = null;    // cacheado del SessionInfo (display, para título)
+    this._trackKey = null;     // nombre interno con config (para mapa)
+    this._trackIdIr = null;    // TrackID de iRacing (para mapear a Garage 61)
+    this._carIdIr = null;      // CarID de iRacing (para mapear a Garage 61)
     this._carName = null;      // cacheado del DriverInfo
+    this._sectorPcts = null;   // límites de sectores reales (SplitTimeInfo)
+    this._trackLength = null;  // largo de pista en km
   }
 
   // Registra un consumidor de frames crudos (el SessionRecorder). Se llama con
@@ -438,7 +444,12 @@ class IrsdkClient {
     // y no arrastra el número de vuelta viejo.
     this._recPrevLap = null;
     this._trackName = null;
+    this._trackKey = null;
+    this._trackIdIr = null;
+    this._carIdIr = null;
     this._carName = null;
+    this._sectorPcts = null;
+    this._trackLength = null;
     this._emitLight();
     this._emitHeavy();
     this._scheduleReconnect();
@@ -467,12 +478,18 @@ class IrsdkClient {
     const sessionTime = this._read(telemetry, 'SessionTime') || 0;
     const lastLapTime = this._read(telemetry, 'LapLastLapTime') || 0;
 
-    // Inputs para la grabación (pedales, volante, marcha, RPM).
+    // Inputs y dinámica para la grabación (pedales, volante, marcha, RPM,
+    // fuerzas G, yaw y posición GPS para el mapa del circuito).
     const throttle = this._read(telemetry, 'Throttle') || 0;
     const brake = this._read(telemetry, 'Brake') || 0;
     const steer = this._read(telemetry, 'SteeringWheelAngle') || 0;
     const gear = this._read(telemetry, 'Gear') || 0;
     const rpm = this._read(telemetry, 'RPM') || 0;
+    const gLat = this._read(telemetry, 'LatAccel') || 0;
+    const gLon = this._read(telemetry, 'LongAccel') || 0;
+    const yaw = this._read(telemetry, 'YawRate') || 0;
+    const lat = this._read(telemetry, 'Lat');
+    const lon = this._read(telemetry, 'Lon');
 
     // Detectar tipo de sesión del SessionInfo
     // iRacing expone SessionType como string. Valores comunes:
@@ -603,13 +620,33 @@ class IrsdkClient {
       // Metadata de track/car cacheada (barata de leer una vez por conexión).
       if (!this._trackName && session && session.WeekendInfo) {
         this._trackName = session.WeekendInfo.TrackDisplayName || session.WeekendInfo.TrackName || null;
+        // Nombre interno de iRacing (incluye la config, ej. "snetterton 300")
+        // — mejor clave para emparejar la geometría del mapa que el display name.
+        this._trackKey = session.WeekendInfo.TrackName
+          || [session.WeekendInfo.TrackDisplayName, session.WeekendInfo.TrackConfigName].filter(Boolean).join(' ')
+          || null;
+        const tid = parseInt(session.WeekendInfo.TrackID, 10);
+        this._trackIdIr = isFinite(tid) ? tid : null;
+      }
+      // Sectores reales + largo de pista (para análisis por sector y metros).
+      if (!this._sectorPcts && session) {
+        try {
+          const pts = getSectorPoints(session);
+          if (Array.isArray(pts) && pts.length > 0) this._sectorPcts = pts;
+          const ti = getTrackInfo(session);
+          if (ti && ti.length > 0) this._trackLength = ti.length; // km
+        } catch (_) {}
       }
       if (!this._carName) {
         try {
           const di = this.sdk.getDriverInfo();
           const pIdx = this._read(telemetry, 'PlayerCarIdx') ?? 0;
           const pd = di && di.Drivers && di.Drivers.find((d) => d.CarIdx === pIdx);
-          if (pd) this._carName = pd.CarScreenName || pd.CarPath || null;
+          if (pd) {
+            this._carName = pd.CarScreenName || pd.CarPath || null;
+            const cid = parseInt(pd.CarID, 10);
+            this._carIdIr = isFinite(cid) ? cid : null;
+          }
         } catch (_) {}
       }
 
@@ -638,10 +675,20 @@ class IrsdkClient {
         gear,
         rpm,
         speed,
+        gLat,
+        gLon,
+        yaw,
+        lat,
+        lon,
         onTrack: this._cachedData.onTrack,
         sessionType,
         track: this._trackName,
+        trackKey: this._trackKey || null,
+        trackIdIr: this._trackIdIr || null,
+        carIdIr: this._carIdIr || null,
         car: this._carName,
+        sectorPcts: this._sectorPcts || null,
+        trackLength: this._trackLength || null,
         completedLap,
       });
     }

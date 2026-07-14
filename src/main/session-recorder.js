@@ -45,8 +45,13 @@ class SessionRecorder {
       id: String(startedAt),
       startedAt,
       track: f.track || 'Desconocido',
+      trackKey: f.trackKey || null,
+      trackIdIr: f.trackIdIr || null,
+      carIdIr: f.carIdIr || null,
       car: f.car || 'Desconocido',
       sessionType: f.sessionType || 'Practice',
+      sectorPcts: Array.isArray(f.sectorPcts) ? f.sectorPcts : null,
+      trackLength: f.trackLength || null,
       key: this._sessionKey(f),
       laps: [],
     };
@@ -75,6 +80,11 @@ class SessionRecorder {
         g: f.gear | 0,
         rpm: Math.round(f.rpm || 0),
         t: round3(f.currentLapTime),
+        gLat: round3(f.gLat),
+        gLon: round3(f.gLon),
+        yaw: round3(f.yaw),
+        lat: round6(f.lat),
+        lon: round6(f.lon),
       };
     }
   }
@@ -197,6 +207,7 @@ class SessionRecorder {
 
 function round2(v) { return v == null || !isFinite(v) ? null : Math.round(v * 100) / 100; }
 function round3(v) { return v == null || !isFinite(v) ? null : Math.round(v * 1000) / 1000; }
+function round6(v) { return v == null || !isFinite(v) ? null : Math.round(v * 1e6) / 1e6; }
 
 // Agrupa los 24 micro-sectores en 3 sectores (suma por tercios). Devuelve null
 // si algún micro falta.

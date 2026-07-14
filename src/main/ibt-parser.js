@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { parseSessionInfo } = require('./session-parser');
+const { parseSessionInfo, getSectorPoints, getTrackInfo } = require('./session-parser');
 
 // Parser de archivos .ibt (telemetría en disco de iRacing).
 // Formato binario (ver irsdk_defines.h del SDK oficial):
@@ -63,23 +63,40 @@ function readVar(buf, base, vh) {
 
 function round2(v) { return v == null || !isFinite(v) ? null : Math.round(v * 100) / 100; }
 function round3(v) { return v == null || !isFinite(v) ? null : Math.round(v * 1000) / 1000; }
+function round6(v) { return v == null || !isFinite(v) ? null : Math.round(v * 1e6) / 1e6; }
 
-// Extrae track / car / tipo de sesión del YAML (o del nombre de archivo).
+// Extrae track / car / tipo de sesión + sectores + largo del YAML (o del nombre).
 function metaFromSessionInfo(yamlStr, fileName, sessionNum) {
-  const meta = { track: null, car: null, sessionType: null };
+  const meta = { track: null, car: null, sessionType: null, sectorPcts: null, trackLength: null, bestLap: null, trackIdIr: null, carIdIr: null };
   const parsed = parseSessionInfo(yamlStr);
   if (parsed) {
     meta.track = parsed?.WeekendInfo?.TrackDisplayName || parsed?.WeekendInfo?.TrackName || null;
+    // IDs numéricos de iRacing (para mapear a Garage 61 por platform_id).
+    const tid = parseInt(parsed?.WeekendInfo?.TrackID, 10);
+    if (isFinite(tid)) meta.trackIdIr = tid;
+    const idx = parsed?.DriverInfo?.DriverCarIdx;
     try {
-      const idx = parsed?.DriverInfo?.DriverCarIdx;
       const drivers = parsed?.DriverInfo?.Drivers || [];
       const me = drivers.find((d) => d.CarIdx === idx) || drivers[0];
-      if (me) meta.car = me.CarScreenName || me.CarPath || null;
+      if (me) {
+        meta.car = me.CarScreenName || me.CarPath || null;
+        const cid = parseInt(me.CarID, 10);
+        if (isFinite(cid)) meta.carIdIr = cid;
+      }
     } catch (_) {}
     try {
       const sessions = parsed?.SessionInfo?.Sessions || [];
       const s = sessions.find((x) => x.SessionNum === sessionNum) || (sessionNum != null ? sessions[sessionNum] : null) || sessions[sessions.length - 1];
       if (s) meta.sessionType = s.SessionType || s.SessionName || null;
+      // Nota: ResultsPositions/ResultsFastestLap del YAML suelen NO incluir al
+      // jugador (o listar el fastest de otro auto), así que el mejor tiempo se
+      // calcula aparte muestreando LapLastLapTime en parseIbtMeta.
+    } catch (_) {}
+    try {
+      const pts = getSectorPoints(parsed);
+      if (Array.isArray(pts) && pts.length > 0) meta.sectorPcts = pts;
+      const ti = getTrackInfo(parsed);
+      if (ti && ti.length > 0) meta.trackLength = ti.length;
     } catch (_) {}
   }
   // Fallbacks desde el nombre de archivo (ej: "car_track 2024-01-01 20h00m00s.ibt").
@@ -89,7 +106,10 @@ function metaFromSessionInfo(yamlStr, fileName, sessionNum) {
   return meta;
 }
 
-// Lee solo header + sessionInfo (rápido) para el listado. No recorre muestras.
+// Lee header + sessionInfo + una muestra (rápido) para el listado. Leemos el
+// SessionNum de la primera muestra para saber a QUÉ sesión (practice/qualy/race)
+// corresponde el .ibt — el YAML lista todas las del fin de semana, y sin esto
+// caeríamos siempre en la última (Race).
 function parseIbtMeta(filePath) {
   let fd;
   try {
@@ -104,15 +124,55 @@ function parseIbtMeta(filePath) {
       fs.readSync(fd, si, 0, h.sessionInfoLen, h.sessionInfoOffset);
       yamlStr = si.toString('utf8').replace(/\0+$/g, '');
     }
+    // SessionNum (de la primera muestra) + mejor vuelta (mínimo LapLastLapTime).
+    // Leemos varHeaders para ubicar los canales y muestreamos el buffer. El
+    // mejor tiempo del jugador NO está fiable en el YAML de resultados, así que
+    // lo sacamos de su telemetría real.
+    let sessionNum = null, bestLap = null;
+    try {
+      if (h.numVars > 0 && h.varHeaderOffset > 0 && h.bufLen > 0 && h.bufOffset > 0) {
+        const vhBuf = Buffer.alloc(h.numVars * 144);
+        fs.readSync(fd, vhBuf, 0, vhBuf.length, h.varHeaderOffset);
+        let sn = null, vLast = null;
+        for (let i = 0; i < h.numVars; i++) {
+          const b = i * 144;
+          if (b + 144 > vhBuf.length) break;
+          let name = vhBuf.toString('utf8', b + 16, b + 48);
+          const nul = name.indexOf('\0');
+          if (nul >= 0) name = name.slice(0, nul);
+          if (name === 'SessionNum') sn = { type: vhBuf.readInt32LE(b), offset: vhBuf.readInt32LE(b + 4) };
+          else if (name === 'LapLastLapTime') vLast = { type: vhBuf.readInt32LE(b), offset: vhBuf.readInt32LE(b + 4) };
+        }
+        const numSamples = Math.floor((stat.size - h.bufOffset) / h.bufLen);
+        if (numSamples > 0) {
+          const rec = Buffer.alloc(h.bufLen);
+          fs.readSync(fd, rec, 0, h.bufLen, h.bufOffset);
+          if (sn) sessionNum = readVar(rec, 0, sn);
+          // LapLastLapTime queda constante durante toda la vuelta siguiente, así
+          // que muestrear cada ~1s (step) capta el tiempo de cada vuelta completada.
+          // Tomamos el mínimo (> 1s para descartar valores basura/parciales).
+          if (vLast) {
+            const step = Math.max(30, Math.ceil(numSamples / 5000));
+            for (let s = 0; s < numSamples; s += step) {
+              fs.readSync(fd, rec, 0, h.bufLen, h.bufOffset + s * h.bufLen);
+              const t = readVar(rec, 0, vLast);
+              if (t != null && t > 1 && (bestLap == null || t < bestLap)) bestLap = t;
+            }
+          }
+        }
+      }
+    } catch (_) {}
     const fileName = path.basename(filePath);
-    const meta = metaFromSessionInfo(yamlStr, fileName, null);
+    const meta = metaFromSessionInfo(yamlStr, fileName, sessionNum);
     return {
       track: meta.track,
       car: meta.car,
       sessionType: meta.sessionType,
       startedAt: Math.floor(stat.mtimeMs),
       lapCount: null, // se conoce recién al abrir (parse completo)
-      bestLap: null,
+      bestLap: bestLap != null ? Math.round(bestLap * 1000) / 1000 : null,
+      trackIdIr: meta.trackIdIr,
+      carIdIr: meta.carIdIr,
     };
   } catch (err) {
     return null;
@@ -146,6 +206,11 @@ function parseIbtSession(filePath) {
     sp: vars['Speed'],
     g: vars['Gear'],
     rpm: vars['RPM'],
+    gLat: vars['LatAccel'],
+    gLon: vars['LongAccel'],
+    yaw: vars['YawRate'],
+    lat: vars['Lat'],
+    lon: vars['Lon'],
     onTrack: vars['IsOnTrack'],
     sessNum: vars['SessionNum'],
   };
@@ -207,6 +272,11 @@ function parseIbtSession(filePath) {
         g: (readVar(buf, base, V.g) | 0),
         rpm: Math.round(readVar(buf, base, V.rpm) || 0),
         t: round3(t),
+        gLat: round3(readVar(buf, base, V.gLat)),
+        gLon: round3(readVar(buf, base, V.gLon)),
+        yaw: round3(readVar(buf, base, V.yaw)),
+        lat: round6(readVar(buf, base, V.lat)),
+        lon: round6(readVar(buf, base, V.lon)),
       };
     }
   }
@@ -218,6 +288,10 @@ function parseIbtSession(filePath) {
     track: meta.track,
     car: meta.car,
     sessionType: meta.sessionType,
+    sectorPcts: meta.sectorPcts,
+    trackLength: meta.trackLength,
+    trackIdIr: meta.trackIdIr,
+    carIdIr: meta.carIdIr,
     startedAt: Math.floor(stat.mtimeMs),
     laps,
   };

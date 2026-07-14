@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, globalShortcut, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { IrsdkClient } = require('./irsdk-client');
@@ -6,6 +6,8 @@ const { ConfigStore } = require('./config-store');
 const { OverlayManager, REGISTRY } = require('./overlay-manager');
 const { SessionRecorder } = require('./session-recorder');
 const { parseIbtMeta, parseIbtSession } = require('./ibt-parser');
+const { parseCsvMeta, parseCsvSession } = require('./csv-parser');
+const trackmapStore = require('./trackmap-store');
 
 const isDev = process.env.NODE_ENV === 'development';
 
@@ -242,9 +244,9 @@ app.whenReady().then(() => {
 
   const config = configStore.get();
   globalShortcut.register(config.hotkeys.toggleLock, () => {
-    for (const id of overlayManager.windows.keys()) {
-      overlayManager.toggleUnlocked(id);
-    }
+    // Estado uniforme para todos (evita que queden desincronizados: unos
+    // movibles y otros no).
+    overlayManager.toggleAllUnlocked();
   });
   globalShortcut.register(config.hotkeys.openPanel, toggleDashboard);
   globalShortcut.register('F6', () => {
@@ -290,10 +292,9 @@ ipcMain.handle('config:set-overlay', (_e, id, updates) => {
 ipcMain.handle('config:registry', () => REGISTRY);
 
 ipcMain.handle('overlay:toggle-lock', () => {
+  const next = overlayManager.toggleAllUnlocked();
   const results = {};
-  for (const id of overlayManager.windows.keys()) {
-    results[id] = overlayManager.toggleUnlocked(id);
-  }
+  for (const id of overlayManager.windows.keys()) results[id] = next;
   return results;
 });
 
@@ -307,6 +308,14 @@ ipcMain.handle('sectors:get', () => {
   }
   return irsdk.getSectors();
 });
+
+// === Mapas de pista (SVG dejados manualmente por el usuario) ===
+ipcMain.handle('trackmap:get', (_e, trackName) => trackmapStore.getForTrack(trackName));
+ipcMain.handle('trackmap:dir', () => ({ dir: trackmapStore.dir() }));
+ipcMain.handle('trackmap:open', () => { shell.openPath(trackmapStore.dir()); return true; });
+
+ipcMain.handle('sessions:labels', () => (configStore ? configStore.get().sessionLabels || {} : {}));
+ipcMain.handle('sessions:set-label', (_e, { id, label }) => (configStore ? configStore.setSessionLabel(id, label) : {}));
 
 ipcMain.handle('recordings:list', () => (recorder ? recorder.listSessions() : []));
 ipcMain.handle('recordings:get', (_e, id) => (recorder ? recorder.getSession(id) : null));
@@ -352,12 +361,21 @@ ipcMain.handle('ibt:import', async () => {
   try {
     const parent = dashboardWindow && !dashboardWindow.isDestroyed() ? dashboardWindow : null;
     const res = await dialog.showOpenDialog(parent, {
-      title: 'Importar archivo de telemetría .ibt',
-      filters: [{ name: 'iRacing telemetry', extensions: ['ibt'] }],
+      title: 'Importar telemetría (.ibt de iRacing o .csv)',
+      filters: [
+        { name: 'Telemetría (.ibt, .csv)', extensions: ['ibt', 'csv'] },
+        { name: 'iRacing telemetry (.ibt)', extensions: ['ibt'] },
+        { name: 'CSV', extensions: ['csv'] },
+      ],
       properties: ['openFile'],
     });
     if (res.canceled || !res.filePaths[0]) return null;
     const full = res.filePaths[0];
+    if (full.toLowerCase().endsWith('.csv')) {
+      const meta = parseCsvMeta(full);
+      if (!meta) return null;
+      return { id: `csvpath:${full}`, source: 'csv', imported: true, file: path.basename(full), ...meta };
+    }
     const meta = parseIbtMeta(full);
     if (!meta) return null;
     return { id: `ibtpath:${full}`, source: 'ibt', imported: true, file: path.basename(full), ...meta };
@@ -371,14 +389,23 @@ ipcMain.handle('ibt:list', () => {
   const dir = iracingTelemetryDir();
   let files = [];
   try {
-    files = fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.ibt'));
+    files = fs.readdirSync(dir).filter((f) => {
+      const l = f.toLowerCase();
+      return l.endsWith('.ibt') || l.endsWith('.csv');
+    });
   } catch (_) {
     return []; // carpeta inexistente (logging apagado o iRacing no instalado)
   }
   const out = [];
   for (const f of files) {
-    const meta = parseIbtMeta(path.join(dir, f));
-    if (meta) out.push({ id: `ibt:${f}`, source: 'ibt', file: f, ...meta });
+    const full = path.join(dir, f);
+    if (f.toLowerCase().endsWith('.csv')) {
+      const meta = parseCsvMeta(full);
+      if (meta) out.push({ id: `csv:${f}`, source: 'csv', file: f, ...meta });
+    } else {
+      const meta = parseIbtMeta(full);
+      if (meta) out.push({ id: `ibt:${f}`, source: 'ibt', file: f, ...meta });
+    }
   }
   out.sort((a, b) => b.startedAt - a.startedAt);
   return out;
@@ -387,11 +414,22 @@ ipcMain.handle('ibt:list', () => {
 ipcMain.handle('ibt:get', (_e, id) => {
   if (typeof id !== 'string') return null;
   let full = null;
-  if (id.startsWith('ibtpath:')) {
+  let kind = 'ibt';
+  if (id.startsWith('csvpath:')) {
+    const p = id.slice(8);
+    if (p.toLowerCase().endsWith('.csv') && fs.existsSync(p)) { full = p; kind = 'csv'; }
+  } else if (id.startsWith('ibtpath:')) {
     // Archivo importado manualmente: ruta absoluta (elegida por el usuario en
     // un diálogo, así que es de confianza). Validamos extensión y existencia.
     const p = id.slice(8);
     if (p.toLowerCase().endsWith('.ibt') && fs.existsSync(p)) full = p;
+  } else if (id.startsWith('csv:')) {
+    // CSV del escaneo automático: basename dentro de la carpeta de telemetría.
+    const file = id.slice(4);
+    if (!file.includes('/') && !file.includes('\\') && !file.includes('..')) {
+      full = path.join(iracingTelemetryDir(), file);
+      kind = 'csv';
+    }
   } else if (id.startsWith('ibt:')) {
     // Archivo del escaneo automático: solo un basename dentro de la carpeta.
     const file = id.slice(4);
@@ -401,12 +439,49 @@ ipcMain.handle('ibt:get', (_e, id) => {
   }
   if (!full) return null;
   try {
-    const session = parseIbtSession(full);
-    return { id, source: 'ibt', ...session };
+    const session = kind === 'csv' ? parseCsvSession(full) : parseIbtSession(full);
+    return { id, source: kind, ...session };
   } catch (err) {
     console.error('[ibt] error parseando:', err.message);
     return null;
   }
+});
+
+// === Garage 61: mapear circuito/auto de iRacing a la URL de laps ===
+let _g61ids = null;
+function garage61Ids() {
+  if (_g61ids === null) {
+    try { _g61ids = require('./data/garage61-ids.json'); } catch (_) { _g61ids = { tracks: {}, cars: {} }; }
+  }
+  return _g61ids;
+}
+ipcMain.handle('garage61:url', (_e, trackIdIr, carIdIr) => {
+  const g = garage61Ids();
+  const t = trackIdIr != null ? g.tracks[String(trackIdIr)] : null;
+  const c = carIdIr != null ? g.cars[String(carIdIr)] : null;
+  if (t == null || c == null) return null;
+  return `https://garage61.net/app/laps/${t}/${c};a=-1;bw=0,;bp=,0`;
+});
+// Abrir una URL externa (solo https). Usado para los botones de Garage 61.
+ipcMain.handle('shell:open-external', (_e, url) => {
+  if (typeof url !== 'string' || !/^https:\/\//i.test(url)) return false;
+  shell.openExternal(url);
+  return true;
+});
+
+// Borra un .ibt/.csv (escaneado o importado). Va a la papelera del SO para que
+// sea recuperable — estamos borrando archivos reales del usuario.
+ipcMain.handle('ibt:delete', async (_e, id) => {
+  if (typeof id !== 'string') return false;
+  let full = null;
+  const safeInDir = (file) => (!file.includes('/') && !file.includes('\\') && !file.includes('..'))
+    ? path.join(iracingTelemetryDir(), file) : null;
+  if (id.startsWith('csvpath:') || id.startsWith('ibtpath:')) full = id.slice(8);
+  else if (id.startsWith('csv:')) full = safeInDir(id.slice(4));
+  else if (id.startsWith('ibt:')) full = safeInDir(id.slice(4));
+  if (!full || !fs.existsSync(full)) return false;
+  try { await shell.trashItem(full); return true; }
+  catch (err) { console.error('[ibt] delete error:', err.message); return false; }
 });
 
 ipcMain.handle('preview:toggle', () => {
