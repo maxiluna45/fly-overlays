@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { Trash2, Trophy, Clock, Activity, Gauge, Upload, FolderOpen, RotateCcw, Pencil, Check, X, Search, ExternalLink, Maximize2, Crop } from "lucide-react";
-import { analyzeLap, bestLapOf, consistency, sectorTimes, sessionOptimal, cornerConsistency, resampleSamples } from "../lib/coach.js";
+import { analyzeLap, bestLapOf, consistency, sectorTimes, sessionOptimal, cornerConsistency, resampleSamples, drivingMetrics } from "../lib/coach.js";
 import lovelyTracks from "../assets/lovely-tracks.json"; // curvas + sectores por pista (© Lovely Sim Racing, CC BY-NC-SA)
 
 // Ancho de asfalto (metros) para engrosar el eje de OSM y dibujar ambos bordes.
@@ -523,7 +523,9 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
         </div>
       </div>
       <div ref={wrapRef} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp} className={`relative ${fill ? "flex-1 min-h-0" : ""}`} style={{ cursor: dragging ? "grabbing" : "grab" }}>
-        <svg viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`} preserveAspectRatio="xMidYMid meet" className={fill ? "w-full h-full block" : "w-full block"} style={fill ? undefined : { aspectRatio: `${W} / ${H}` }}>
+        {/* Satélite en vista a altura completa: 'slice' para cubrir sin bandas
+            negras (el contenedor es más cuadrado que el viewBox). Resto: 'meet'. */}
+        <svg viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`} preserveAspectRatio={tiles ? "xMidYMid slice" : "xMidYMid meet"} className={fill ? "w-full h-full block" : "w-full block"} style={fill ? undefined : { aspectRatio: `${W} / ${H}` }}>
           {/* Foto satelital (tiles de Esri) como fondo, en el mismo espacio de la
               trazada. Scrim oscuro encima para que las líneas de color resalten. */}
           {tiles && tiles.map((t) => (
@@ -607,6 +609,86 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
           ? "Freno: gris (0%) → rojo (100%)"
           : "Color = velocidad (azul → rojo)"}
         {mapPathRef ? " · punteada = referencia" : ""} · usá los toggles Tu vuelta / Referencia para aislar una · rueda o +/− zoom
+      </div>
+    </div>
+  );
+}
+
+// Tarjeta de métricas de manejo (coasting, frenada/trail, gas, correcciones,
+// balance, uso de grip) + eventos estimados de bloqueo/patinada. `hasRef` habilita
+// los deltas vs referencia.
+function DrivingMetricsCard({ m, hasRef }) {
+  const [tip, setTip] = useState(null); // tooltip propio de encabezados: {text,x,y}
+  const cardRef = useRef(null);
+  const showTip = (text, e) => {
+    const r = cardRef.current && cardRef.current.getBoundingClientRect();
+    if (!r) return;
+    setTip({ text, x: e.clientX - r.left, y: e.clientY - r.top, w: r.width });
+  };
+  const thProps = (t) => ({ onMouseEnter: (e) => showTip(t, e), onMouseMove: (e) => showTip(t, e), onMouseLeave: () => setTip(null) });
+  if (!m || !m.corners || !m.corners.length) return null;
+  const o = m.overall;
+  const pct = (v) => (v == null ? "—" : `${Math.round(v * 100)}%`);
+  const mm = (v) => (v == null ? "—" : `${Math.round(v)} m`);
+  const DeltaM = ({ v, goodNeg }) => {
+    if (v == null || Math.abs(v) < 3) return null;
+    const bad = goodNeg ? v > 0 : v < 0;
+    return <span className="ml-1 text-[9px] font-mono" style={{ color: bad ? "rgb(248,113,113)" : "rgb(52,211,153)" }}>{v > 0 ? "+" : "−"}{Math.round(Math.abs(v))}</span>;
+  };
+  const balColor = (b) => (b === "sobreviraje" ? "rgb(248,113,113)" : b === "subviraje" ? "rgb(234,179,8)" : "rgba(255,255,255,0.5)");
+  const balTxt = (b) => (b === "sobreviraje" ? "sobre" : b === "subviraje" ? "sub" : "—");
+  return (
+    <div ref={cardRef} className="relative rounded-lg border border-border bg-card/40 p-3">
+      {tip && (
+        <div className="absolute z-50 pointer-events-none rounded-md border border-border px-2 py-1 shadow-lg text-[10px] leading-snug font-sans normal-case tracking-normal text-foreground/90"
+          style={{ left: Math.max(4, Math.min(tip.x + 12, (tip.w || 800) - 236)), top: tip.y + 14, width: 230, background: "rgba(20,22,28,0.97)" }}>
+          {tip.text}
+        </div>
+      )}
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-1.5"><Gauge className="size-3.5" /> Métricas de manejo</span>
+        <span className="text-[9px] text-muted-foreground/50">estimaciones · por curva</span>
+      </div>
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] mb-2">
+        <span>Coasting: <span className="font-mono font-semibold" style={{ color: o.coastPct > 0.2 ? "rgb(248,113,113)" : "var(--color-text)" }}>{pct(o.coastPct)}</span>{o.coastTime != null ? <span className="text-muted-foreground/70"> (~{o.coastTime.toFixed(1)}s)</span> : null}</span>
+        <span>Grip pico: <span className="font-mono font-semibold">{o.gMax ? o.gMax.toFixed(1) : "—"}g</span></span>
+        <span title={o.lockups.map((e) => e.label).filter(Boolean).join(", ") || "sin eventos"}>Bloqueos (est.): <span className="font-mono font-semibold" style={{ color: o.lockups.length ? "rgb(248,113,113)" : "var(--color-text)" }}>{o.lockups.length}</span></span>
+        <span title={o.spins.map((e) => e.label).filter(Boolean).join(", ") || "sin eventos"}>Patinadas (est.): <span className="font-mono font-semibold" style={{ color: o.spins.length ? "rgb(249,115,22)" : "var(--color-text)" }}>{o.spins.length}</span></span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[11px] font-mono tnum whitespace-nowrap">
+          <thead>
+            <tr className="text-muted-foreground/70 text-[9px] uppercase">
+              <th className="text-left font-semibold py-1 pr-2">Curva</th>
+              <th className="text-right font-semibold py-1 px-2" {...thProps("Punto de frenada: metros antes del apex donde empezás a frenar. Δ vs referencia: + = frenás más tarde, − = más temprano.")}><span className="cursor-help border-b border-dotted border-muted-foreground/40">Frenada</span></th>
+              <th className="text-right font-semibold py-1 px-2" {...thProps("Trail-braking: % de la entrada en que seguís frenando mientras ya girás el volante. Más alto = más rotás el auto con el freno.")}><span className="cursor-help border-b border-dotted border-muted-foreground/40">Trail</span></th>
+              <th className="text-right font-semibold py-1 px-2" {...thProps("Velocidad mínima en la curva (km/h). Δ vs referencia: + = pasás más rápido por el apex.")}><span className="cursor-help border-b border-dotted border-muted-foreground/40">Vmín</span></th>
+              <th className="text-right font-semibold py-1 px-2" {...thProps("Reaplicación de gas: metros tras el apex hasta pleno acelerador. Δ vs referencia: + = abrís gas más tarde (peor).")}><span className="cursor-help border-b border-dotted border-muted-foreground/40">Gas</span></th>
+              <th className="text-right font-semibold py-1 px-2" {...thProps("Coasting: % de la curva sin gas ni freno. Tiempo muerto — cuanto más bajo, mejor.")}><span className="cursor-help border-b border-dotted border-muted-foreground/40">Coast</span></th>
+              <th className="text-right font-semibold py-1 px-2" {...thProps("Correcciones de volante (reversiones) dentro de la curva. Muchas = auto inestable o sobremanejo.")}><span className="cursor-help border-b border-dotted border-muted-foreground/40">Corr.</span></th>
+              <th className="text-right font-semibold py-1 px-2" {...thProps("Balance estimado: sub (subviraje, poco agarre para el volante que metés) o sobre (sobreviraje, correcciones tras el apex). Heurístico.")}><span className="cursor-help border-b border-dotted border-muted-foreground/40">Balance</span></th>
+              <th className="text-right font-semibold py-1 pl-2" {...thProps("Uso del círculo de fricción: % del grip pico de la vuelta que aprovechás en esta curva.")}><span className="cursor-help border-b border-dotted border-muted-foreground/40">Grip</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {m.corners.map((c, i) => (
+              <tr key={i} className="border-t border-border/40">
+                <td className="text-left py-0.5 pr-2 font-sans text-foreground/90 truncate max-w-[110px]">{c.label}</td>
+                <td className="text-right py-0.5 px-2">{mm(c.brakePointM)}{hasRef && <DeltaM v={c.brakeDeltaM} goodNeg={false} />}</td>
+                <td className="text-right py-0.5 px-2" style={{ color: c.trailPct >= 0.4 ? "rgb(52,211,153)" : c.trailPct < 0.12 ? "rgba(255,255,255,0.4)" : "var(--color-text)" }}>{pct(c.trailPct)}</td>
+                <td className="text-right py-0.5 px-2">{c.minKmh != null ? Math.round(c.minKmh) : "—"}{hasRef && <DeltaM v={c.minDeltaKmh} goodNeg={false} />}</td>
+                <td className="text-right py-0.5 px-2">{mm(c.throttleOnM)}{hasRef && <DeltaM v={c.throttleDeltaM} goodNeg={true} />}</td>
+                <td className="text-right py-0.5 px-2" style={{ color: c.coastPct > 0.25 ? "rgb(248,113,113)" : "var(--color-text)" }}>{pct(c.coastPct)}</td>
+                <td className="text-right py-0.5 px-2" style={{ color: c.reversals >= 4 ? "rgb(248,113,113)" : c.reversals >= 2 ? "rgb(234,179,8)" : "var(--color-text)" }}>{c.reversals}</td>
+                <td className="text-right py-0.5 px-2 font-sans" style={{ color: balColor(c.balance) }}>{balTxt(c.balance)}</td>
+                <td className="text-right py-0.5 pl-2">{c.frictionPct != null ? pct(c.frictionPct) : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="text-[9px] text-muted-foreground/50 mt-1.5 leading-tight">
+        Frenada = m antes del apex · Gas = m tras el apex a pleno · Vmín en km/h · verde = mejor que la ref, rojo = peor. Bloqueo/patinada son estimaciones (iRacing no expone velocidad de rueda).
       </div>
     </div>
   );
@@ -791,6 +873,11 @@ export function AnalysisView() {
   const cornerConsist = useMemo(
     () => (session && corners.length ? cornerConsistency(session, { corners }) : null),
     [session, corners]
+  );
+  // Métricas de manejo (coasting, frenada, gas, correcciones, balance, grip).
+  const driveMetrics = useMemo(
+    () => (lap ? drivingMetrics(best, lap, { corners, trackLength: session?.trackLength || 0 }) : null),
+    [best, lap, corners, session]
   );
 
   const sectorInfo = useMemo(() => {
@@ -1639,6 +1726,9 @@ export function AnalysisView() {
                     )}
                   </div>
                 )}
+
+                {/* Métricas de manejo por curva */}
+                {driveMetrics && <DrivingMetricsCard m={driveMetrics} hasRef={!!best} />}
 
                 {/* Tabla de sectores reales */}
                 {sectorInfo && sectorInfo.lapS && (

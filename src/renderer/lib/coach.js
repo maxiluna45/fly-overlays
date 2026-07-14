@@ -141,6 +141,14 @@ function fmtT(s) {
   const sign = s >= 0 ? "+" : "−";
   return `${sign}${Math.abs(s).toFixed(2)}s`;
 }
+// Normaliza el largo de pista a METROS. Algunas fuentes lo traen en km
+// (WeekendInfo.TrackLength = "3.20 km" → 3.2), otras ya en metros (~5000). Si el
+// valor es chico (<50) asumimos km y multiplicamos ×1000.
+function toMeters(v) {
+  const x = +v || 0;
+  return x > 0 && x < 50 ? x * 1000 : x;
+}
+
 // Diferencia de buckets → metros (si conocemos el largo de pista).
 function bucketsToMeters(db, n, trackLength) {
   if (!trackLength || trackLength <= 0 || n <= 1) return null;
@@ -264,7 +272,7 @@ export function analyzeLap(bestIn, lap, opts = {}) {
   const n = lap.samples.length;
   const trace = buildDeltaTrace(best, lap);
   const deltaTotal = (lap.lapTime && best.lapTime) ? lap.lapTime - best.lapTime : (trace.length ? trace[trace.length - 1].delta : null);
-  const trackLength = opts.trackLength || 0;
+  const trackLength = toMeters(opts.trackLength);
   const deltaAt = (i) => trace[Math.max(0, Math.min(trace.length - 1, i))]?.delta ?? 0;
 
   const segments = buildSegments(lap, n, opts.corners);
@@ -371,6 +379,125 @@ function buildInsights(lap) {
   }
 
   return out;
+}
+
+// G combinado (círculo de fricción) de una muestra: hipotenusa de G lat + long.
+function combinedG(s) {
+  if (!s) return null;
+  const a = s.gLat, b = s.gLon;
+  if (a == null && b == null) return null;
+  return Math.hypot(a || 0, b || 0);
+}
+
+// Métricas de MANEJO por curva + globales, para trabajar técnica. Son
+// estimaciones heurísticas a partir de los canales grabados (gas, freno, volante,
+// velocidad, marcha, RPM, G lat/long). Compara contra la referencia cuando hay.
+// opts: { corners, trackLength }.
+export function drivingMetrics(bestIn, lap, opts = {}) {
+  if (!lap || !lap.samples) return null;
+  const n = lap.samples.length;
+  const trackLength = toMeters(opts.trackLength);
+  const rs = bestIn && bestIn.samples ? resampleSamples(bestIn.samples, n) : null;
+  const best = rs ? (rs === bestIn.samples ? bestIn : { ...bestIn, samples: rs }) : null;
+
+  // Grip global (g combinado máximo) para normalizar el "uso del círculo".
+  let gMax = 0;
+  for (let i = 0; i < n; i++) { const g = combinedG(at(lap, i)); if (g != null && g > gMax) gMax = g; }
+
+  const segs = buildSegments(lap, n, opts.corners);
+  const corners = segs.map((seg) => {
+    const { a, b } = seg;
+    const msL = minSpeedIn(lap, a, b);
+    const apex = msL.idx >= 0 ? msL.idx : (seg.apex != null ? seg.apex : Math.round((a + b) / 2));
+
+    // (2) Frenada: punto de frenada (m antes del apex) + delta vs ref.
+    const boL = firstBrake(lap, a, b);
+    const brakePointM = boL >= 0 ? bucketsToMeters(apex - boL, n, trackLength) : null;
+    let brakeDeltaM = null;
+    if (best) { const boB = firstBrake(best, a, b); if (boL >= 0 && boB >= 0) brakeDeltaM = bucketsToMeters(boL - boB, n, trackLength); }
+    // Pico de freno + trail-braking (solape freno×volante en la entrada).
+    let peakBrake = 0, brk = 0, trail = 0;
+    for (let i = a; i <= apex; i++) { const s = at(lap, i); if (!s) continue; const br = s.br ?? 0; if (br > peakBrake) peakBrake = br; if (br > 0.1) { brk++; if (Math.abs(s.st ?? 0) > 0.12) trail++; } }
+    const trailPct = brk > 0 ? trail / brk : 0;
+
+    // Vmín + delta.
+    const minKmh = isFinite(msL.m) ? msL.m * MS_TO_KMH : null;
+    let minDeltaKmh = null;
+    if (best) { const msB = minSpeedIn(best, a, b); if (isFinite(msB.m) && isFinite(msL.m)) minDeltaKmh = (msL.m - msB.m) * MS_TO_KMH; }
+
+    // (3) Reaplicación de gas: m después del apex hasta pleno + delta.
+    const tOnL = firstFullThrottle(lap, apex, b);
+    const throttleOnM = tOnL >= 0 ? bucketsToMeters(tOnL - apex, n, trackLength) : null;
+    let throttleDeltaM = null;
+    if (best) { const apexB = minSpeedIn(best, a, b).idx; const tOnB = firstFullThrottle(best, apexB >= 0 ? apexB : a, b); if (tOnL >= 0 && tOnB >= 0) throttleDeltaM = bucketsToMeters(tOnL - tOnB, n, trackLength); }
+
+    // (1) Coasting (ni gas ni freno) en la curva.
+    let coast = 0, tot = 0;
+    for (let i = a; i <= b; i++) { const s = at(lap, i); if (s) { tot++; if ((s.th ?? 0) < 0.05 && (s.br ?? 0) < 0.05) coast++; } }
+    const coastPct = tot > 0 ? coast / tot : 0;
+
+    // (4) Correcciones de volante (reversiones) en la curva.
+    let reversals = 0, prevD = 0;
+    for (let i = a + 1; i <= b; i++) { const s = at(lap, i), p = at(lap, i - 1); if (!s || !p || s.st == null || p.st == null) continue; const d = s.st - p.st; if (d * prevD < 0 && Math.abs(d) > 0.05) reversals++; if (Math.abs(d) > 0.01) prevD = d; }
+
+    // (5) Balance (heurístico): guardamos el ratio agarre-lateral/volante en el
+    // apex y las correcciones POST-apex (contravolante). La clasificación se hace
+    // después, relativa a TU propia norma en la vuelta (autocalibrado por auto).
+    const sa = at(lap, apex);
+    let apexRatio = null, postRev = 0;
+    if (sa && sa.st != null && sa.gLat != null && Math.abs(sa.st) > 0.05) {
+      apexRatio = Math.abs(sa.gLat) / Math.abs(sa.st);
+      let pd = 0;
+      for (let i = apex + 1; i <= b; i++) { const s = at(lap, i), p = at(lap, i - 1); if (!s || !p || s.st == null || p.st == null) continue; const d = s.st - p.st; if (d * pd < 0 && Math.abs(d) > 0.06) postRev++; if (Math.abs(d) > 0.01) pd = d; }
+    }
+
+    // (6) Uso del círculo de fricción: pico combinado en la curva / máximo global.
+    let gPeak = 0;
+    for (let i = a; i <= b; i++) { const g = combinedG(at(lap, i)); if (g != null && g > gPeak) gPeak = g; }
+    const frictionPct = gMax > 0 ? gPeak / gMax : null;
+
+    return { label: seg.label, brakePointM, brakeDeltaM, peakBrake, trailPct, minKmh, minDeltaKmh, throttleOnM, throttleDeltaM, coastPct, reversals, apexRatio, postRev, frictionPct };
+  });
+
+  // Balance por curva, relativo a tu norma: ratio agarre/volante bastante por
+  // DEBAJO de tu mediana = subviraje (mucho volante, poco agarre). Correcciones
+  // post-apex = sobreviraje. Autocalibrado → no depende del setup de dirección.
+  const ratios = corners.map((c) => c.apexRatio).filter((r) => r != null && isFinite(r)).sort((a, b) => a - b);
+  const medRatio = ratios.length ? ratios[Math.floor(ratios.length / 2)] : null;
+  for (const c of corners) {
+    if (c.postRev >= 2) c.balance = "sobreviraje";
+    else if (medRatio && c.apexRatio != null && c.apexRatio < medRatio * 0.72) c.balance = "subviraje";
+    else c.balance = "neutro";
+    delete c.apexRatio; delete c.postRev;
+  }
+
+  // Globales: coasting total (% y tiempo), uso de grip, y eventos ESTIMADOS de
+  // bloqueo/patinada. iRacing no expone velocidad de rueda, así que se infieren:
+  //   - Bloqueo: el freno sube pero la desaceleración NO aumenta (grip superado).
+  //   - Patinada: acelerador alto pero sin aceleración longitudinal (o cae) en
+  //     marcha baja. Son aproximaciones, no medición directa.
+  let coast = 0, tot = 0;
+  for (let i = 0; i < n; i++) { const s = at(lap, i); if (s) { tot++; if ((s.th ?? 0) < 0.05 && (s.br ?? 0) < 0.05) coast++; } }
+  const coastPct = tot > 0 ? coast / tot : 0;
+  const coastTime = lap.lapTime ? coastPct * lap.lapTime : null;
+
+  const lockups = [], spins = [];
+  for (let i = 2; i < n; i++) {
+    const s = at(lap, i), p = at(lap, i - 1);
+    if (!s || !p) continue;
+    const br = s.br ?? 0, brP = p.br ?? 0;
+    const decel = s.gLon != null ? -s.gLon : null, decelP = p.gLon != null ? -p.gLon : null;
+    if (br > 0.6 && br >= brP && decel != null && decelP != null && decel < decelP - 0.08 && (s.sp ?? 0) > 8) lockups.push({ pct: i / (n - 1) });
+    const th = s.th ?? 0, acc = s.gLon != null ? s.gLon : null, accP = p.gLon != null ? p.gLon : null;
+    if (th > 0.7 && acc != null && accP != null && acc < 0.05 && acc <= accP && (s.sp ?? 0) > 5 && (s.g ?? 9) <= 3) spins.push({ pct: i / (n - 1) });
+  }
+  const lbl = (pct) => { const cs = opts.corners || []; let bLbl = null, bd = 0.04; for (const c of cs) { if (c.pct == null) continue; const d = Math.abs(c.pct - pct); if (d < bd) { bd = d; bLbl = c.label; } } return bLbl; };
+  const group = (evs) => { const out = []; let last = -1; for (const e of evs) { if (last < 0 || e.pct - last > 0.012) out.push({ pct: e.pct, label: lbl(e.pct) }); last = e.pct; } return out; };
+
+  return {
+    overall: { coastPct, coastTime, gMax: gMax / 9.81, lockups: group(lockups), spins: group(spins) },
+    corners,
+  };
 }
 
 // Devuelve la mejor vuelta válida de una sesión (con muestras).

@@ -15,6 +15,7 @@ import { Relative } from "./Relative.jsx";
 import { Standings } from "./Standings.jsx";
 import { Radar } from "./Radar.jsx";
 import { AnalysisView } from "./AnalysisView.jsx";
+import { ProgressView } from "./ProgressView.jsx";
 import { Button } from "./ui/button.jsx";
 import { Switch } from "./ui/switch.jsx";
 import { Slider } from "./ui/slider.jsx";
@@ -192,7 +193,7 @@ export function Dashboard() {
           <span className="font-bold tracking-tight text-sm">iFly</span>
         </div>
         <div className="flex items-center gap-1 ml-3">
-          {[["overlays", "Overlays"], ["analysis", "Análisis"]].map(([v, label]) => (
+          {[["overlays", "Overlays"], ["analysis", "Análisis"], ["progreso", "Progreso"]].map(([v, label]) => (
             <button
               key={v}
               onClick={() => setView(v)}
@@ -210,6 +211,8 @@ export function Dashboard() {
 
       {view === "analysis" ? (
         <AnalysisView />
+      ) : view === "progreso" ? (
+        <ProgressView />
       ) : (
       /* MAIN */
       <div className="flex-1 flex overflow-hidden">
