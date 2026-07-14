@@ -548,6 +548,11 @@ class IrsdkClient {
     }
 
     const speed = this._read(telemetry, 'Speed') || 0;
+    // IsOnTrack de iRacing: true si el player está EN el auto en pista (aunque
+    // esté detenido). Antes usábamos speed>0.5, por eso los overlays se ocultaban
+    // con el auto quieto. Fallback a velocidad si el SDK no expone el flag.
+    const isOnTrackRaw = this._read(telemetry, 'IsOnTrack');
+    const isOnTrack = isOnTrackRaw != null ? !!isOnTrackRaw : speed > 0.5;
     const lap = this._read(telemetry, 'Lap') || 0;
     const bestLap = this._read(telemetry, 'LapBestLapTime') || 0;
     const currentLap = this._read(telemetry, 'LapCurrentLapTime') || 0;
@@ -680,7 +685,7 @@ class IrsdkClient {
       refLapTime: bestLap || 0,
       lap,
       speed,
-      onTrack: typeof speed === 'number' && speed > 0.5,
+      onTrack: isOnTrack,
       session: session?.SessionNum,
       sessionType,
     };

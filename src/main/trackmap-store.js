@@ -21,24 +21,41 @@ const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 // nombre+config ("snettertoncircuit300"). Puntuamos por prefijo común + si
 // coincide algún número de config, y exigimos un prefijo mínimo para evitar
 // falsos positivos.
+// Prefijos genéricos que hacen colisionar pistas distintas (ej. "Circuit de
+// Spa" vs "Circuit de Barcelona" comparten "circuitde"). Se quitan SOLO si son
+// prefijo, así queda la parte distintiva ("spa…" vs "barcelona…").
+const GENERIC_PREFIXES = ['circuitde', 'circuito', 'circuit', 'autodromonazionale', 'autodromointernacional', 'autodromo', 'autodrome', 'the'];
+const stripGeneric = (s) => { for (const p of GENERIC_PREFIXES) if (s.startsWith(p)) return s.slice(p.length); return s; };
+// Subsecuencia común más larga (desambigua config: "2000 full" vs "2000 moto",
+// y cruza nombres con distinto orden como "spa 2024 up" vs "spa grand prix").
+function lcsLen(a, b) {
+  const nA = a.length, nB = b.length;
+  let prev = new Array(nB + 1).fill(0);
+  for (let i = 1; i <= nA; i++) {
+    const cur = new Array(nB + 1).fill(0);
+    for (let j = 1; j <= nB; j++) cur[j] = a[i - 1] === b[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], cur[j - 1]);
+    prev = cur;
+  }
+  return prev[nB];
+}
 function bestKeyMatch(trackName, keys) {
-  const target = norm(trackName);
+  const target = stripGeneric(norm(trackName));
   if (!target) return null;
-  if (keys.includes(target)) return target;
   const commonPrefix = (a, b) => { let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++; return i; };
   const digits = (s) => (s.match(/\d+/g) || []);
   const dt = digits(target);
   let best = null, bestScore = 0;
-  for (const k of keys) {
-    let score = commonPrefix(k, target);
-    // Alguno contiene al otro → coincidencia fuerte del nombre base.
-    if (k.includes(target) || target.includes(k)) score = Math.max(score, Math.min(k.length, target.length));
-    // Config coincidente (mismo número, ej. 300) desempata entre layouts.
+  for (const kRaw of keys) {
+    const k = stripGeneric(norm(kRaw));
+    if (k === target) return kRaw; // match exacto tras normalizar/strip
+    // Prefijo común ×3 (prioriza la base distintiva) + LCS + bonus por config.
+    let score = commonPrefix(k, target) * 3 + lcsLen(k, target);
+    if (k.includes(target) || target.includes(k)) score += Math.min(k.length, target.length);
     const dk = digits(k);
     if (dt.length && dk.length && dt.some((d) => dk.includes(d))) score += 50;
-    if (score > bestScore) { bestScore = score; best = k; }
+    if (score > bestScore) { bestScore = score; best = kRaw; }
   }
-  return bestScore >= 6 ? best : null;
+  return bestScore >= 12 ? best : null;
 }
 
 // Geometría bundleada (irdashies/iRacing, uso personal — permiso de tariknz).

@@ -10,7 +10,7 @@ const { parseSessionInfo, getSectorPoints, getTrackInfo } = require('./session-p
 // agrupamos por vuelta, downsampleados a 200 bins por distancia — la MISMA
 // estructura que produce SessionRecorder, para reusar el análisis y el coach.
 
-const BUCKETS = 200;
+const BUCKETS = 400; // resolución de la trazada por distancia (mejor detalle en curvas cerradas)
 const MAX_LAPS = 300;
 const MAX_FILE_BYTES = 300 * 1024 * 1024; // 300 MB — más que eso lo salteamos
 

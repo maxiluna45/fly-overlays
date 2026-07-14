@@ -352,26 +352,27 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
   // cambian datos/zoom/toggles), así el marcador de hover se mueve fluido.
   const segs = useMemo(() => {
     const out = [];
-    if (showLap && mapPath) {
-      const W = 3; // ventana de suavizado del delta (reduce ruido bucket a bucket)
-      for (let i = 1; i < mapPath.length; i++) {
-        const a = mapPath[i - 1], b = mapPath[i];
-        if (a && b) {
-          // dv = pendiente del delta (tiempo ganado/perdido) promediada sobre W
-          // buckets → verde si ganás, rojo si perdés, sin saltar por ruido.
-          const j = Math.max(0, i - W);
-          const dv = mapDelta && mapDelta[i] != null && mapDelta[j] != null && i > j
-            ? (mapDelta[i] - mapDelta[j]) / (i - j)
-            : 0;
-          // Puntos de control Catmull-Rom (tensión 1/6) usando los vecinos, para
-          // dibujar cada tramo como una curva suave con uniones continuas.
-          const p0 = mapPath[i - 2] || a;
-          const p3 = mapPath[i + 1] || b;
-          const c1x = a.x + (b.x - p0.x) / 6, c1y = a.y + (b.y - p0.y) / 6;
-          const c2x = b.x - (p3.x - a.x) / 6, c2y = b.y - (p3.y - a.y) / 6;
-          out.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, c1x, c1y, c2x, c2y, hue: b.hue, dv });
-        }
-      }
+    if (!showLap || !mapPath) return out;
+    // Puntos válidos (no nulos) con su índice original. Conectamos consecutivos
+    // salvo que haya un hueco grande (>6 buckets = posible pérdida de datos), y
+    // así puenteamos dropouts chicos en vez de cortar la línea.
+    const pts = [];
+    for (let i = 0; i < mapPath.length; i++) if (mapPath[i]) pts.push({ i, p: mapPath[i] });
+    const W = 3; // ventana de suavizado del delta (reduce ruido bucket a bucket)
+    for (let k = 1; k < pts.length; k++) {
+      const prv = pts[k - 1], cur = pts[k];
+      if (cur.i - prv.i > 6) continue; // hueco grande → no puenteamos
+      const a = prv.p, b = cur.p;
+      // dv = pendiente del delta promediada sobre ~W buckets.
+      const j = Math.max(0, cur.i - W);
+      const dv = mapDelta && mapDelta[cur.i] != null && mapDelta[j] != null && cur.i > j
+        ? (mapDelta[cur.i] - mapDelta[j]) / (cur.i - j)
+        : 0;
+      // Catmull-Rom (tensión 1/6) usando los vecinos VÁLIDos → curva continua.
+      const p0 = (pts[k - 2] || prv).p, p3 = (pts[k + 1] || cur).p;
+      const c1x = a.x + (b.x - p0.x) / 6, c1y = a.y + (b.y - p0.y) / 6;
+      const c2x = b.x - (p3.x - a.x) / 6, c2y = b.y - (p3.y - a.y) / 6;
+      out.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, c1x, c1y, c2x, c2y, hue: b.hue, dv });
     }
     return out;
   }, [mapPath, showLap, mapDelta]);
@@ -423,10 +424,19 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
         <svg viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`} preserveAspectRatio="xMidYMid meet" className="w-full block" style={{ aspectRatio: `${W} / ${H}` }}>
           {outlineD && (
             <g>
-              {/* Cinta de la pista: borde claro + asfalto oscuro (ancho en unidades
-                  de pista → zoomea con el mapa). La trazada va centrada encima. */}
-              <path d={outlineD} fill="none" stroke="rgba(255,255,255,0.22)" strokeWidth={46} strokeLinejoin="round" strokeLinecap="round" />
-              <path d={outlineD} fill="none" stroke="rgb(17,18,22)" strokeWidth={38} strokeLinejoin="round" strokeLinecap="round" />
+              {/* Bordes REALES de la pista (inside + outside de iRacing). Con dos
+                  bordes, el relleno evenodd pinta el asfalto ENTRE ambos → ancho
+                  real variable (no una cinta de ancho fijo). Con uno solo, sin
+                  relleno. Trazo fino en cada borde; grosor en unidades de pista. */}
+              <path
+                d={outlineD}
+                fill={(outlineD.match(/M/gi) || []).length >= 2 ? "rgba(255,255,255,0.07)" : "none"}
+                fillRule="evenodd"
+                stroke="rgba(255,255,255,0.4)"
+                strokeWidth={2.5 * k}
+                strokeLinejoin="round"
+                strokeLinecap="round"
+              />
             </g>
           )}
           <TrackLayer segs={segs} refD={refD} showRef={showRef} k={k} mode={effMode} maxSlope={maxSlope} />
@@ -741,12 +751,14 @@ export function AnalysisView() {
     });
   }, [sessions, query, labels, srcFilter, typeFilter]);
 
-  // Opciones de referencia (ghost): solo MISMO circuito + mismo auto que la
-  // sesión actual. Match tolerante (igualdad, contención o prefijo común ≥6)
-  // porque los nombres varían entre display/interno/CSV (ej. "Snetterton Racing
-  // Circuit" vs "snetterton 300"), pero pistas distintas (Snetterton vs Tsukuba)
-  // no se confunden.
+  // Opciones de referencia (ghost): mismo circuito (y auto para no-CSV). El
+  // emparejamiento de pista es tolerante porque los nombres varían mucho entre
+  // el interno de iRacing ("spa 2024 up"), el display ("Circuit de Spa-
+  // Francorchamps") y el de Garage 61 del CSV. Sin esto, un CSV del mismo
+  // circuito no aparecía como referencia de una sesión de iRacing.
   const norm = (x) => (x || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const GEN_PREFIX = ["circuitde", "circuito", "circuit", "autodromonazionale", "autodromointernacional", "autodromo", "autodrome", "the"];
+  const stripGen = (s) => { s = norm(s); for (const p of GEN_PREFIX) if (s.startsWith(p)) return s.slice(p.length); return s; };
   const like = (a, b) => {
     a = norm(a); b = norm(b);
     if (!a || !b) return false;
@@ -754,11 +766,27 @@ export function AnalysisView() {
     let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++;
     return i >= 6;
   };
+  // Misma pista: tras quitar prefijos genéricos, si una base (primer bloque de
+  // letras) es prefijo de la otra (≥3), o hay contención/prefijo común ≥5.
+  const sameTrack = (a, b) => {
+    a = stripGen(a); b = stripGen(b);
+    if (!a || !b) return false;
+    if (a === b || a.includes(b) || b.includes(a)) return true;
+    const base = (s) => (s.match(/^[a-z]+/) || [""])[0];
+    const ba = base(a), bb = base(b);
+    if (ba.length >= 3 && bb.length >= 3 && (ba.startsWith(bb) || bb.startsWith(ba))) return true;
+    let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++;
+    return i >= 5;
+  };
   const refOptions = useMemo(() => {
     if (!session) return [];
     return sessions.filter((s) => {
       if (s.id === selectedId) return false;
-      return like(s.trackKey || s.track, session.trackKey || session.track) && like(s.car, session.car);
+      if (!sameTrack(s.trackKey || s.track, session.trackKey || session.track)) return false;
+      // Los CSV importados se aceptan aunque el auto no coincida exacto (se
+      // importaron a propósito para comparar; el nombre del auto suele diferir).
+      if (s.source === "csv" || session.source === "csv") return true;
+      return like(s.car, session.car);
     });
   }, [sessions, selectedId, session, labels]);
 
@@ -921,13 +949,14 @@ export function AnalysisView() {
       if (trRef) mapPathRef = refS.map((s) => trRef(s));
     }
 
-    // Cinta de la pista a lo largo de la línea base c (como irdashies dibuja el
-    // borde con trazo grueso). La trazada se ubica sobre/alrededor de c, así que
-    // SIEMPRE coincide con la pista dibujada, sin depender de que inside/outside
-    // cuadren. Si no hay c (SVG manual), caemos al contorno original.
-    const ribbonD = Array.isArray(cl) && cl.length >= 2
-      ? "M" + cl.map((p) => `${p[0]},${p[1]}`).join("L") + "Z"
-      : parsed.outlineD;
+    // Contorno = los DOS bordes reales del SVG (inside + outside), que están en
+    // el mismo sistema de coordenadas que la línea central `c` (ambos salen del
+    // mismo SVG), así que la trazada (ubicada sobre/alrededor de c) cae correcta
+    // entre los bordes, y el ancho de pista es el REAL (variable), no una cinta
+    // de ancho fijo. Fallback a la cinta del centro solo si no hay bordes.
+    const ribbonD = parsed.outlineD && parsed.outlineD.length > 4
+      ? parsed.outlineD
+      : (Array.isArray(cl) && cl.length >= 2 ? "M" + cl.map((p) => `${p[0]},${p[1]}`).join("L") + "Z" : "");
 
     // Encuadre: bbox de c + la trazada, centrado, con margen y aspecto acotado
     // (evita letterbox → el zoom mapea 1:1 con el cursor).

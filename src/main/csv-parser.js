@@ -10,7 +10,7 @@ const path = require('path');
 // Throttle, Brake, SteeringWheelAngle, Gear, RPM, LatAccel, LongAccel, Yaw,
 // Lat, Lon, y una columna de tiempo (SessionTime / LapCurrentLapTime / Time).
 
-const BUCKETS = 200;
+const BUCKETS = 400; // resolución de la trazada por distancia (mejor detalle en curvas)
 
 function csvToLap(csvText, meta = {}) {
   const lines = csvText.split(/\r?\n/).filter((l) => l.length > 0);
@@ -62,7 +62,7 @@ function csvToLap(csvText, meta = {}) {
       lat: num(row, cLat), lon: num(row, cLon),
     };
   }
-  if (filled < BUCKETS * 0.5) return null;
+  if (filled < BUCKETS * 0.35) return null; // cobertura mínima (con 400 buckets)
 
   // Sin columna de tiempo (caso de los CSV de Garage 61): reconstruimos el
   // tiempo-a-distancia integrando 1/velocidad sobre la distancia y escalándolo
