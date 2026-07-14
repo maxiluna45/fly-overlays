@@ -172,6 +172,10 @@ export function SectorTimes({ previewMode = false, injectedTelemetry = null, set
   useEffect(() => {
     if (injectedTelemetry) {
       setTelemetry((prev) => ({ ...prev, ...injectedTelemetry }));
+      // El preview inyecta también sectores y tiempos: hay que copiarlos a sus
+      // estados (el path real lo hace vía onTelemetry/heavy, que acá se saltea).
+      if (injectedTelemetry.sectors) setSectors(injectedTelemetry.sectors);
+      if (injectedTelemetry.lapTimes) setLapTimes(injectedTelemetry.lapTimes);
     }
   }, [injectedTelemetry]);
 

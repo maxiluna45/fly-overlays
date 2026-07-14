@@ -205,6 +205,13 @@ app.whenReady().then(() => {
     try { irsdk.setDriverTags((data && data.driverTags) || []); } catch (_) {}
   });
 
+  // Frame REAL de ejemplo para los previews: cargamos el persistido (si existe) y
+  // persistimos los nuevos que capture el SDK. Así los previews se ven como una
+  // carrera de verdad, con tu último dato real.
+  const previewSampleFile = path.join(app.getPath('userData'), 'preview-sample.json');
+  try { if (fs.existsSync(previewSampleFile)) irsdk.setPreviewSample(JSON.parse(fs.readFileSync(previewSampleFile, 'utf-8'))); } catch (_) {}
+  irsdk.onSample((s) => { try { fs.writeFileSync(previewSampleFile, JSON.stringify(s)); } catch (_) {} });
+
   // Grabador de sesiones: recibe frames del SDK real y persiste por vuelta.
   // Se puede desactivar (config.recordingEnabled) para no duplicar sesiones si
   // el usuario ya loguea la telemetría desde iRacing (.ibt).
@@ -532,6 +539,7 @@ ipcMain.handle('preview:toggle', () => {
   return enabled;
 });
 ipcMain.handle('preview:get', () => irsdk.isPreview());
+ipcMain.handle('preview:sample', () => (irsdk ? irsdk.getPreviewSample() : null));
 ipcMain.handle('preview:set', (_e, enabled) => {
   if (enabled) irsdk.enablePreview();
   else irsdk.disablePreview();

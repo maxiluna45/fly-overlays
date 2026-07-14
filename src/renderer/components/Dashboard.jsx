@@ -16,6 +16,8 @@ import { Standings } from "./Standings.jsx";
 import { Radar } from "./Radar.jsx";
 import { AnalysisView } from "./AnalysisView.jsx";
 import { ProgressView } from "./ProgressView.jsx";
+import { DeltaBar } from "./DeltaBar.jsx";
+import { SectorTimes } from "./SectorTimes.jsx";
 import { Button } from "./ui/button.jsx";
 import { Switch } from "./ui/switch.jsx";
 import { Slider } from "./ui/slider.jsx";
@@ -284,27 +286,9 @@ export function Dashboard() {
                   height: ov.height || 120,
                 }}
               >
-                {selectedId === "delta" && <DeltaBarLite />}
-                {selectedId === "sectors" && (
+                {["delta", "sectors", "relative", "standings", "radar"].includes(selectedId) && (
                   <ErrorBoundary resetKey={selectedId}>
-                    <SectorLite />
-                  </ErrorBoundary>
-                )}
-                {selectedId === "relative" && (
-                  <ErrorBoundary resetKey={selectedId}>
-                    <RelativeLite />
-                  </ErrorBoundary>
-                )}
-                {selectedId === "standings" && (
-                  <ErrorBoundary resetKey={selectedId}>
-                    <StandingsLite />
-                  </ErrorBoundary>
-                )}
-                {selectedId === "radar" && (
-                  <ErrorBoundary resetKey={selectedId}>
-                    <div className="h-full flex items-center justify-center" style={{ width: 220 }}>
-                      <RadarLite />
-                    </div>
+                    <OverlayPreview id={selectedId} settings={ov.settings} />
                   </ErrorBoundary>
                 )}
               </div>
@@ -460,8 +444,78 @@ export function Dashboard() {
   );
 }
 
-// Versión "lite" del DeltaBar para el preview del dashboard.
-// No usa window.fly ni onLockState — solo muestra el estado de la prop.
+// Simulación EN MOVIMIENTO para los previews (cuando no hay sesión en vivo).
+// Anima el relative (gaps que respiran, autos que se acercan/alejan), los
+// sectores (la vuelta que se va llenando) y el delta, para que el preview se vea
+// como una carrera en curso — usando los COMPONENTES REALES.
+function simRelative(t) {
+  const base = enrichRelativeMock();
+  const drivers = base.drivers.map((d, i) => {
+    if (d.isPlayer) return { ...d, relDelta: 0, relMeters: 0, gapToPlayer: 0 };
+    const rd = (d.relDelta || 0) + Math.sin(t * 0.5 + i * 0.9) * 1.4;
+    return { ...d, relDelta: rd, relMeters: rd * 8, gapToPlayer: Math.abs(rd), isAhead: rd > 0 };
+  });
+  return { ...base, trackLength: 5000, drivers };
+}
+function simSectors(t) {
+  const prog = Math.floor((t * 3) % 26); // barre la vuelta: 0..25
+  const mk = (fn) => Array.from({ length: 24 }, (_, i) => fn(i));
+  return {
+    sectors: {
+      best: mk(() => 1.0),
+      last: mk(() => 1.05),
+      current: mk((i) => (i <= prog ? (i % 3 === 0 ? 0.98 : i % 3 === 1 ? 1.02 : 1.09) : null)),
+    },
+    lapTimes: { currentLap: Math.min(prog + 1, 24) * 3.8, bestLap: 91.8, lastLap: 92.5, lastLapInvalid: false },
+  };
+}
+function simFrame(id, t) {
+  const base = { connected: true, onTrack: true, preview: true };
+  if (id === "delta") return { ...base, delta: Math.sin(t * 0.7) * 0.5 - 0.05, deltaRate: Math.cos(t * 0.7) * 0.2, refLapTime: 92.3, deltaRefs: {} };
+  if (id === "sectors") return { ...base, ...simSectors(t) };
+  if (id === "radar") return { ...base, carLeftRight: [0, 1, 2, 3][Math.floor(t / 1.5) % 4], relative: simRelative(t) };
+  return { ...base, relative: simRelative(t) }; // relative / standings
+}
+
+// Preview UNIFICADO: renderiza el COMPONENTE REAL del overlay con sus settings
+// reales. Prefiere la sesión en vivo si está conectada; si no, corre una
+// SIMULACIÓN EN MOVIMIENTO. Así es idéntico al overlay real y nunca queda vacío.
+function OverlayPreview({ id, settings }) {
+  const [telemetry, setTelemetry] = useState(() => simFrame(id, 0));
+  const needsHeavy = id === "relative" || id === "standings" || id === "radar" || id === "sectors";
+  const liveRef = React.useRef({ connected: false, onTrack: false });
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.fly?.onTelemetry) return;
+    return window.fly.onTelemetry((data) => { liveRef.current = { ...liveRef.current, ...data }; });
+  }, []);
+  useEffect(() => {
+    if (!needsHeavy || typeof window === "undefined" || !window.fly?.onTelemetryHeavy) return;
+    return window.fly.onTelemetryHeavy((data) => { liveRef.current = { ...liveRef.current, ...data }; });
+  }, [needsHeavy]);
+
+  // Reloj de la simulación (~12 fps). Preferimos la sesión REAL en vivo si está
+  // conectada y en pista; si no, mostramos la simulación en movimiento.
+  useEffect(() => {
+    let t = 0;
+    const iv = setInterval(() => {
+      t += 0.08;
+      const L = liveRef.current;
+      const liveActive = L && L.connected && (L.onTrack || (L.relative && L.relative.drivers && L.relative.drivers.length));
+      setTelemetry(liveActive ? { ...L } : simFrame(id, t));
+    }, 80);
+    return () => clearInterval(iv);
+  }, [id]);
+
+  const common = { previewMode: true, injectedTelemetry: telemetry, settings: settings || {} };
+  if (id === "delta") return <DeltaBar {...common} />;
+  if (id === "sectors") return <SectorTimes {...common} />;
+  if (id === "relative") return <Relative {...common} />;
+  if (id === "standings") return <Standings {...common} />;
+  if (id === "radar") return <Radar {...common} />;
+  return null;
+}
+
 function DeltaBarLite() {
   const [telemetry, setTelemetry] = useState({
     connected: false,

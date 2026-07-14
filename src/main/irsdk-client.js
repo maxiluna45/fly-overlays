@@ -58,6 +58,9 @@ class IrsdkClient {
     this._mockTimer = null;
     this._mockStart = 0;
     this._previewMode = false; // preview mode = datos sintéticos sin iRacing
+    this._realSample = null;   // último frame REAL capturado (para previews realistas)
+    this._onSample = null;     // callback para persistir el frame real
+    this._lastSampleCapture = 0;
     this._cachedData = {
       delta: 0,
       lap: 0,
@@ -195,6 +198,19 @@ class IrsdkClient {
     return this._previewMode;
   }
 
+  // Snapshot de un frame REAL para los previews (copia JSON desacoplada).
+  _snapshotSample() {
+    const c = this._cachedData || {};
+    return JSON.parse(JSON.stringify({
+      delta: c.delta ?? 0, deltaRate: c.deltaRate ?? 0, deltaRefs: c.deltaRefs ?? null, refLapTime: c.refLapTime ?? 0,
+      sectors: c.sectors ?? null, lapTimes: c.lapTimes ?? null, relative: c.relative ?? null,
+      carLeftRight: c.carLeftRight ?? 0, session: c.session ?? null, sessionType: c.sessionType ?? null,
+    }));
+  }
+  setPreviewSample(s) { if (s && typeof s === 'object' && s.relative) this._realSample = s; }
+  getPreviewSample() { return this._realSample || null; }
+  onSample(cb) { this._onSample = cb; }
+
   _startMock() {
     if (this._mockTimer) return;
     this._connected = true;
@@ -273,7 +289,11 @@ class IrsdkClient {
       // En preview, también generamos relative fake para que el overlay in-game
       // de Relative tenga datos y no quede en "Esperando datos...".
       if (this._previewMode) {
+        // Simulación EN MOVIMIENTO: relative animado (gaps que respiran, autos que
+        // se acercan/alejan), spotter alternando, y tiempos para el header.
         this._cachedData.relative = this._getMockRelative(t, lap, currentLap);
+        this._cachedData.carLeftRight = [0, 1, 2, 3][Math.floor(t / 2) % 4];
+        this._cachedData.lapTimes = { currentLap, bestLap: LAP_DURATION - 1.2, lastLap: LAP_DURATION, lastLapInvalid: false };
       }
       this._emitLight();
       // En preview emitimos el heavy también para que llegue el relative mock
@@ -328,6 +348,7 @@ class IrsdkClient {
         carClassColor: 1,
         isPlayerClass: true,
         relDelta,
+        relMeters: relDelta * 7, // distancia longitudinal aprox. para el radar
         gapToPlayer: Math.abs(relDelta),
         isAhead: relDelta > 0,
         lapDelta: 0,
@@ -351,6 +372,7 @@ class IrsdkClient {
       playerCarClass: 0,
       totalInClass: drivers.length,
       totalOverall: drivers.length,
+      trackLength: 5000, // para el radar (gap longitudinal)
       drivers,
       session: {
         type: "Practice",
@@ -734,6 +756,14 @@ class IrsdkClient {
       heavyChanged = true;
     }
     if (heavyChanged) this._emitHeavy();
+
+    // Guardar un FRAME REAL de ejemplo para los previews (throttled ~4s). Solo en
+    // pista con relative poblado, para que el ejemplo se vea como una carrera real.
+    if (this._connected && isOnTrack && this._cachedData.relative && Array.isArray(this._cachedData.relative.drivers) && this._cachedData.relative.drivers.length && now - this._lastSampleCapture > 4000) {
+      this._lastSampleCapture = now;
+      this._realSample = this._snapshotSample();
+      if (this._onSample) { try { this._onSample(this._realSample); } catch (_) {} }
+    }
 
     // === Grabación: enviar frame al recorder (solo SDK real, nunca preview) ===
     if (this._frameSink && !this._previewMode) {

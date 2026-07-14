@@ -171,24 +171,30 @@ export function Radar({ previewMode = false, injectedTelemetry = null, settings 
 
       {/* Radar estilo RaceLab: SIN FONDO (transparente sobre el juego). */}
       <div className="absolute inset-0 overflow-hidden" style={{ pointerEvents: "none" }}>
-        {/* Degradados AMARILLOS de autos adelante/atrás: llenan el hueco entre tu
-            auto y el rival. Más OPACO pegado a TU auto (centro) y se desvanece a
-            medida que se aleja hacia el rival. Opacidad total según cercanía. */}
-        {longCars.map((d) => {
-          const m = d.relMeters, ahead = m >= 0;
-          const nearEdge = clamp01(yPct(m - (ahead ? 1 : -1) * (carLength / 2))); // borde que te enfrenta
-          const top = ahead ? nearEdge : 50;
-          const height = Math.max(0, ahead ? 50 - nearEdge : nearEdge - 50);
-          const dir = ahead ? "to top" : "to bottom"; // opaco en TU auto (centro) → transparente hacia el rival
+        {/* Glows AMARILLOS radiales centrados en TU auto, cortados en seco al medio
+            (semicírculo hacia adelante / atrás). Fijos: SOLO la opacidad varía
+            según la cercanía del auto más próximo de ese lado. */}
+        {(() => {
+          let ahead = null, behind = null;
+          for (const d of longCars) {
+            if (d.relMeters >= 0) { if (!ahead || d.relMeters < ahead.relMeters) ahead = d; }
+            else if (!behind || Math.abs(d.relMeters) < Math.abs(behind.relMeters)) behind = d;
+          }
           return (
-            <div key={d.carIdx} style={{
-              position: "absolute", left: 0, width: "100%", top: `${top}%`, height: `${height}%`,
-              background: `linear-gradient(${dir}, rgba(250,204,21,0.9), rgba(250,204,21,0))`,
-              opacity: proxOp(m, 0.6), transition: "top 140ms linear, height 140ms linear, opacity 200ms ease",
-              pointerEvents: "none",
-            }} />
+            <>
+              <div style={{
+                position: "absolute", left: 0, right: 0, top: 0, height: "50%",
+                background: "radial-gradient(circle at 50% 100%, rgba(250,204,21,1) 0%, rgba(250,204,21,0) 45%)",
+                opacity: ahead ? proxOp(ahead.relMeters, 0.6) : 0, transition: "opacity 220ms ease", pointerEvents: "none",
+              }} />
+              <div style={{
+                position: "absolute", left: 0, right: 0, bottom: 0, height: "50%",
+                background: "radial-gradient(circle at 50% 0%, rgba(250,204,21,1) 0%, rgba(250,204,21,0) 45%)",
+                opacity: behind ? proxOp(behind.relMeters, 0.6) : 0, transition: "opacity 220ms ease", pointerEvents: "none",
+              }} />
+            </>
           );
-        })}
+        })()}
 
         {/* Degradados ROJOS laterales (auto al lado), a su altura real. */}
         {redBand("left", hasLeft)}
@@ -225,15 +231,16 @@ export function Radar({ previewMode = false, injectedTelemetry = null, settings 
           boxShadow: "0 0 5px rgba(0,0,0,0.55)", pointerEvents: "none",
         }} />
 
-        {/* Aviso de autos que se aproximan de más lejos que la ventana a escala. */}
+        {/* Autos que se aproximan de más lejos que la ventana: marca sutil en el
+            borde (arriba = adelante, abajo = atrás), sin números ni flechas. */}
         {farCars.map((d) => {
           const ahead = d.relMeters >= 0;
           return (
-            <div key={`far-${d.carIdx}`} className="font-mono font-bold" style={{
+            <div key={`far-${d.carIdx}`} style={{
               position: "absolute", left: "50%", transform: "translateX(-50%)",
-              [ahead ? "top" : "bottom"]: 2, fontSize: "10px", color: proxColor(d.relMeters),
-              textShadow: "0 1px 2px rgba(0,0,0,0.8)", pointerEvents: "none",
-            }}>{ahead ? "▲" : "▼"}{Math.abs(d.relMeters).toFixed(0)}</div>
+              [ahead ? "top" : "bottom"]: 1, width: "26%", height: 3, borderRadius: 2,
+              background: proxColor(d.relMeters), opacity: 0.7, pointerEvents: "none",
+            }} />
           );
         })}
 

@@ -39,6 +39,7 @@ contextBridge.exposeInMainWorld('fly', {
   getRegistry: () => ipcRenderer.invoke('config:registry'),
   togglePreview: () => ipcRenderer.invoke('preview:toggle'),
   getPreview: () => ipcRenderer.invoke('preview:get'),
+  getPreviewSample: () => ipcRenderer.invoke('preview:sample'),
   setPreview: (enabled) => ipcRenderer.invoke('preview:set', enabled),
   configurePreview: (options) => ipcRenderer.invoke('preview:configure', options),
 
