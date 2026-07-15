@@ -257,6 +257,7 @@ class IrsdkClient {
         delta,
         lap,
         speed,
+        currentLapTime: currentLap,
         onTrack: inLap,
         preview: this._previewMode,
       };
@@ -715,6 +716,10 @@ class IrsdkClient {
       // Tiempo de vuelta de referencia (best del player en la sesión) para que
       // el DeltaBar pueda proyectar la vuelta actual: predicha = ref + delta.
       refLapTime: bestLap || 0,
+      // Tiempo de vuelta en curso a 60 Hz. lapTimes.currentLap viaja por el
+      // canal pesado throttled a 500ms y se ve "a saltos"; este campo permite
+      // que SectorTimes muestre el Current fluido.
+      currentLapTime: currentLap,
       lap,
       speed,
       onTrack: isOnTrack,
@@ -1002,6 +1007,12 @@ class IrsdkClient {
       speed: this._cachedData.speed ?? 0,
       onTrack: this._cachedData.onTrack ?? false,
       preview: this._cachedData.preview ?? false,
+      // Tiempo de vuelta en curso a 60 Hz (lapTimes.currentLap del canal
+      // pesado viene throttled a 500ms y se ve "a saltos").
+      currentLapTime: this._cachedData.currentLapTime ?? 0,
+      // Spotter del juego (izq/der) para el Radar. Tiene que viajar por el
+      // canal rápido: un aviso de auto al lado no puede llegar con lag.
+      carLeftRight: this._cachedData.carLeftRight ?? 0,
       session: this._cachedData.session,
       sessionType: this._cachedData.sessionType,
       // Sectors: arrays pequeños (24 floats × 3) que ya se actualizan cada tick.

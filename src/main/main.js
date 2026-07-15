@@ -17,6 +17,7 @@ let configStore = null;
 let overlayManager = null;
 let dashboardWindow = null;
 let _recPrevConnected = false;
+let _lastSessionCtxKey = null;
 let sendUpdate = () => {};
 let updateCheckInterval = null;
 let isQuitting = false;
@@ -234,6 +235,18 @@ app.whenReady().then(() => {
     }
     _recPrevConnected = !!data.connected;
 
+    // Filtro de overlays por tipo de sesión: notificar al manager sólo cuando
+    // cambia el contexto (sessionType/connected/preview), no en cada tick.
+    const sessionCtxKey = `${data.sessionType}|${!!data.connected}|${!!data.preview}`;
+    if (sessionCtxKey !== _lastSessionCtxKey) {
+      _lastSessionCtxKey = sessionCtxKey;
+      overlayManager.setSessionContext({
+        sessionType: data.sessionType,
+        connected: data.connected,
+        preview: data.preview,
+      });
+    }
+
     for (const [id, win] of overlayManager.windows.entries()) {
       if (overlayManager.isUnlocked(id)) continue;
       if (win.isDestroyed()) continue;
@@ -269,6 +282,9 @@ app.whenReady().then(() => {
   });
   globalShortcut.register('F9', () => {
     const enabled = irsdk.togglePreview();
+    // Re-aplicar visibilidad: en preview los overlays se muestran aunque el
+    // filtro por sesión los oculte; al salir, se restaura el filtro.
+    applyPreviewMode();
     console.log(`[main] preview mode: ${enabled ? 'ON' : 'OFF'}`);
   });
 });
@@ -559,11 +575,8 @@ function applyPreviewMode() {
   //   - showAll=true: todos los overlays activos se muestran
   const preview = irsdk.isPreview();
   if (!preview) {
-    // Restaurar estado normal: solo los enabled
-    for (const [id, ov] of Object.entries(configStore.get().overlays)) {
-      if (ov.enabled) overlayManager.show(id);
-      else overlayManager.hide(id);
-    }
+    // Restaurar estado normal: los enabled, respetando el filtro por sesión
+    overlayManager.applySessionVisibility();
     return;
   }
   // Modo preview
@@ -575,6 +588,13 @@ function applyPreviewMode() {
   } else if (previewSelectedId) {
     for (const [id, ov] of Object.entries(configStore.get().overlays)) {
       if (id === previewSelectedId) overlayManager.show(id);
+      else overlayManager.hide(id);
+    }
+  } else {
+    // Preview vía F9 sin pasar por el dashboard: mostrar todos los enabled
+    // (en preview el filtro por sesión no aplica, para poder verlos todos).
+    for (const [id, ov] of Object.entries(configStore.get().overlays)) {
+      if (ov.enabled) overlayManager.show(id);
       else overlayManager.hide(id);
     }
   }

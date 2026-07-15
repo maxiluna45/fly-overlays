@@ -61,6 +61,10 @@ const OVERLAY_DEFAULT_SETTINGS = {
   },
 };
 
+// Visibilidad por tipo de sesión. true = el overlay se muestra en ese grupo.
+// race = Race · qualify = Lone/Open Qualify · practice = Practice/Warmup/Testing.
+const SESSION_DEFAULTS = { race: true, qualify: true, practice: true };
+
 const DEFAULTS = {
   overlays: {
     delta: {
@@ -70,6 +74,7 @@ const DEFAULTS = {
       width: 600,
       height: 120,
       opacity: 0.8,
+      sessions: { ...SESSION_DEFAULTS },
       settings: { ...OVERLAY_DEFAULT_SETTINGS.delta },
     },
     sectors: {
@@ -79,6 +84,7 @@ const DEFAULTS = {
       width: 600,
       height: 160,
       opacity: 0.8,
+      sessions: { ...SESSION_DEFAULTS },
       settings: { ...OVERLAY_DEFAULT_SETTINGS.sectors },
     },
     relative: {
@@ -88,6 +94,7 @@ const DEFAULTS = {
       width: 420,
       height: 400,
       opacity: 0.9,
+      sessions: { ...SESSION_DEFAULTS },
       settings: { ...OVERLAY_DEFAULT_SETTINGS.relative },
     },
     standings: {
@@ -97,6 +104,7 @@ const DEFAULTS = {
       width: 460,
       height: 520,
       opacity: 0.9,
+      sessions: { ...SESSION_DEFAULTS },
       settings: { ...OVERLAY_DEFAULT_SETTINGS.standings },
     },
     radar: {
@@ -106,6 +114,7 @@ const DEFAULTS = {
       width: 240,
       height: 300,
       opacity: 0.85,
+      sessions: { ...SESSION_DEFAULTS },
       settings: { ...OVERLAY_DEFAULT_SETTINGS.radar },
     },
   },
@@ -140,9 +149,27 @@ class ConfigStore {
       if (fs.existsSync(this.path)) {
         const raw = fs.readFileSync(this.path, 'utf-8');
         const parsed = JSON.parse(raw);
-        // Merge con defaults para agregar overlays nuevos automáticamente
+        // Merge con defaults para agregar overlays nuevos automáticamente.
+        // Por overlay es merge de primer nivel: así los configs guardados antes
+        // de que existiera `sessions` reciben el default (todo visible).
+        const overlays = {};
+        const savedOverlays = parsed.overlays || {};
+        for (const [id, def] of Object.entries(DEFAULTS.overlays)) {
+          const saved = savedOverlays[id] || {};
+          overlays[id] = {
+            ...def,
+            ...saved,
+            sessions: { ...SESSION_DEFAULTS, ...(saved.sessions || {}) },
+          };
+        }
+        // Conservar overlays guardados que ya no estén en DEFAULTS (por las dudas)
+        for (const [id, saved] of Object.entries(savedOverlays)) {
+          if (!overlays[id]) {
+            overlays[id] = { ...saved, sessions: { ...SESSION_DEFAULTS, ...(saved.sessions || {}) } };
+          }
+        }
         return {
-          overlays: { ...DEFAULTS.overlays, ...(parsed.overlays || {}) },
+          overlays,
           hotkeys: { ...DEFAULTS.hotkeys, ...(parsed.hotkeys || {}) },
           telemetryDir: parsed.telemetryDir ?? DEFAULTS.telemetryDir,
           sessionLabels: parsed.sessionLabels || {},

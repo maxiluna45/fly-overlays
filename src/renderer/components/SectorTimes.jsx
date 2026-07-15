@@ -152,6 +152,9 @@ export function SectorTimes({ previewMode = false, injectedTelemetry = null, set
   const [unlocked, setUnlocked] = useState(false);
   const [scale, setScale] = useState(1);
   const containerRef = useRef(null);
+  // true una vez que el canal rápido entregó currentLapTime: a partir de ahí el
+  // canal pesado no debe pisar currentLap con su copia stale (throttled a 500ms).
+  const hasFastCurrentRef = useRef(false);
 
   useEffect(() => {
     if (injectedTelemetry) return;
@@ -163,6 +166,12 @@ export function SectorTimes({ previewMode = false, injectedTelemetry = null, set
         // Si no lo copiamos al estado, todos los sub-sectores se quedan en null
         // y se renderizan como "empty" (gris muy claro) sin colores.
         if (data.sectors) setSectors(data.sectors);
+        // currentLapTime viaja por el canal rápido (60 Hz). lapTimes.currentLap
+        // llega por el canal pesado throttled a 500ms y se ve "a saltos".
+        if (data.currentLapTime != null) {
+          hasFastCurrentRef.current = true;
+          setLapTimes((prev) => ({ ...prev, currentLap: data.currentLapTime }));
+        }
         setTelemetry((prev) => ({ ...prev, ...data }));
       });
       return unsub;
@@ -199,7 +208,13 @@ export function SectorTimes({ previewMode = false, injectedTelemetry = null, set
     if (typeof window.fly.onTelemetryHeavy !== "function") return;
     try {
       const unsub = window.fly.onTelemetryHeavy((data) => {
-        if (data.lapTimes) setLapTimes(data.lapTimes);
+        if (data.lapTimes) {
+          setLapTimes((prev) =>
+            hasFastCurrentRef.current
+              ? { ...data.lapTimes, currentLap: prev.currentLap }
+              : data.lapTimes
+          );
+        }
       });
       return unsub;
     } catch (_) {}
@@ -233,6 +248,14 @@ export function SectorTimes({ previewMode = false, injectedTelemetry = null, set
   const currentLap = lapTimes.currentLap;
   const bestSum = lapTimes.bestLap;
   const lastSum = lapTimes.lastLap;
+  // Vuelta óptima teórica: suma de los 24 mejores micro-sectores. Solo es
+  // válida cuando hay marca en TODOS (si falta alguno, la suma engañaría).
+  const optimalSum = (() => {
+    const best = sectors.best || [];
+    if (best.length !== TOTAL_SUBS) return null;
+    if (!best.every((v) => v != null && isFinite(v) && v > 0)) return null;
+    return sumOf(best);
+  })();
 
   return (
     <div
@@ -297,8 +320,8 @@ export function SectorTimes({ previewMode = false, injectedTelemetry = null, set
                   invalid={lapTimes.lastLapInvalid}
                 />
                 <LapTimeRow
-                  label="Record"
-                  time={bestSum > 0 ? bestSum : null}
+                  label="Optimal"
+                  time={optimalSum}
                   accent="text-purple-300"
                 />
               </div>

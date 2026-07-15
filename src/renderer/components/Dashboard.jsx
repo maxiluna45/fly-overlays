@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import {
   Layers,
   Gauge,
@@ -153,6 +153,21 @@ export function Dashboard() {
   const handleOpacity = async (id, value) => {
     await window.fly.setOverlay(id, { opacity: value / 100 });
     await load();
+  };
+
+  const handleSessionToggle = async (id, key) => {
+    const ov = config.overlays[id] || {};
+    const prev = { race: true, qualify: true, practice: true, ...(ov.sessions || {}) };
+    const next = { ...prev, [key]: !prev[key] };
+    // Update optimista local para que los chips reaccionen al instante
+    setConfig((c) => c ? {
+      ...c,
+      overlays: {
+        ...c.overlays,
+        [id]: { ...c.overlays[id], sessions: next },
+      },
+    } : c);
+    await window.fly.setOverlay(id, { sessions: next });
   };
 
   const handleSettingChange = async (id, key, value) => {
@@ -384,6 +399,32 @@ export function Dashboard() {
                 checked={!!ov.enabled}
                 onCheckedChange={() => handleToggle(selectedId)}
               />
+            </div>
+
+            {/* Visibilidad por tipo de sesión: en qué sesiones se muestra el
+                overlay cuando está activo. En edit (F7) y preview (F9) se
+                muestra siempre, para poder posicionarlo. */}
+            <div className="space-y-1.5">
+              <span className="text-xs">Mostrar en</span>
+              <div className={`flex gap-1.5 ${!ov.enabled ? "opacity-40 pointer-events-none" : ""}`}>
+                {[["race", "Race"], ["qualify", "Qualy"], ["practice", "Práctica"]].map(([key, label]) => {
+                  const on = ov.sessions?.[key] !== false;
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => handleSessionToggle(selectedId, key)}
+                      title={on ? `Se muestra en ${label}` : `Oculto en ${label}`}
+                      className={`flex-1 px-2 py-1 rounded-md text-[11px] font-semibold border transition-colors ${
+                        on
+                          ? "bg-accent text-accent-foreground border-transparent"
+                          : "bg-transparent text-muted-foreground border-border hover:bg-accent/30"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             <div className="space-y-1.5">
@@ -680,6 +721,9 @@ function SectorLite() {
     bestLap: 0,
     lastLap: 0,
   });
+  // true una vez que el canal rápido entregó currentLapTime: a partir de ahí el
+  // canal pesado no debe pisar currentLap con su copia stale (throttled a 500ms).
+  const hasFastCurrentRef = useRef(false);
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.fly) return;
@@ -692,6 +736,10 @@ function SectorLite() {
           best: Array.isArray(data.sectors.best) ? data.sectors.best : new Array(24).fill(null),
         });
       }
+      if (data.currentLapTime != null) {
+        hasFastCurrentRef.current = true;
+        setLapTimes((prev) => ({ ...prev, currentLap: data.currentLapTime }));
+      }
     });
     return unsub;
   }, []);
@@ -701,7 +749,11 @@ function SectorLite() {
     if (typeof window.fly.onTelemetryHeavy !== "function") return;
     const unsub = window.fly.onTelemetryHeavy((data) => {
       if (data.lapTimes) {
-        setLapTimes(data.lapTimes);
+        setLapTimes((prev) =>
+          hasFastCurrentRef.current
+            ? { ...data.lapTimes, currentLap: prev.currentLap }
+            : data.lapTimes
+        );
       }
     });
     return unsub;
@@ -727,7 +779,15 @@ function SectorLite() {
         <TimeLite label="Current" time={curLap} className="text-white" />
         <TimeLite label="Best" time={bestLap} className="text-pos" />
         <TimeLite label="Last" time={lastLap} className="text-white/80" />
-        <TimeLite label="Record" time={sectors.best?.some((v) => v != null) ? bestLap : null} className="text-purple-300" />
+        <TimeLite
+          label="Optimal"
+          time={
+            sectors.best?.length === 24 && sectors.best.every((v) => v != null && isFinite(v) && v > 0)
+              ? sumArray(sectors.best)
+              : null
+          }
+          className="text-purple-300"
+        />
       </div>
 
       <div className="mx-3 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.12), transparent)" }} />

@@ -321,9 +321,71 @@ function MapSourceSwitch({ source, setSource, avail }) {
   );
 }
 
+// ===== Grip (círculo de fricción) =====
+// % del límite de grip usado por bucket: |G combinada| / envolvente(velocidad).
+// iRacing no publica el grip real del neumático, así que usamos el proxy
+// estándar (Motec "G Sum"): cuánta aceleración total genera el auto vs. la
+// máxima que demostró poder generar A ESA VELOCIDAD. La envolvente g-g-v se
+// estima de las mismas vueltas (p95 de G combinada por bin de velocidad), por
+// lo que se auto-calibra por auto/pista/estado de gomas. Con carga aero esto
+// importa: a alta velocidad hay mucho más grip disponible que en curvas lentas,
+// y una G-máx única mentiría en ambas.
+function buildGripPct(lapSamples, refSamples) {
+  const src = [];
+  for (const arr of [lapSamples, refSamples]) {
+    if (!Array.isArray(arr)) continue;
+    for (const s of arr) {
+      if (s && s.gLat != null && s.gLon != null && s.sp != null && isFinite(s.sp)) {
+        src.push({ sp: s.sp, g: Math.hypot(s.gLat, s.gLon) });
+      }
+    }
+  }
+  // Sin suficientes muestras con G (ej: CSV sin columnas de aceleración) no hay modo Grip.
+  if (src.length < 40) return { lap: null, ref: null };
+  let spLo = Infinity, spHi = -Infinity;
+  for (const p of src) { if (p.sp < spLo) spLo = p.sp; if (p.sp > spHi) spHi = p.sp; }
+  const BINS = 12;
+  const span = Math.max(1e-6, spHi - spLo);
+  const byBin = Array.from({ length: BINS }, () => []);
+  for (const p of src) {
+    const b = Math.min(BINS - 1, Math.max(0, Math.floor(((p.sp - spLo) / span) * BINS)));
+    byBin[b].push(p.g);
+  }
+  // p95 por bin: robusto a picos aislados (pianos, contactos, baches).
+  const env = byBin.map((gs) => {
+    if (gs.length < 5) return null;
+    gs.sort((a, b) => a - b);
+    return gs[Math.floor(gs.length * 0.95)];
+  });
+  // Bins vacíos (velocidades poco visitadas) → vecino no-nulo más cercano.
+  for (let i = 0; i < BINS; i++) {
+    if (env[i] != null) continue;
+    for (let j = 1; j < BINS && env[i] == null; j++) {
+      if (env[i - j] != null) env[i] = env[i - j];
+      else if (env[i + j] != null) env[i] = env[i + j];
+    }
+  }
+  if (env.some((v) => v == null || !(v > 0))) return { lap: null, ref: null };
+  // Envolvente(velocidad): interpolación lineal entre centros de bin.
+  const envAt = (sp) => {
+    const u = ((sp - spLo) / span) * BINS - 0.5;
+    const i0 = Math.max(0, Math.min(BINS - 1, Math.floor(u)));
+    const i1 = Math.min(BINS - 1, i0 + 1);
+    const t = Math.max(0, Math.min(1, u - i0));
+    return env[i0] + (env[i1] - env[i0]) * t;
+  };
+  const pct = (arr) => (Array.isArray(arr) && arr.length
+    ? arr.map((s) => (s && s.gLat != null && s.gLon != null && s.sp != null
+      ? Math.min(1, Math.hypot(s.gLat, s.gLon) / Math.max(0.1, envAt(s.sp)))
+      : null))
+    : null);
+  return { lap: pct(lapSamples), ref: pct(refSamples) };
+}
+
 // Capa estática de trazadas (memoizada: no re-renderiza en cada hover).
 // mode 'speed' → color por velocidad; 'compare' → verde/rojo por dónde ganás/
-// perdés tiempo vs la referencia (derivada del delta).
+// perdés tiempo vs la referencia (derivada del delta); 'grip' → % del límite
+// de grip usado (gris = margen · verde = medio · amarillo = cerca · rojo = límite).
 const TrackLayer = React.memo(function TrackLayer({ segs, segsRef = [], refD, showRef, showLap = true, k, mode, maxSlope }) {
   // Gradiente continuo: verde (ganás más) → gris (neutro) → rojo (perdés más).
   const cmpColor = (dv) => {
@@ -343,7 +405,29 @@ const TrackLayer = React.memo(function TrackLayer({ segs, segsRef = [], refD, sh
   };
   const throttleColor = (th) => lerp3(BASE, [46, 204, 113], th ?? 0);
   const brakeColor = (br) => lerp3(BASE, [239, 68, 68], br ?? 0);
-  const channelColor = mode === "throttle" ? (s) => throttleColor(s.th) : mode === "brake" ? (s) => brakeColor(s.br) : null;
+  // Grip: gris (margen) → verde (uso medio) → amarillo (cerca) → rojo (al límite).
+  const GRIP_STOPS = [
+    [0.0, [70, 78, 90]],
+    [0.6, [46, 204, 113]],
+    [0.85, [234, 179, 8]],
+    [1.0, [239, 68, 68]],
+  ];
+  const gripColor = (gr) => {
+    if (gr == null || !isFinite(gr)) return "rgb(120,130,145)";
+    const v = Math.max(0, Math.min(1, gr));
+    for (let i = 1; i < GRIP_STOPS.length; i++) {
+      if (v <= GRIP_STOPS[i][0]) {
+        const [p0, c0] = GRIP_STOPS[i - 1];
+        const [p1, c1] = GRIP_STOPS[i];
+        return lerp3(c0, c1, (v - p0) / (p1 - p0 || 1));
+      }
+    }
+    return "rgb(239,68,68)";
+  };
+  const channelColor = mode === "throttle" ? (s) => throttleColor(s.th)
+    : mode === "brake" ? (s) => brakeColor(s.br)
+    : mode === "grip" ? (s) => gripColor(s.gr)
+    : null;
   const d = (s) => `M${s.x1.toFixed(1)},${s.y1.toFixed(1)}C${s.c1x.toFixed(1)},${s.c1y.toFixed(1)} ${s.c2x.toFixed(1)},${s.c2y.toFixed(1)} ${s.x2.toFixed(1)},${s.y2.toFixed(1)}`;
   const lapColor = (s) => (mode === "compare" ? cmpColor(s.dv) : channelColor ? channelColor(s) : `hsl(${Math.round(s.hue)},85%,55%)`);
   return (
@@ -365,7 +449,7 @@ const TrackLayer = React.memo(function TrackLayer({ segs, segsRef = [], refD, sh
 
 // Mapa interactivo: zoom (rueda / +−), pan (arrastrar), toggle de trazadas y
 // marcador del instante bajo el cursor (vinculado a los gráficos de telemetría).
-function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, outlineD, corners, fill = false, highlightRange = null, roadWidth = 0, outlineMode = null, tiles = null, attribution = null, scrim = false }) {
+function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, outlineD, corners, fill = false, highlightRange = null, roadWidth = 0, outlineMode = null, tiles = null, attribution = null, scrim = false, gripLap = null, gripRef = null }) {
   const BV = baseView || { x: 0, y: 0, w: 1000, h: 380 };
   const W = BV.w, H = BV.h, X0 = BV.x, Y0 = BV.y;
   const [showLap, setShowLap] = useState(true);
@@ -373,8 +457,9 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
   const [mode, setMode] = useState("speed"); // 'speed' | 'compare' | 'inputs'
   const [view, setView] = useState(BV);
   const [dragging, setDragging] = useState(false);
-  // 'compare' necesita referencia; 'speed' e 'inputs' funcionan siempre.
-  const effMode = mode === "compare" && !hasRef ? "speed" : mode;
+  // 'compare' necesita referencia y 'grip' datos de G; 'speed' e 'inputs'
+  // funcionan siempre.
+  const effMode = (mode === "compare" && !hasRef) || (mode === "grip" && !gripLap) ? "speed" : mode;
   const wrapRef = useRef(null);
   const dragRef = useRef(null);
   // Factor de tamaño de trazos: proporcional al ancho VISIBLE (tamaño ~constante
@@ -389,7 +474,8 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
   const zoomAt = (fx, fy, factor) => setView((v) => {
     let nw = v.w * factor;
     if (nw >= W * 0.98) return { x: X0, y: Y0, w: W, h: H }; // snap a completo
-    nw = Math.max(W * 0.1, nw);
+    // Zoom-in máximo: ancho visible mínimo = 4% del total (25×).
+    nw = Math.max(W * 0.04, nw);
     const nh = nw * (H / W);
     const cx = v.x + fx * v.w, cy = v.y + fy * v.h;
     const nx = Math.max(X0, Math.min(X0 + W - nw, cx - fx * nw));
@@ -447,10 +533,10 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
       const p0 = (pts[k - 2] || prv).p, p3 = (pts[k + 1] || cur).p;
       const c1x = a.x + (b.x - p0.x) / 6, c1y = a.y + (b.y - p0.y) / 6;
       const c2x = b.x - (p3.x - a.x) / 6, c2y = b.y - (p3.y - a.y) / 6;
-      out.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, c1x, c1y, c2x, c2y, hue: b.hue, dv, th: b.th, br: b.br });
+      out.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, c1x, c1y, c2x, c2y, hue: b.hue, dv, th: b.th, br: b.br, gr: gripLap ? gripLap[cur.i] : null });
     }
     return out;
-  }, [mapPath, showLap, mapDelta]);
+  }, [mapPath, showLap, mapDelta, gripLap]);
 
   // Segmentos de la REFERENCIA (para colorearla por inputs en el modo Freno/Gas).
   const segsRef = useMemo(() => {
@@ -465,10 +551,10 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
       const p0 = (pts[k - 2] || prv).p, p3 = (pts[k + 1] || cur).p;
       const c1x = a.x + (b.x - p0.x) / 6, c1y = a.y + (b.y - p0.y) / 6;
       const c2x = b.x - (p3.x - a.x) / 6, c2y = b.y - (p3.y - a.y) / 6;
-      out.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, c1x, c1y, c2x, c2y, th: b.th, br: b.br });
+      out.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, c1x, c1y, c2x, c2y, th: b.th, br: b.br, gr: gripRef ? gripRef[cur.i] : null });
     }
     return out;
-  }, [mapPathRef]);
+  }, [mapPathRef, gripRef]);
   // Escala robusta para el color de comparación: percentil ~85 de |dv| en vez
   // del máximo. Así un pico aislado (típico con una referencia mucho más rápida,
   // o con tiempos reconstruidos de un CSV) no aplana todo el mapa a gris.
@@ -502,7 +588,7 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
         <div className="flex items-center gap-2">
           <span className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Mapa</span>
           <div className="flex border border-border rounded-md overflow-hidden">
-            {[["speed", "Velocidad"], ...(hasRef ? [["compare", "Comparación"]] : []), ["throttle", "Acelerador"], ["brake", "Freno"]].map(([v, l]) => (
+            {[["speed", "Velocidad"], ...(hasRef ? [["compare", "Comparación"]] : []), ["throttle", "Acelerador"], ["brake", "Freno"], ...(gripLap ? [["grip", "Grip"]] : [])].map(([v, l]) => (
               <button
                 key={v}
                 onClick={() => setMode(v)}
@@ -1136,7 +1222,11 @@ export function AnalysisView() {
     const hasG = gPts.length > 20;
     const gMax = hasG ? Math.max(1, ...gPts.map((p) => Math.max(Math.abs(p.x), Math.abs(p.y)))) : 1;
 
-    return { n, speedLap, speedBest, throttle, brake, steer, rpm, delta, throttleRef, brakeRef, steerRef, rpmRef, hasRef, spMin, spMax, dMax, stMax, rpmMax, mapPath, mapPathRef, gPts, hasG, gMax, hasMap: mapPath != null };
+    // % del límite de grip por bucket (círculo de fricción vs envolvente g-g-v).
+    // Se indexa por bucket igual que los mapPath, así el mapa lo pinta directo.
+    const grip = buildGripPct(lap.samples, best && best !== lap ? best.samples : null);
+
+    return { n, speedLap, speedBest, throttle, brake, steer, rpm, delta, throttleRef, brakeRef, steerRef, rpmRef, hasRef, spMin, spMax, dMax, stMax, rpmMax, mapPath, mapPathRef, gPts, hasG, gMax, hasMap: mapPath != null, gripLap: grip.lap, gripRef: grip.ref };
   }, [lap, best, analysis]);
 
   // Mapa con la FORMA REAL del circuito (SVG de iRacing): sampleamos el path por
@@ -1880,6 +1970,8 @@ function AnalysisDetail({ charts, svgMap, corners, hoverIdx, setHoverIdx, showLa
       mapPathRef={svgMap ? svgMap.mapPathRef : charts.mapPathRef}
       mapDelta={charts.delta}
       hasRef={charts.hasRef}
+      gripLap={charts.gripLap}
+      gripRef={charts.gripRef}
       hoverIdx={hoverIdx}
       baseView={svgMap ? svgMap.baseView : undefined}
       outlineD={svgMap ? svgMap.outlineD : undefined}

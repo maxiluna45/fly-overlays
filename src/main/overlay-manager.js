@@ -45,11 +45,64 @@ const REGISTRY = {
   },
 };
 
+// Clasifica el SessionType del YAML de iRacing en los 3 grupos de visibilidad
+// configurables por overlay. Todo lo que no es Race ni Qualy (Practice, Warmup,
+// Offline Testing, etc.) cae en 'practice'.
+function classifySession(sessionType) {
+  const s = sessionType || '';
+  if (/race/i.test(s)) return 'race';
+  if (/qual/i.test(s)) return 'qualify';
+  return 'practice';
+}
+
 class OverlayManager {
   constructor(configStore) {
     this.config = configStore;
     this.windows = new Map(); // id -> BrowserWindow
     this.unlockedState = new Map(); // id -> bool
+    // Contexto de sesión para el filtro por tipo (Race/Qualy/Práctica).
+    this.session = { type: null, connected: false, preview: false };
+  }
+
+  // Lo llama main.js cuando cambia sessionType/connected/preview (no por tick).
+  setSessionContext({ sessionType, connected, preview }) {
+    this.session = {
+      type: sessionType || null,
+      connected: !!connected,
+      preview: !!preview,
+    };
+    this.applySessionVisibility();
+  }
+
+  // ¿Corresponde que la ventana de este overlay esté visible AHORA?
+  // El filtro por sesión solo actúa con el sim conectado y sesión conocida:
+  // en edit mode (F7), preview (F9) o sin iRacing, el overlay se muestra
+  // igual para poder posicionarlo/configurarlo.
+  _isVisibleNow(id) {
+    const ov = this.config.getOverlay(id);
+    if (!ov || !ov.enabled) return false;
+    if (this.isUnlocked(id)) return true;
+    if (this.session.preview || !this.session.connected || !this.session.type) return true;
+    const sessions = ov.sessions || {};
+    return sessions[classifySession(this.session.type)] !== false;
+  }
+
+  // Re-evalúa la visibilidad de todos los overlays enabled contra el contexto
+  // de sesión actual. Crea la ventana si hace falta (pudo no crearse nunca si
+  // el overlay se habilitó durante una sesión filtrada).
+  applySessionVisibility() {
+    // En preview (F9) la visibilidad la maneja applyPreviewMode (main.js),
+    // que puede estar mostrando SOLO el overlay seleccionado en el dashboard.
+    if (this.session.preview) return;
+    const data = this.config.get();
+    for (const [id, ov] of Object.entries(data.overlays)) {
+      if (!ov.enabled) {
+        this.hide(id);
+        continue;
+      }
+      if (this._isVisibleNow(id)) this.show(id);
+      else this.hide(id);
+    }
   }
 
   createAll() {
@@ -108,7 +161,7 @@ class OverlayManager {
 
   toggle(id) {
     const enabled = this.config.toggleOverlay(id);
-    if (enabled) {
+    if (enabled && this._isVisibleNow(id)) {
       this.show(id);
     } else {
       this.hide(id);
@@ -122,6 +175,9 @@ class OverlayManager {
 
   setUnlocked(id, value) {
     this.unlockedState.set(id, value);
+    // Unlock puede requerir mostrar (o crear) una ventana oculta por el filtro
+    // de sesión; lock la vuelve a ocultar si la sesión actual no la permite.
+    this.applySessionVisibility();
     this._applyLockState(id);
   }
 
@@ -135,7 +191,13 @@ class OverlayManager {
   // está desbloqueado, bloquea todos; si están todos bloqueados, desbloquea
   // todos. Evita que se desincronicen (que unos queden movibles y otros no).
   toggleAllUnlocked() {
-    const ids = [...this.windows.keys()];
+    // Iteramos los overlays ENABLED de config (no las ventanas creadas): un
+    // overlay filtrado por sesión puede no tener ventana todavía, pero F7
+    // igual tiene que mostrarlo para poder editarlo.
+    const data = this.config.get();
+    const ids = Object.entries(data.overlays)
+      .filter(([, ov]) => ov.enabled)
+      .map(([id]) => id);
     const anyUnlocked = ids.some((id) => this.isUnlocked(id));
     const next = !anyUnlocked;
     for (const id of ids) this.setUnlocked(id, next);
@@ -164,6 +226,10 @@ class OverlayManager {
       if (updates.settings) {
         this._injectSettings(win, this.config.getOverlay(id).settings);
       }
+    }
+    // Cambió la visibilidad por sesión → re-evaluar contra la sesión actual
+    if (updates.sessions) {
+      this.applySessionVisibility();
     }
     return this.config.getOverlay(id);
   }
