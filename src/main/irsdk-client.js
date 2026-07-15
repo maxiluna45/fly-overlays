@@ -55,6 +55,9 @@ class IrsdkClient {
     this._loopRunning = false;
     this._lightListeners = new Set();
     this._heavyListeners = new Set();
+    // Ancla del reloj de carrera: { session, start } — SessionTime del instante
+    // de la green flag, para que el reloj no cuente gridding/vuelta de formación.
+    this._raceClockAnchor = null;
     this._mockTimer = null;
     this._mockStart = 0;
     this._previewMode = false; // preview mode = datos sintéticos sin iRacing
@@ -529,6 +532,9 @@ class IrsdkClient {
     if (this._refStore) this._refStore.reset();
     this._sectorPcts = null;
     this._trackLength = null;
+    // Ancla del reloj de carrera: la próxima conexión (posiblemente otro
+    // weekend con el mismo SessionNum) tiene que re-anclarse.
+    this._raceClockAnchor = null;
     this._emitLight();
     this._emitHeavy();
     this._scheduleReconnect();
@@ -1602,12 +1608,15 @@ class IrsdkClient {
     if (this.sdk && this._connected) {
       // Telemetría (no falla por YAML)
       let sessionNum = null;
+      let simRemain = 0;
+      let state = 0; // irsdk_SessionState: 2 warmup · 3 parade · 4 racing · 5 checkered
       try {
         this.sdk.waitForData(0);
         const tel = this.sdk.getTelemetry();
         if (tel) {
           session.time = this._read(tel, 'SessionTime') || 0;
-          session.timeRemain = this._read(tel, 'SessionTimeRemain') || 0;
+          simRemain = this._read(tel, 'SessionTimeRemain') || 0;
+          state = this._read(tel, 'SessionState') || 0;
           session.lapCurrent = this._read(tel, 'Lap') || 0;
           session.incidents = this._read(tel, 'PlayerCarMyIncidentCount') || 0;
           sessionNum = this._read(tel, 'SessionNum');
@@ -1625,10 +1634,7 @@ class IrsdkClient {
           if (!Number.isNaN(laps) && laps > 0) session.lapsTotal = laps;
           // Tiempo límite de la sesión: SessionTime en segundos (o "unlimited").
           const tlim = parseFloat(cur.SessionTime);
-          if (isFinite(tlim) && tlim > 0) {
-            session.timeTotal = tlim;
-            session.timeRemain = Math.max(0, tlim - session.time);
-          }
+          if (isFinite(tlim) && tlim > 0) session.timeTotal = tlim;
         }
         // Límite de incidentes: bajo WeekendInfo.WeekendOptions (o raíz).
         const wo = sd && sd.WeekendInfo && sd.WeekendInfo.WeekendOptions;
@@ -1638,9 +1644,41 @@ class IrsdkClient {
           if (!Number.isNaN(m) && m > 0) session.maxIncidents = m;
         }
       } catch (_) {}
-      // Si el sim no publicó timeRemain pero sí tenemos time + timeTotal, lo derivamos
-      if (session.timeTotal > 0 && session.timeRemain === 0) {
-        session.timeRemain = Math.max(0, session.timeTotal - session.time);
+
+      // Reloj de CARRERA anclado a la green flag. SessionTime corre desde que
+      // carga la sesión (gridding + vuelta de formación incluidos), así que en
+      // carreras re-basamos el tiempo al instante de la largada (SessionState
+      // pasa a 4/racing). Antes esto hacía que el reloj superara el tiempo
+      // máximo de carrera y no se entendiera cuánto faltaba.
+      if (/race/i.test(session.type)) {
+        if (state >= 4) {
+          if (!this._raceClockAnchor || this._raceClockAnchor.session !== sessionNum) {
+            // Si la app arranca con la carrera ya en curso, inferimos la
+            // largada desde el remaining oficial del sim (si es coherente);
+            // si no hay dato, anclamos en este instante.
+            let start = session.time;
+            if (session.timeTotal > 0 && simRemain > 0 && simRemain <= session.timeTotal) {
+              start = Math.max(0, session.time - (session.timeTotal - simRemain));
+            }
+            this._raceClockAnchor = { session: sessionNum, start };
+          }
+          session.time = Math.max(0, session.time - this._raceClockAnchor.start);
+        } else {
+          // Pre-carrera (grid / vuelta de formación): el reloj todavía no corre.
+          this._raceClockAnchor = null;
+          session.time = 0;
+        }
+      }
+
+      // timeRemain: preferimos el del sim (es el reloj oficial que muestra
+      // iRacing y respeta la green flag). Solo lo derivamos si no es coherente
+      // (0, o el sentinel de "unlimited" ~604800s que supera el timeTotal).
+      if (session.timeTotal > 0) {
+        session.timeRemain = simRemain > 0 && simRemain <= session.timeTotal + 1
+          ? simRemain
+          : Math.max(0, session.timeTotal - session.time);
+      } else {
+        session.timeRemain = Math.max(0, simRemain);
       }
     }
     return session;

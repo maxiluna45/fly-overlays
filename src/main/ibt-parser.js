@@ -133,6 +133,7 @@ function parseIbtMeta(filePath) {
     // mejor tiempo del jugador NO está fiable en el YAML de resultados, así que
     // lo sacamos de su telemetría real.
     let sessionNum = null, bestLap = null;
+    const lapTimes = [];
     try {
       if (h.numVars > 0 && h.varHeaderOffset > 0 && h.bufLen > 0 && h.bufOffset > 0) {
         const vhBuf = Buffer.alloc(h.numVars * 144);
@@ -162,7 +163,15 @@ function parseIbtMeta(filePath) {
             for (let s = 0; s < numSamples; s += step) {
               fs.readSync(fd, rec, 0, h.bufLen, h.bufOffset + s * h.bufLen);
               const t = readVar(rec, 0, vLast);
-              if (t != null && t > 1 && (bestLap == null || t < bestLap)) bestLap = t;
+              if (t != null && t > 1) {
+                if (bestLap == null || t < bestLap) bestLap = t;
+                // LapLastLapTime cambia una vez por vuelta: cada valor DISTINTO
+                // consecutivo es una vuelta nueva. Sirve para la consistencia
+                // en Progreso (dos vueltas con tiempo idéntico al ms se funden
+                // en una: aceptable para una métrica de dispersión).
+                const r = Math.round(t * 1000) / 1000;
+                if (lapTimes.length === 0 || lapTimes[lapTimes.length - 1] !== r) lapTimes.push(r);
+              }
             }
           }
         }
@@ -178,6 +187,7 @@ function parseIbtMeta(filePath) {
       startedAt: Math.floor(stat.mtimeMs),
       lapCount: null, // se conoce recién al abrir (parse completo)
       bestLap: bestLap != null ? Math.round(bestLap * 1000) / 1000 : null,
+      lapTimes: lapTimes.length ? lapTimes : null,
       trackIdIr: meta.trackIdIr,
       carIdIr: meta.carIdIr,
     };

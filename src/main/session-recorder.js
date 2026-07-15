@@ -187,10 +187,14 @@ class SessionRecorder {
             id: raw.id,
             startedAt: raw.startedAt,
             track: raw.track,
+            trackKey: raw.trackKey || null,
             car: raw.car,
             sessionType: raw.sessionType,
             lapCount: raw.laps.length,
             bestLap: best,
+            // Tiempos de vueltas válidas: livianos (~decenas de floats) y le
+            // permiten a Progreso calcular consistencia sin abrir la sesión.
+            lapTimes: valid.map((l) => l.lapTime),
           };
           this._summaryCache.set(key, summary);
         }
