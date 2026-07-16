@@ -81,6 +81,10 @@ function createDashboardWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       devTools: isDev,
+      // El dashboard es quien escucha el botón del volante (Gamepad API) para
+      // ciclar la referencia del delta: sin esto, al ocultarlo (F8) Chromium
+      // frena los timers a 1 Hz y se pierden las pulsaciones.
+      backgroundThrottling: false,
     },
   });
 
@@ -269,25 +273,49 @@ app.whenReady().then(() => {
 
   createDashboardWindow();
 
-  const config = configStore.get();
-  globalShortcut.register(config.hotkeys.toggleLock, () => {
+  registerHotkeys();
+});
+
+// Acciones de cada hotkey configurable. El nombre es la key en config.hotkeys.
+const HOTKEY_ACTIONS = {
+  toggleLock: () => {
     // Estado uniforme para todos (evita que queden desincronizados: unos
     // movibles y otros no).
     overlayManager.toggleAllUnlocked();
-  });
-  globalShortcut.register(config.hotkeys.openPanel, toggleDashboard);
-  globalShortcut.register('F6', () => {
+  },
+  openPanel: () => toggleDashboard(),
+  forceShow: () => {
     const n = overlayManager.forceShowAll();
-    console.log(`[main] F6: forzando aparición de ${n} overlay(s)`);
-  });
-  globalShortcut.register('F9', () => {
+    console.log(`[main] forzando aparición de ${n} overlay(s)`);
+  },
+  preview: () => {
     const enabled = irsdk.togglePreview();
     // Re-aplicar visibilidad: en preview los overlays se muestran aunque el
     // filtro por sesión los oculte; al salir, se restaura el filtro.
     applyPreviewMode();
     console.log(`[main] preview mode: ${enabled ? 'ON' : 'OFF'}`);
-  });
-});
+  },
+  cycleDeltaRef: () => {
+    const next = cycleDeltaReference();
+    console.log(`[main] delta ref → ${next}`);
+  },
+};
+
+// (Re)registra TODOS los atajos globales desde config. Se llama al iniciar y
+// cada vez que el usuario re-bindea uno desde el apartado Hotkeys.
+function registerHotkeys() {
+  globalShortcut.unregisterAll();
+  const hk = configStore.get().hotkeys || {};
+  for (const [name, action] of Object.entries(HOTKEY_ACTIONS)) {
+    const acc = hk[name];
+    if (!acc) continue;
+    try {
+      globalShortcut.register(acc, action);
+    } catch (err) {
+      console.error(`[main] no se pudo registrar hotkey ${name}=${acc}:`, err.message);
+    }
+  }
+}
 
 app.on('before-quit', () => {
   isQuitting = true;
@@ -318,6 +346,43 @@ ipcMain.handle('config:toggle-overlay', (_e, id) => {
 });
 ipcMain.handle('config:set-overlay', (_e, id, updates) => {
   return overlayManager.applyOverlayUpdate(id, updates);
+});
+
+// Cicla la referencia del DeltaBar entre TODAS las referencias disponibles.
+// Si estaba en un valor viejo/desconocido (ej. 'auto'), arranca desde la primera.
+const DELTA_REF_CYCLE = ['sessionBest', 'fieldBest', 'lastLap', 'personalBest', 'optimal'];
+function cycleDeltaReference() {
+  const ov = configStore.getOverlay('delta');
+  if (!ov) return null;
+  const cur = (ov.settings || {}).deltaReference || 'auto';
+  const idx = DELTA_REF_CYCLE.indexOf(cur);
+  const next = DELTA_REF_CYCLE[(idx + 1) % DELTA_REF_CYCLE.length];
+  overlayManager.applyOverlayUpdate('delta', { settings: { ...(ov.settings || {}), deltaReference: next } });
+  return next;
+}
+ipcMain.handle('delta:cycle-ref', () => cycleDeltaReference());
+
+// Re-bindear un atajo global desde el apartado Hotkeys. Valida nombre,
+// rechaza duplicados contra los demás atajos y revierte si Electron no puede
+// registrar el accelerator (inválido u ocupado por otra app).
+ipcMain.handle('hotkeys:set', (_e, name, accelerator) => {
+  const validNames = Object.keys(HOTKEY_ACTIONS);
+  const fail = (error) => ({ ok: false, error, hotkeys: configStore.get().hotkeys });
+  if (!validNames.includes(name)) return fail('hotkey desconocido');
+  if (typeof accelerator !== 'string' || !accelerator.trim()) return fail('accelerator inválido');
+  const acc = accelerator.trim();
+  const hk = configStore.get().hotkeys || {};
+  const dup = validNames.find((k) => k !== name && hk[k] === acc);
+  if (dup) return fail(`esa tecla ya está asignada a "${dup}"`);
+  const prev = hk[name];
+  configStore.setHotkey(name, acc);
+  registerHotkeys();
+  if (!globalShortcut.isRegistered(acc)) {
+    configStore.setHotkey(name, prev);
+    registerHotkeys();
+    return fail('no se pudo registrar (tecla inválida u ocupada por otra aplicación)');
+  }
+  return { ok: true, hotkeys: configStore.get().hotkeys };
 });
 ipcMain.handle('config:registry', () => REGISTRY);
 

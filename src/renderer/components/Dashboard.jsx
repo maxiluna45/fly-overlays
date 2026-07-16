@@ -16,6 +16,7 @@ import { Standings } from "./Standings.jsx";
 import { Radar } from "./Radar.jsx";
 import { AnalysisView } from "./AnalysisView.jsx";
 import { ProgressView } from "./ProgressView.jsx";
+import { HotkeysView } from "./HotkeysView.jsx";
 import { DeltaBar } from "./DeltaBar.jsx";
 import { SectorTimes } from "./SectorTimes.jsx";
 import { Button } from "./ui/button.jsx";
@@ -155,6 +156,34 @@ export function Dashboard() {
     await load();
   };
 
+  // Botón del volante → ciclar la referencia del DeltaBar. El polling vive acá
+  // porque el dashboard existe durante toda la app (cerrarlo cierra todo) y su
+  // ventana tiene backgroundThrottling off, así sigue leyendo el gamepad aun
+  // oculto con F8. Edge-detect: dispara solo en la transición a presionado.
+  const cycleBtnRef = useRef(null);
+  useEffect(() => {
+    cycleBtnRef.current = config?.overlays?.delta?.settings?.cycleButton || null;
+  }, [config]);
+  useEffect(() => {
+    let prevPressed = false;
+    const iv = setInterval(() => {
+      const bind = cycleBtnRef.current;
+      if (!bind || typeof bind.btn !== "number") return;
+      let pressed = false;
+      try {
+        const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+        for (const p of pads) {
+          if (!p || p.id !== bind.pad) continue;
+          pressed = !!(p.buttons[bind.btn] && p.buttons[bind.btn].pressed);
+          break;
+        }
+      } catch (_) {}
+      if (pressed && !prevPressed && window.fly?.cycleDeltaRef) window.fly.cycleDeltaRef();
+      prevPressed = pressed;
+    }, 60);
+    return () => clearInterval(iv);
+  }, []);
+
   const handleSessionToggle = async (id, key) => {
     const ov = config.overlays[id] || {};
     const prev = { race: true, qualify: true, practice: true, ...(ov.sessions || {}) };
@@ -210,7 +239,7 @@ export function Dashboard() {
           <span className="font-bold tracking-tight text-sm">iFly</span>
         </div>
         <div className="flex items-center gap-1 ml-3">
-          {[["overlays", "Overlays"], ["analysis", "Análisis"], ["progreso", "Progreso"]].map(([v, label]) => (
+          {[["overlays", "Overlays"], ["analysis", "Análisis"], ["progreso", "Progreso"], ["hotkeys", "Hotkeys"]].map(([v, label]) => (
             <button
               key={v}
               onClick={() => setView(v)}
@@ -230,6 +259,8 @@ export function Dashboard() {
         <AnalysisView />
       ) : view === "progreso" ? (
         <ProgressView />
+      ) : view === "hotkeys" ? (
+        <HotkeysView />
       ) : (
       /* MAIN */
       <div className="flex-1 flex overflow-hidden">
@@ -259,7 +290,14 @@ export function Dashboard() {
                 >
                   <Icon className="size-3.5 shrink-0" />
                   <span className="text-xs flex-1 truncate">{m.name}</span>
-                  {isActive && <span className="size-1.5 rounded-full bg-rose-500 shrink-0" />}
+                  <span
+                    className="px-1.5 py-px rounded text-[8px] font-bold tracking-wider shrink-0"
+                    style={isActive
+                      ? { background: "rgba(52,211,153,0.15)", color: "rgb(52,211,153)", border: "1px solid rgba(52,211,153,0.4)" }
+                      : { background: "rgba(255,255,255,0.04)", color: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.1)" }}
+                  >
+                    {isActive ? "ON" : "OFF"}
+                  </span>
                 </button>
               );
             })}
@@ -330,20 +368,10 @@ export function Dashboard() {
 
           <div className="h-12 border-t border-border bg-card/40 flex items-center px-3 gap-2 shrink-0">
             <span className="text-xs text-muted-foreground shrink-0">
-              {Object.values(config.overlays).filter((o) => o.enabled).length} activo
-            </span>
-            <span className="hidden md:flex items-center gap-2 text-[10px] text-muted-foreground/70 ml-1 overflow-hidden">
-              {[
-                [config.hotkeys?.toggleLock || "F7", "mover overlays"],
-                [config.hotkeys?.openPanel || "F8", "panel"],
-                ["F6", "forzar mostrar"],
-                ["F9", "preview"],
-              ].map(([k, label]) => (
-                <span key={k} className="flex items-center gap-1 whitespace-nowrap">
-                  <kbd className="px-1 py-px rounded bg-muted/60 border border-border font-mono text-[9px] text-foreground/80">{k}</kbd>
-                  {label}
-                </span>
-              ))}
+              {(() => {
+                const n = Object.values(config.overlays).filter((o) => o.enabled).length;
+                return `${n} activo${n === 1 ? "" : "s"}`;
+              })()}
             </span>
             <div className="flex-1" />
             <Button
@@ -393,8 +421,26 @@ export function Dashboard() {
           </div>
 
           <div className="p-4 space-y-4 overflow-y-auto flex-1">
-            <div className="flex items-center justify-between">
-              <span className="text-xs">Activo</span>
+            {/* Switch principal: destacado con fondo/borde según estado, porque
+                es EL control del overlay y a mucha gente le pasaba de largo. */}
+            <div
+              className="flex items-center justify-between rounded-lg px-3 py-2.5 transition-colors"
+              style={ov.enabled
+                ? { background: "rgba(52,211,153,0.10)", border: "1px solid rgba(52,211,153,0.45)" }
+                : { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.15)" }}
+            >
+              <div className="flex items-center gap-2">
+                <span
+                  className="size-2 rounded-full shrink-0"
+                  style={{ background: ov.enabled ? "rgb(52,211,153)" : "rgba(255,255,255,0.25)" }}
+                />
+                <span
+                  className="text-xs font-bold tracking-wide"
+                  style={{ color: ov.enabled ? "rgb(52,211,153)" : "rgba(255,255,255,0.6)" }}
+                >
+                  {ov.enabled ? "Overlay activo" : "Overlay desactivado"}
+                </span>
+              </div>
               <Switch
                 checked={!!ov.enabled}
                 onCheckedChange={() => handleToggle(selectedId)}
@@ -1299,12 +1345,16 @@ function AppearanceSettings({ overlayId, overlayKey, settings = {}, onChange }) 
             <span className="text-[11px] text-muted-foreground">Referencia del delta</span>
             <div className="grid grid-cols-2 gap-1">
               {[
-                ["auto", "Auto"],
-                ["sessionBest", "Sesión"],
+                ["sessionBest", "Tu mejor (sesión)"],
+                ["fieldBest", "Mejor de la sesión"],
+                ["lastLap", "Vuelta anterior"],
                 ["personalBest", "Personal"],
                 ["optimal", "Óptima"],
               ].map(([val, label]) => {
-                const active = (settings.deltaReference || "auto") === val;
+                // Configs viejas pueden tener 'auto' guardado: se trata como sessionBest.
+                const cur = settings.deltaReference && settings.deltaReference !== "auto"
+                  ? settings.deltaReference : "sessionBest";
+                const active = cur === val;
                 return (
                   <button
                     key={val}

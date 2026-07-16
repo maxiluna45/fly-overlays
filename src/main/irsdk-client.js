@@ -58,6 +58,9 @@ class IrsdkClient {
     // Ancla del reloj de carrera: { session, start } — SessionTime del instante
     // de la green flag, para que el reloj no cuente gridding/vuelta de formación.
     this._raceClockAnchor = null;
+    // Mejor vuelta de tu clase en la sesión (cualquier piloto), cacheada por
+    // getRelative para la referencia 'fieldBest' del delta.
+    this._fieldBestLap = null;
     this._mockTimer = null;
     this._mockStart = 0;
     this._previewMode = false; // preview mode = datos sintéticos sin iRacing
@@ -535,6 +538,7 @@ class IrsdkClient {
     // Ancla del reloj de carrera: la próxima conexión (posiblemente otro
     // weekend con el mismo SessionNum) tiene que re-anclarse.
     this._raceClockAnchor = null;
+    this._fieldBestLap = null;
     this._emitLight();
     this._emitHeavy();
     this._scheduleReconnect();
@@ -718,6 +722,11 @@ class IrsdkClient {
         sessionBest: this._readDelta(telemetry, 'LapDeltaToSessionBestLap'),
         personalBest: this._readDelta(telemetry, 'LapDeltaToBestLap'),
         optimal: this._readDelta(telemetry, 'LapDeltaToOptimalLap'),
+        // Tu vuelta ANTERIOR ('Lastl' no es typo nuestro: es el nombre real
+        // de la variable en el SDK de iRacing).
+        lastLap: this._readDelta(telemetry, 'LapDeltaToSessionLastlLap'),
+        // Mejor vuelta de CUALQUIER piloto de tu clase en la sesión (derivado).
+        fieldBest: this._deltaToFieldBest(telemetry, bestLap, lapDistPct),
       },
       // Tiempo de vuelta de referencia (best del player en la sesión) para que
       // el DeltaBar pueda proyectar la vuelta actual: predicha = ref + delta.
@@ -1000,6 +1009,22 @@ class IrsdkClient {
       if (v != null && isFinite(v) && Math.abs(v) < 1000) return v;
     }
     return null;
+  }
+
+  // Delta vs la mejor vuelta de CUALQUIER piloto de tu clase en la sesión.
+  // iRacing solo calcula deltas contra TUS vueltas (no existe telemetría del
+  // rival), así que lo derivamos: delta vs tu mejor de sesión + la diferencia
+  // total de tiempos, prorrateada por el avance de la vuelta (arranca en 0 en
+  // meta de salida y llega al gap completo al cruzar). Asume que la ventaja
+  // del rival se reparte pareja en la vuelta — aproximación, pero honesta como
+  // objetivo de ritmo. Si el más rápido sos vos, coincide con 'sessionBest'.
+  // `_fieldBestLap` lo cachea getRelative (corre cada ~100ms).
+  _deltaToFieldBest(telemetry, bestLap, lapDistPct) {
+    const dSessionBest = this._readDelta(telemetry, 'LapDeltaToSessionBestLap');
+    const fieldBest = this._fieldBestLap;
+    if (dSessionBest == null || !(bestLap > 0) || !(fieldBest > 0)) return null;
+    const frac = Math.max(0, Math.min(1, lapDistPct || 0));
+    return dSessionBest + (bestLap - fieldBest) * frac;
   }
 
   _buildLightPayload() {
@@ -1295,6 +1320,12 @@ class IrsdkClient {
               const c = d.CarClassID;
               if (bestLapByClass[c] == null || bl < bestLapByClass[c]) bestLapByClass[c] = bl;
             }
+          }
+          // Cachear la mejor vuelta de TU clase (cualquier piloto): la usa la
+          // referencia 'fieldBest' del DeltaBar en el tick de 60 Hz.
+          {
+            const pc = driverInfo.Drivers[playerIdx] ? driverInfo.Drivers[playerIdx].CarClassID : null;
+            this._fieldBestLap = pc != null && bestLapByClass[pc] > 0 ? bestLapByClass[pc] : null;
           }
 
           // ── Referencia de tiempo de vuelta (L) para convertir distancia→tiempo

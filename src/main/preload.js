@@ -36,6 +36,8 @@ contextBridge.exposeInMainWorld('fly', {
   getConfig: () => ipcRenderer.invoke('config:get'),
   toggleOverlay: (id) => ipcRenderer.invoke('config:toggle-overlay', id),
   setOverlay: (id, updates) => ipcRenderer.invoke('config:set-overlay', id, updates),
+  cycleDeltaRef: () => ipcRenderer.invoke('delta:cycle-ref'),
+  setHotkey: (name, accelerator) => ipcRenderer.invoke('hotkeys:set', name, accelerator),
   getRegistry: () => ipcRenderer.invoke('config:registry'),
   togglePreview: () => ipcRenderer.invoke('preview:toggle'),
   getPreview: () => ipcRenderer.invoke('preview:get'),

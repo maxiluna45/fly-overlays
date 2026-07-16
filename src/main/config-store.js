@@ -16,7 +16,8 @@ const OVERLAY_DEFAULT_SETTINGS = {
     showTrend: true,        // indicador de tendencia ▲/▼
     showPrediction: true,   // tiempo de vuelta proyectado
     range: 5,               // rango de la barra en segundos (±)
-    deltaReference: "auto", // auto | sessionBest | personalBest | optimal
+    deltaReference: "sessionBest", // sessionBest | fieldBest | lastLap | personalBest | optimal
+    cycleButton: null,      // botón de volante/joystick para ciclar: { pad, btn }
   },
   sectors: {
     headerFontSize: 10,     // tamaño de "CURRENT" / "BEST" / etc.
@@ -118,9 +119,16 @@ const DEFAULTS = {
       settings: { ...OVERLAY_DEFAULT_SETTINGS.radar },
     },
   },
+  // Atajos globales. Se administran desde el apartado Hotkeys del dashboard.
   hotkeys: {
-    toggleLock: 'F7',
-    openPanel: 'F8',
+    toggleLock: 'F7',     // mover overlays (edit mode)
+    openPanel: 'F8',      // abrir/cerrar el panel
+    forceShow: 'F6',      // forzar aparición de overlays (recovery)
+    preview: 'F9',        // modo preview (datos sintéticos)
+    // Cicla la referencia del DeltaBar (tu mejor de sesión → mejor de la
+    // sesión → tu vuelta anterior). Mapeable a un botón del volante desde el
+    // software del volante (tecla) o bindeando el botón en el dashboard.
+    cycleDeltaRef: 'F10',
   },
   // Carpeta de telemetría .ibt de iRacing. null = usar la ruta por defecto
   // (Documentos/iRacing/telemetry). El usuario puede sobreescribirla.
@@ -216,6 +224,13 @@ class ConfigStore {
     if (!ov) return null;
     this.setOverlay(id, { enabled: !ov.enabled });
     return this.data.overlays[id].enabled;
+  }
+
+  setHotkey(name, accelerator) {
+    this.data.hotkeys = { ...this.data.hotkeys, [name]: accelerator };
+    this._save();
+    this._emit();
+    return this.data.hotkeys;
   }
 
   setTelemetryDir(dir) {

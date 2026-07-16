@@ -4,6 +4,15 @@ import { EditCorners } from "./ui/edit-corners.jsx";
 const BASE_W = 600;
 const BASE_H = 120;
 
+// Labels legibles de cada referencia del delta (para el badge al ciclar).
+const REF_LABELS = {
+  sessionBest: "TU MEJOR (SESIÓN)",
+  fieldBest: "MEJOR DE LA SESIÓN",
+  personalBest: "PERSONAL",
+  optimal: "ÓPTIMA",
+  lastLap: "VUELTA ANTERIOR",
+};
+
 function formatDelta(seconds) {
   if (typeof seconds !== "number" || !isFinite(seconds)) return "+0.00";
   const sign = seconds >= 0 ? "+" : "−";
@@ -33,14 +42,17 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null, settin
     // carrera ±5s. Antes estaba fijo en 5.
     range: 5,
     // Referencia contra la que se compara el delta:
-    //   'auto'         → según tipo de sesión (best de sesión / qualy / carrera)
     //   'sessionBest'  → tu mejor vuelta de ESTA sesión
+    //   'fieldBest'    → mejor vuelta de CUALQUIER piloto de tu clase en la sesión
+    //   'lastLap'      → tu vuelta anterior
     //   'personalBest' → tu mejor vuelta histórica (auto+pista)
     //   'optimal'      → vuelta óptima (suma de tus mejores sectores)
+    // F10 (o un botón del volante bindeado) las cicla todas, en ese orden.
+    // 'auto' ya no se ofrece; configs viejas que lo tengan caen a sessionBest.
     showTrend: true,
     // Muestra el tiempo de vuelta proyectado (referencia + delta actual).
     showPrediction: true,
-    deltaReference: "auto",
+    deltaReference: "sessionBest",
     ...settings,
   };
   const [telemetry, setTelemetry] = useState({
@@ -53,6 +65,22 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null, settin
 
   const [unlocked, setUnlocked] = useState(false);
   const containerRef = useRef(null);
+
+  // Badge transitorio con la referencia activa: aparece al CAMBIARLA (hotkey
+  // F10 / botón del volante / dashboard) y se esconde solo. En el primer mount
+  // no se muestra (no hubo cambio).
+  const [refBadge, setRefBadge] = useState(null);
+  const prevRefRef = useRef(null);
+  useEffect(() => {
+    const ref = cfg.deltaReference || "auto";
+    const prev = prevRefRef.current;
+    prevRefRef.current = ref;
+    if (prev != null && prev !== ref) {
+      setRefBadge(REF_LABELS[ref] || ref);
+      const t = setTimeout(() => setRefBadge(null), 2000);
+      return () => clearTimeout(t);
+    }
+  }, [cfg.deltaReference]);
 
   const targetRef = useRef(0);
   const displayRef = useRef(0);
@@ -78,15 +106,15 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null, settin
     }
   }, [injectedTelemetry]);
 
-  // Delta según la referencia elegida. 'auto' usa el que ya calcula el cliente
-  // (sector-aware, según tipo de sesión); las otras usan las referencias
-  // alternativas que el cliente publica en deltaRefs.
+  // Delta según la referencia elegida (configs viejas con 'auto' caen a
+  // sessionBest). Si la referencia todavía no está disponible (ej. primera
+  // vuelta de la sesión), fallback al delta que calcula el cliente según tipo
+  // de sesión, así la barra nunca queda muerta.
   const selectedDelta = useMemo(() => {
-    const ref = cfg.deltaReference || "auto";
-    if (ref !== "auto") {
-      const v = telemetry.deltaRefs?.[ref];
-      if (v != null && isFinite(v)) return v;
-    }
+    const raw = cfg.deltaReference;
+    const ref = raw && raw !== "auto" ? raw : "sessionBest";
+    const v = telemetry.deltaRefs?.[ref];
+    if (v != null && isFinite(v)) return v;
     return telemetry.delta || 0;
   }, [telemetry.delta, telemetry.deltaRefs, cfg.deltaReference]);
 
@@ -260,6 +288,21 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null, settin
           style={{ pointerEvents: "none" }}
         >
           PREVIEW
+        </div>
+      )}
+
+      {/* Badge transitorio al ciclar la referencia (F10 / botón del volante) */}
+      {refBadge && (
+        <div
+          className="absolute top-0 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded-md text-[10px] font-bold tracking-widest z-50 border"
+          style={{
+            pointerEvents: "none",
+            background: "rgba(0,0,0,0.85)",
+            borderColor: "rgba(125,211,252,0.5)",
+            color: "rgb(125,211,252)",
+          }}
+        >
+          Δ vs {refBadge}
         </div>
       )}
 
