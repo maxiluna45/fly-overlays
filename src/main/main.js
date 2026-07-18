@@ -8,6 +8,8 @@ const { SessionRecorder } = require('./session-recorder');
 const { parseIbtMeta, parseIbtSession } = require('./ibt-parser');
 const { parseCsvMeta, parseCsvSession } = require('./csv-parser');
 const trackmapStore = require('./trackmap-store');
+const logger = require('./logger');
+const log = logger.createLogger('main');
 
 const isDev = process.env.NODE_ENV === 'development';
 
@@ -65,6 +67,15 @@ function migrateUserData() {
   }
 }
 migrateUserData();
+
+process.on('uncaughtException', (err) => {
+  try { require('./logger').emit('main', 'error', `uncaughtException: ${err && err.stack || err}`); }
+  catch (_) { console.error('[main] uncaughtException:', err); }
+});
+process.on('unhandledRejection', (reason) => {
+  try { require('./logger').emit('main', 'error', `unhandledRejection: ${reason && reason.stack || reason}`); }
+  catch (_) { console.error('[main] unhandledRejection:', reason); }
+});
 
 function createDashboardWindow() {
   dashboardWindow = new BrowserWindow({
@@ -142,6 +153,14 @@ const { autoUpdater } = require('electron-updater');
 
 app.whenReady().then(() => {
   configStore = new ConfigStore();
+  logger.initLogger({ getDiagnosticMode: () => configStore.getDiagnosticMode() });
+  logger.setBroadcast((line) => {
+    const { BrowserWindow } = require('electron');
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send('log:line', line);
+    }
+  });
+  log.info('app iniciada', { version: app.getVersion() });
   overlayManager = new OverlayManager(configStore);
 
   // Auto-update (solo en build empaquetado)
@@ -286,14 +305,14 @@ const HOTKEY_ACTIONS = {
   openPanel: () => toggleDashboard(),
   forceShow: () => {
     const n = overlayManager.forceShowAll();
-    console.log(`[main] forzando aparición de ${n} overlay(s)`);
+    log.info(`forzando aparición de ${n} overlay(s)`);
   },
   preview: () => {
     const enabled = irsdk.togglePreview();
     // Re-aplicar visibilidad: en preview los overlays se muestran aunque el
     // filtro por sesión los oculte; al salir, se restaura el filtro.
     applyPreviewMode();
-    console.log(`[main] preview mode: ${enabled ? 'ON' : 'OFF'}`);
+    log.info(`preview mode: ${enabled ? 'ON' : 'OFF'}`);
   },
   cycleDeltaRef: () => {
     const next = cycleDeltaReference();
@@ -312,7 +331,7 @@ function registerHotkeys() {
     try {
       globalShortcut.register(acc, action);
     } catch (err) {
-      console.error(`[main] no se pudo registrar hotkey ${name}=${acc}:`, err.message);
+      log.error(`no se pudo registrar hotkey ${name}=${acc}`, { error: err.message });
     }
   }
 }
@@ -411,6 +430,25 @@ ipcMain.handle('trackmap:open', () => { shell.openPath(trackmapStore.dir()); ret
 
 ipcMain.handle('tags:get', () => (configStore ? configStore.getDriverTags() : []));
 ipcMain.handle('tags:set', (_e, tags) => (configStore ? configStore.setDriverTags(tags) : []));
+
+// === Logs / diagnóstico ===
+ipcMain.handle('log:write', (_e, entry) => {
+  if (!entry || typeof entry !== 'object') return false;
+  const scope = typeof entry.scope === 'string' ? entry.scope : 'renderer';
+  const level = entry.level || 'info';
+  const text = typeof entry.text === 'string' ? entry.text : String(entry.text ?? '');
+  logger.emit(scope, level, text);
+  return true;
+});
+ipcMain.handle('log:tail', (_e, opts) => logger.getLogs(opts || {}));
+ipcMain.handle('log:open-folder', () => { shell.openPath(logger.getLogDir()); return true; });
+ipcMain.handle('diag:get', () => (configStore ? configStore.getDiagnosticMode() : false));
+ipcMain.handle('diag:set', (_e, v) => {
+  const next = configStore.setDiagnosticMode(v);
+  logger.applyDiagnosticLevel(next);
+  logger.emit('main', 'info', `modo diagnóstico ${next ? 'ON' : 'OFF'}`);
+  return next;
+});
 
 // Geometría real de circuitos (OpenStreetMap) para el mapa de análisis.
 ipcMain.handle('osm:track', async (_e, req) => {
