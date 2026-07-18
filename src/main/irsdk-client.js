@@ -1,6 +1,8 @@
 const { IRacingSDK } = require('irsdk-node');
 const { getSectorPoints, getTrackInfo } = require('./session-parser');
 const { ReferenceLapStore } = require('./reference-lap-store');
+const { createLogger, logThrottled } = require('./logger');
+const log = createLogger('irsdk');
 
 const TIMEOUT = Math.floor((1 / 60) * 1000); // 60fps
 const MOCK_MODE = process.env.FLY_MOCK === '1';
@@ -440,15 +442,15 @@ class IrsdkClient {
     if (this._connecting) return;
     this._connecting = true;
 
-    console.log(`[irsdk][pid:${process.pid}] Conectando al SDK...`);
+    log.info('Conectando al SDK...', { pid: process.pid });
     try {
       this.sdk = new IRacingSDK({ autoEnableTelemetry: true });
       this.sdk.startSDK();
-      console.log(`[irsdk][pid:${process.pid}] SDK iniciado`);
+      log.info('SDK iniciado', { pid: process.pid });
       this._connecting = false;
       this._loop();
     } catch (err) {
-      console.error(`[irsdk][pid:${process.pid}] Error al conectar:`, err.message);
+      log.error('error al conectar', { pid: process.pid, error: err.message });
       this.sdk = null;
       this._connecting = false;
       this._scheduleReconnect();
@@ -469,14 +471,14 @@ class IrsdkClient {
     try {
       hasData = this.sdk.waitForData(TIMEOUT);
     } catch (err) {
-      console.error(`[irsdk][pid:${process.pid}] waitForData error:`, err.message);
+      log.error('waitForData error', { pid: process.pid, error: err.message });
       this._disconnect();
       return;
     }
 
     if (hasData) {
       if (!this._connected) {
-        console.log(`[irsdk][pid:${process.pid}] ✓ Conectado — recibiendo datos`);
+        log.info('conectado, recibiendo datos', { pid: process.pid });
         this._connected = true;
       }
       this._updateCache();
@@ -494,12 +496,12 @@ class IrsdkClient {
     try {
       const running = await IRacingSDK.IsSimRunning();
       if (!running) {
-        console.log(`[irsdk][pid:${process.pid}] iRacing cerrado, reconectando...`);
+        log.info('iRacing cerrado, reconectando');
         this._disconnect();
       } else {
         // iRacing abierto pero sin datos (estás en menú). Seguí esperando.
         if (this._connected) {
-          console.log(`[irsdk][pid:${process.pid}] Sin datos (¿en menú?), esperando...`);
+          log.info('Sin datos (¿en menú?), esperando...', { pid: process.pid });
           this._connected = false;
           this._emitLight();
         }
@@ -512,7 +514,7 @@ class IrsdkClient {
 
   _disconnect() {
     if (this._connected) {
-      console.log(`[irsdk][pid:${process.pid}] ✗ Desconectado`);
+      log.info('desconectado', { pid: process.pid });
     }
     this._connected = false;
     if (this.sdk) {
@@ -1598,6 +1600,26 @@ class IrsdkClient {
           // Info de sesión
           const session = this._getSessionInfo();
 
+          // Sanidad para diagnóstico: posiciones duplicadas o playerIdx perdido
+          // (la clase de bug del relative desordenado/duplicado).
+          if (playerIdx < 0 || !drivers.some((d) => d.carIdx === playerIdx)) {
+            logThrottled('rel-noplayer', 5000, 'relative', 'warn',
+              'playerIdx no está en la lista de drivers', { playerIdx, drivers: drivers.length });
+          }
+          {
+            const byPos = {};
+            for (const d of drivers) if (d.classPosition > 0) byPos[d.classPosition] = (byPos[d.classPosition] || 0) + 1;
+            const dups = Object.entries(byPos).filter(([, c]) => c > 1);
+            if (dups.length) {
+              logThrottled('rel-duppos', 5000, 'relative', 'warn',
+                'classPosition duplicada en el relative', { dups, sessionState });
+            }
+            if (drivers.length > 1 && drivers.filter((d) => d.carIdx !== playerIdx).every((d) => d.relDelta == null)) {
+              logThrottled('rel-nodelta', 5000, 'relative', 'warn',
+                'relDelta null para todos los rivales', { drivers: drivers.length });
+            }
+          }
+
           return {
             playerIdx,
             playerCarClass: playerRealClass,
@@ -1609,7 +1631,7 @@ class IrsdkClient {
           };
         }
       } catch (err) {
-        // ignore
+        logThrottled('rel-exc', 5000, 'relative', 'error', 'excepción en getRelative', { error: err.message });
       }
     }
     return empty();
@@ -1624,6 +1646,8 @@ class IrsdkClient {
     if (Array.isArray(raw) && raw.length > 1) {
       // Si el array es más corto que n, lo rellenamos
       if (raw.length < n) {
+        logThrottled(`caridx-short:${key}`, 10000, 'irsdk', 'warn',
+          'CarIdx* más corto que la cantidad de autos', { key, len: raw.length, n });
         const out = new Array(n).fill(0);
         for (let i = 0; i < raw.length; i++) out[i] = raw[i];
         return out;
@@ -1631,6 +1655,8 @@ class IrsdkClient {
       return raw;
     }
     // Vino escalar: armamos array con el valor solo en el índice del player
+    logThrottled(`caridx-scalar:${key}`, 10000, 'irsdk', 'warn',
+      'CarIdx* llegó como escalar (no array por auto)', { key });
     const out = new Array(n).fill(0);
     if (playerIdx >= 0 && playerIdx < n && raw != null) {
       out[playerIdx] = raw;
