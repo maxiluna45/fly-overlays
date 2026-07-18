@@ -12,6 +12,14 @@ export class ErrorBoundary extends React.Component {
 
   componentDidCatch(error, info) {
     console.error("[ErrorBoundary]", error.message, info.componentStack);
+    try {
+      const scope = window.fly?.overlayId ? `overlay:${window.fly.overlayId}` : "panel";
+      window.fly?.log?.({
+        scope,
+        level: "error",
+        text: `ErrorBoundary: ${error.message} | ${(info.componentStack || "").split("\n").slice(0, 4).join(" ")}`,
+      });
+    } catch (_) {}
   }
 
   componentDidUpdate(prevProps) {
