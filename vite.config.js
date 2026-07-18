@@ -28,6 +28,13 @@ export default defineConfig({
   build: {
     outDir: resolve(__dirname, 'dist'),
     emptyOutDir: true,
+    // Módulos CJS de primera parte (compartidos con los tests de `node --test`,
+    // que usan require) necesitan la transformación commonjs para que Rollup
+    // resuelva sus named exports. Ej: src/renderer/lib/club-flags.js.
+    commonjsOptions: {
+      include: [/node_modules/, /src[\\/]renderer[\\/]lib[\\/]/],
+      transformMixedEsModules: true,
+    },
     rollupOptions: {
       input: htmlFiles,
     },

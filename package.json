@@ -1,6 +1,6 @@
 {
   "name": "fly-overlays",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "iRacing overlays built with Electron + React",
   "author": "maxiluna45",
   "main": "src/main/main.js",
@@ -23,6 +23,7 @@
     "clsx": "^2.1.1",
     "electron-log": "^5.2.0",
     "electron-updater": "^6.3.9",
+    "flag-icons": "^7.5.0",
     "irsdk-node": "^4.4.0",
     "lucide-react": "^0.469.0",
     "tailwind-merge": "^2.6.0",

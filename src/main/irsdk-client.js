@@ -321,6 +321,13 @@ class IrsdkClient {
       "Jose Ferrada", "Maximiliano Luna2", "Anders Krog", "Marc Vidal", "Park Joon",
     ];
     const carNumbers = ["9", "12", "10", "7", "23", "17", "62", "44", "8", "21"];
+    // Clubes de iRacing para el mock. Mezcla intencional: algunos con bandera y
+    // otros pan-regionales (Scandinavia/South America/Asia) que NO tienen país
+    // único → se ven sin bandera, reflejando el comportamiento real.
+    const clubs = [
+      "Scandinavia", "DE-AT-CH", "Brazil", "Brazil", "UK and I",
+      "Iberia", "South America", "Finland", "France", "Asia",
+    ];
     const licData = [
       ["A 4.6", 5, 4.6, 5], ["D 3.4", 2, 3.4, 2], ["D 2.7", 2, 2.7, 2],
       ["C 3.9", 3, 3.9, 3], ["R 2.1", 1, 2.1, 1], ["B 4.2", 4, 4.2, 4],
@@ -350,6 +357,7 @@ class IrsdkClient {
         abbrev: null,
         carNumber: carNumbers[i],
         teamName: "",
+        club: clubs[i] || "",
         irating: iratings[i],
         licString,
         licLevel,
@@ -1522,6 +1530,7 @@ class IrsdkClient {
               initials: fixMojibake(d.Initials) || null,
               carNumber: d.CarNumber || "",
               teamName: fixMojibake(d.TeamName) || "",
+              club: fixMojibake(d.ClubName) || "", // región del club → bandera
               irating: d.IRating || 0,
               licString: d.LicString || "",
               licColor: d.LicColor || 0,

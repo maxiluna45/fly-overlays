@@ -1203,6 +1203,7 @@ const SETTING_LABELS = {
     showLicense: "Mostrar licencia",
     showIRating: "Mostrar iRating",
     showCarNumber: "Mostrar número de auto",
+    showFlag: "Mostrar bandera (país del club)",
     showBestLap: "Mostrar best lap",
     showLastLap: "Mostrar last lap",
     showPositionChange: "Cambio de posición (vs qualy)",
@@ -1215,6 +1216,7 @@ const SETTING_LABELS = {
     showLicense: "Mostrar licencia",
     showIRating: "Mostrar iRating",
     showCarNumber: "Mostrar número de auto",
+    showFlag: "Mostrar bandera (país del club)",
     showLaps: "Mostrar last lap",
     rowsAbove: "Rivales arriba",
     rowsBelow: "Rivales abajo",
@@ -1405,6 +1407,7 @@ function AppearanceSettings({ overlayId, overlayKey, settings = {}, onChange }) 
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showLicense" value={settings.showLicense} onChange={onChange} />
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showIRating" value={settings.showIRating} onChange={onChange} />
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showCarNumber" value={settings.showCarNumber} onChange={onChange} />
+          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showFlag" value={settings.showFlag} onChange={onChange} />
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showBestLap" value={settings.showBestLap} onChange={onChange} />
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showLastLap" value={settings.showLastLap} onChange={onChange} />
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showPositionChange" value={settings.showPositionChange} onChange={onChange} />
@@ -1442,6 +1445,7 @@ function AppearanceSettings({ overlayId, overlayKey, settings = {}, onChange }) 
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showLicense" value={settings.showLicense} onChange={onChange} />
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showIRating" value={settings.showIRating} onChange={onChange} />
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showCarNumber" value={settings.showCarNumber} onChange={onChange} />
+          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showFlag" value={settings.showFlag} onChange={onChange} />
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showLaps" value={settings.showLaps} onChange={onChange} />
           <NameFormatField overlayId={overlayId} value={settings.nameFormat} onChange={onChange} />
           <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="rowsAbove" min={0} max={6} step={1} unit="" value={settings.rowsAbove} onChange={onChange} />

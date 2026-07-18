@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { EditCorners } from "./ui/edit-corners.jsx";
+import { Flag } from "./ui/flag.jsx";
 
 // Colores oficiales de licencia iRacing (1-8).
 // 1=Rookie · 2=D · 3=C · 4=B · 5=A · 6=P · 7=W · 8=NE
@@ -161,6 +162,7 @@ export function Relative({ previewMode = false, injectedTelemetry = null, settin
     showIRating: true,
     showLicense: true,
     showCarNumber: true,
+    showFlag: true,
     fontSize: 11,
     rowHeight: 26,
     borderRadius: 8,
@@ -580,6 +582,9 @@ const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg, multiCl
         </span>
       )}
 
+      {/* Bandera del país del club (antes del nombre) */}
+      {cfg.showFlag && <Flag club={d.club} size={cfg.fontSize + 2} />}
+
       {/* Separador + nombre */}
       <div className="flex-1 flex items-center min-w-0 gap-1.5">
         <span
@@ -768,6 +773,7 @@ const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg, multiCl
     prev.driver.licString === next.driver.licString &&
     prev.driver.irating === next.driver.irating &&
     prev.driver.carNumber === next.driver.carNumber &&
+    prev.driver.club === next.driver.club &&
     prev.driver.name === next.driver.name &&
     prev.driver.carClassColor === next.driver.carClassColor &&
     (prev.driver.tag?.label || "") === (next.driver.tag?.label || "") &&

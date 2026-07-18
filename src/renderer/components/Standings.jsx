@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { EditCorners } from "./ui/edit-corners.jsx";
+import { Flag } from "./ui/flag.jsx";
 
 // Colores de licencia iRacing (1-7). Mismo criterio que Relative.
 const LIC_COLORS = {
@@ -81,6 +82,7 @@ export function Standings({ previewMode = false, injectedTelemetry = null, setti
     showLicense: true,
     showIRating: true,
     showCarNumber: true,
+    showFlag: true,
     showBestLap: true,
     // 'leader' = gap al líder de clase · 'interval' = intervalo al de adelante
     gapMode: "leader",
@@ -330,6 +332,9 @@ const StandingsRow = React.memo(function StandingsRow({ driver: d, isPlayer, cfg
         </span>
       )}
 
+      {/* Bandera del país del club (antes del nombre) */}
+      {cfg.showFlag && <Flag club={d.club} size={cfg.fontSize + 1} />}
+
       {/* Nombre + tags */}
       <div className="flex-1 flex items-center min-w-0 gap-1">
         <span
@@ -413,6 +418,7 @@ const StandingsRow = React.memo(function StandingsRow({ driver: d, isPlayer, cfg
     a.irating === b.irating &&
     a.iratingChange === b.iratingChange &&
     a.name === b.name &&
+    a.club === b.club &&
     a.onPit === b.onPit &&
     a.out === b.out &&
     a.carClassColor === b.carClassColor &&

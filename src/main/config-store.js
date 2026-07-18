@@ -32,6 +32,7 @@ const OVERLAY_DEFAULT_SETTINGS = {
     showIRating: true,       // mostrar iRating al final de la fila
     showLicense: true,       // mostrar el badge de licencia (LicLevel)
     showCarNumber: true,     // mostrar número del auto
+    showFlag: true,          // mostrar bandera del país del club
     showLaps: true,          // mostrar la caja de last lap
     nameFormat: "full",      // full | short | initials
     rowsAbove: 3,            // competidores arriba del player
@@ -50,6 +51,7 @@ const OVERLAY_DEFAULT_SETTINGS = {
     showLicense: true,       // badge de licencia
     showIRating: true,       // columna de iRating
     showCarNumber: true,     // número del auto
+    showFlag: true,          // bandera del país del club
     showBestLap: true,       // columna de best lap
     showLastLap: false,      // columna de last lap
     showPositionChange: true,// ▲/▼ posiciones ganadas vs qualy (solo carrera)
