@@ -12,7 +12,7 @@
     "build:electron": "npm run build:renderer && cross-env NODE_OPTIONS=--no-deprecation ELECTRON_BUILDER_CACHE=%LOCALAPPDATA%\\electron-builder\\Cache electron-builder --win nsis --x64",
     "start": "npm run build:renderer && cross-env NODE_ENV=production electron .",
     "dist": "npm run build:electron",
-    "test": "node --test"
+    "test": "node --test \"test/**/*.test.js\""
   },
   "dependencies": {
     "@radix-ui/react-slider": "^1.2.2",
