@@ -17,6 +17,7 @@ import { Radar } from "./Radar.jsx";
 import { AnalysisView } from "./AnalysisView.jsx";
 import { ProgressView } from "./ProgressView.jsx";
 import { HotkeysView } from "./HotkeysView.jsx";
+import { LogView } from "./LogView.jsx";
 import { DeltaBar } from "./DeltaBar.jsx";
 import { SectorTimes } from "./SectorTimes.jsx";
 import { Button } from "./ui/button.jsx";
@@ -239,7 +240,7 @@ export function Dashboard() {
           <span className="font-bold tracking-tight text-sm">iFly</span>
         </div>
         <div className="flex items-center gap-1 ml-3">
-          {[["overlays", "Overlays"], ["analysis", "Análisis"], ["progreso", "Progreso"], ["hotkeys", "Hotkeys"]].map(([v, label]) => (
+          {[["overlays", "Overlays"], ["analysis", "Análisis"], ["progreso", "Progreso"], ["hotkeys", "Hotkeys"], ["diagnostico", "Diagnóstico"]].map(([v, label]) => (
             <button
               key={v}
               onClick={() => setView(v)}
@@ -261,6 +262,8 @@ export function Dashboard() {
         <ProgressView />
       ) : view === "hotkeys" ? (
         <HotkeysView />
+      ) : view === "diagnostico" ? (
+        <LogView />
       ) : (
       /* MAIN */
       <div className="flex-1 flex overflow-hidden">
