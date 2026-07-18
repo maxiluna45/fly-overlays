@@ -1326,6 +1326,51 @@ function NameFormatField({ overlayId, value, onChange }) {
   );
 }
 
+// Países para el selector "Mi país". Curado (no los 271 de flag-icons) con las
+// nacionalidades más comunes en sim racing; Argentina primero. El valor es el
+// código ISO2 que consume flag-icons.
+const COUNTRIES = [
+  ["ar", "Argentina"], ["br", "Brasil"], ["cl", "Chile"], ["uy", "Uruguay"],
+  ["py", "Paraguay"], ["bo", "Bolivia"], ["pe", "Perú"], ["co", "Colombia"],
+  ["ve", "Venezuela"], ["ec", "Ecuador"], ["mx", "México"], ["us", "Estados Unidos"],
+  ["ca", "Canadá"], ["es", "España"], ["pt", "Portugal"], ["fr", "Francia"],
+  ["it", "Italia"], ["de", "Alemania"], ["gb", "Reino Unido"], ["ie", "Irlanda"],
+  ["nl", "Países Bajos"], ["be", "Bélgica"], ["ch", "Suiza"], ["at", "Austria"],
+  ["se", "Suecia"], ["no", "Noruega"], ["dk", "Dinamarca"], ["fi", "Finlandia"],
+  ["pl", "Polonia"], ["cz", "Chequia"], ["ro", "Rumania"], ["au", "Australia"],
+  ["nz", "Nueva Zelanda"], ["za", "Sudáfrica"], ["jp", "Japón"], ["kr", "Corea del Sur"],
+  ["cn", "China"],
+];
+
+// Selector del país propio: sobreescribe la bandera de TU fila (el club
+// "South America" agrupa varios países y no distingue nacionalidad).
+function CountryField({ overlayId, value, onChange }) {
+  const cur = (value || "ar").toLowerCase();
+  return (
+    <div className="space-y-1">
+      <span className="text-[11px] text-muted-foreground">Mi país (bandera de tu fila)</span>
+      <div className="flex items-center gap-2">
+        <span
+          className={`fi fi-${cur}`}
+          style={{ width: 18, height: 13, borderRadius: 2, boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.35)", backgroundSize: "cover", flexShrink: 0 }}
+        />
+        <select
+          value={cur}
+          onChange={(e) => onChange(overlayId, "playerCountry", e.target.value)}
+          className="flex-1 border border-border rounded-md px-2 py-1 text-[11px] text-foreground"
+          style={{ background: "transparent", colorScheme: "dark" }}
+        >
+          {COUNTRIES.map(([code, name]) => (
+            <option key={code} value={code} style={{ background: "#12141a", color: "white" }}>
+              {name}
+            </option>
+          ))}
+        </select>
+      </div>
+    </div>
+  );
+}
+
 function AppearanceSettings({ overlayId, overlayKey, settings = {}, onChange }) {
   const isDelta = overlayKey === "delta";
   const isSectors = overlayKey === "sectors";
@@ -1411,6 +1456,9 @@ function AppearanceSettings({ overlayId, overlayKey, settings = {}, onChange }) 
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showBestLap" value={settings.showBestLap} onChange={onChange} />
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showLastLap" value={settings.showLastLap} onChange={onChange} />
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showPositionChange" value={settings.showPositionChange} onChange={onChange} />
+          {settings.showFlag !== false && (
+            <CountryField overlayId={overlayId} value={settings.playerCountry} onChange={onChange} />
+          )}
           <NameFormatField overlayId={overlayId} value={settings.nameFormat} onChange={onChange} />
           <div className="space-y-1">
             <span className="text-[11px] text-muted-foreground">Columna de gap (carrera)</span>
@@ -1447,6 +1495,9 @@ function AppearanceSettings({ overlayId, overlayKey, settings = {}, onChange }) 
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showCarNumber" value={settings.showCarNumber} onChange={onChange} />
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showFlag" value={settings.showFlag} onChange={onChange} />
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showLaps" value={settings.showLaps} onChange={onChange} />
+          {settings.showFlag !== false && (
+            <CountryField overlayId={overlayId} value={settings.playerCountry} onChange={onChange} />
+          )}
           <NameFormatField overlayId={overlayId} value={settings.nameFormat} onChange={onChange} />
           <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="rowsAbove" min={0} max={6} step={1} unit="" value={settings.rowsAbove} onChange={onChange} />
           <NumSliderField overlayId={overlayId} overlayKey={overlayKey} k="rowsBelow" min={0} max={6} step={1} unit="" value={settings.rowsBelow} onChange={onChange} />

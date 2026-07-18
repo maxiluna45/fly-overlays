@@ -83,6 +83,7 @@ export function Standings({ previewMode = false, injectedTelemetry = null, setti
     showIRating: true,
     showCarNumber: true,
     showFlag: true,
+    playerCountry: "ar",
     showBestLap: true,
     // 'leader' = gap al líder de clase · 'interval' = intervalo al de adelante
     gapMode: "leader",
@@ -342,8 +343,15 @@ const StandingsRow = React.memo(function StandingsRow({ driver: d, isPlayer, cfg
         </span>
       )}
 
-      {/* Bandera del país del club (antes del nombre) */}
-      {cfg.showFlag && <Flag club={d.club} size={cfg.fontSize + 1} />}
+      {/* Bandera del país del club (antes del nombre). Tu fila usa tu país
+          configurado; el club "South America" no distingue nacionalidad. */}
+      {cfg.showFlag && (
+        <Flag
+          club={d.club}
+          size={cfg.fontSize + 1}
+          overrideCode={isPlayer ? cfg.playerCountry : undefined}
+        />
+      )}
 
       {/* Nombre + tags */}
       <div className="flex-1 flex items-center min-w-0 gap-1">

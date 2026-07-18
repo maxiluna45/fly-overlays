@@ -163,6 +163,7 @@ export function Relative({ previewMode = false, injectedTelemetry = null, settin
     showLicense: true,
     showCarNumber: true,
     showFlag: true,
+    playerCountry: "ar",
     fontSize: 11,
     rowHeight: 26,
     borderRadius: 8,
@@ -594,8 +595,15 @@ const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg, multiCl
         </span>
       )}
 
-      {/* Bandera del país del club (antes del nombre) */}
-      {cfg.showFlag && <Flag club={d.club} size={cfg.fontSize + 2} />}
+      {/* Bandera del país del club (antes del nombre). Tu fila usa tu país
+          configurado; el club "South America" no distingue nacionalidad. */}
+      {cfg.showFlag && (
+        <Flag
+          club={d.club}
+          size={cfg.fontSize + 2}
+          overrideCode={isPlayer ? cfg.playerCountry : undefined}
+        />
+      )}
 
       {/* Separador + nombre */}
       <div className="flex-1 flex items-center min-w-0 gap-1.5">
