@@ -68,14 +68,9 @@ function migrateUserData() {
 }
 migrateUserData();
 
-process.on('uncaughtException', (err) => {
-  try { require('./logger').emit('main', 'error', `uncaughtException: ${err && err.stack || err}`); }
-  catch (_) { console.error('[main] uncaughtException:', err); }
-});
-process.on('unhandledRejection', (reason) => {
-  try { require('./logger').emit('main', 'error', `unhandledRejection: ${reason && reason.stack || reason}`); }
-  catch (_) { console.error('[main] unhandledRejection:', reason); }
-});
+// Los handlers globales de uncaughtException/unhandledRejection se registran
+// dentro de logger.initLogger() (en app.whenReady), para que salgan con el
+// formato del contrato y sean visibles en la pestaña Diagnóstico.
 
 function createDashboardWindow() {
   dashboardWindow = new BrowserWindow({

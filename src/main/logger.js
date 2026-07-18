@@ -10,6 +10,7 @@ const MAX_ARCHIVES = 5;           // main.log + main.1.log .. main.5.log
 const throttle = createThrottle();
 let _broadcast = null;
 let _diagFn = () => false;
+let _globalCaught = false;
 
 function getLogDir() {
   return path.join(app.getPath('userData'), 'logs');
@@ -54,8 +55,26 @@ function initLogger({ getDiagnosticMode } = {}) {
   elog.transports.console.level = process.env.NODE_ENV === 'development' ? 'debug' : false;
   applyDiagnosticLevel(_diagFn());
 
-  // Captura global de errores no manejados en el main.
-  elog.errorHandler.startCatching({ showDialog: false });
+  // Captura global de errores no manejados en el main. Se registra ACÁ (después
+  // de configurar el transport) para que salgan con el formato del contrato y
+  // sean visibles en la pestaña Diagnóstico. Usamos nuestros propios handlers
+  // en vez de elog.errorHandler.startCatching() para no duplicar el log.
+  if (!_globalCaught) {
+    _globalCaught = true;
+    process.on('uncaughtException', (err) => {
+      emit('main', 'error', `uncaughtException: ${oneLine((err && err.stack) || err)}`);
+    });
+    process.on('unhandledRejection', (reason) => {
+      emit('main', 'error', `unhandledRejection: ${oneLine((reason && reason.stack) || reason)}`);
+    });
+  }
+}
+
+// Aplana un texto multilínea (ej. un stack trace) a una sola línea para que
+// entre en el formato del contrato y se muestre completo en el visor (tanto en
+// el tail cargado de archivo como en el vivo).
+function oneLine(s) {
+  return String(s).replace(/[\r\n]+/g, ' ⏎ ');
 }
 
 function applyDiagnosticLevel(diag) {
