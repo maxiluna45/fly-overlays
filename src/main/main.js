@@ -229,7 +229,9 @@ app.whenReady().then(() => {
   // carrera de verdad, con tu último dato real.
   const previewSampleFile = path.join(app.getPath('userData'), 'preview-sample.json');
   try { if (fs.existsSync(previewSampleFile)) irsdk.setPreviewSample(JSON.parse(fs.readFileSync(previewSampleFile, 'utf-8'))); } catch (_) {}
-  irsdk.onSample((s) => { try { fs.writeFileSync(previewSampleFile, JSON.stringify(s)); } catch (_) {} });
+  // Async: es un archivo de conveniencia (frame de ejemplo para previews);
+  // no vale la pena bloquear el main ~cada 4s para escribirlo.
+  irsdk.onSample((s) => { try { fs.promises.writeFile(previewSampleFile, JSON.stringify(s)).catch(() => {}); } catch (_) {} });
 
   // Grabador de sesiones: recibe frames del SDK real y persiste por vuelta.
   // Se puede desactivar (config.recordingEnabled) para no duplicar sesiones si
@@ -268,6 +270,9 @@ app.whenReady().then(() => {
     for (const [id, win] of overlayManager.windows.entries()) {
       if (overlayManager.isUnlocked(id)) continue;
       if (win.isDestroyed()) continue;
+      // Oculta (filtro de sesión): no le mandamos 60 payloads/s que nadie ve.
+      // Al volver a mostrarse recibe el próximo tick (≤16ms después).
+      if (!win.isVisible()) continue;
       win.webContents.send('telemetry:update', data);
     }
   });
@@ -279,6 +284,9 @@ app.whenReady().then(() => {
     for (const [id, win] of overlayManager.windows.entries()) {
       if (overlayManager.isUnlocked(id)) continue;
       if (win.isDestroyed()) continue;
+      // Oculta: idem canal rápido. El heavy re-emite cada ~100ms (relative),
+      // así que al mostrarse la ventana recibe datos frescos enseguida.
+      if (!win.isVisible()) continue;
       win.webContents.send('telemetry:heavy', data);
     }
   });

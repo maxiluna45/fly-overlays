@@ -125,7 +125,9 @@ class SessionRecorder {
 
   // Cierra la sesión en curso (ej: al desconectar iRacing). La deja persistida.
   endSession() {
-    if (this._session && this._session.laps.length > 0) this._writeNow();
+    // sync=true: endSession puede correr justo antes de app.quit()
+    // (window-all-closed) — una escritura async ahí se perdería.
+    if (this._session && this._session.laps.length > 0) this._writeNow(true);
     this._session = null;
     this._buckets = new Array(BUCKETS).fill(null);
     this._bucketCount = 0;
@@ -136,16 +138,29 @@ class SessionRecorder {
     this._writeTimer = setTimeout(() => { this._writeTimer = null; this._writeNow(); }, 800);
   }
 
-  _writeNow() {
+  _writeNow(sync = false) {
     if (!this._session) return;
-    try {
-      const file = path.join(this.dir, `session-${this._session.id}.json`);
-      fs.writeFileSync(file, JSON.stringify(this._session), 'utf-8');
-      this._pruneOld();
-      this._emitChange();
-    } catch (err) {
-      console.error('[recorder] error guardando:', err.message);
+    const file = path.join(this.dir, `session-${this._session.id}.json`);
+    const json = JSON.stringify(this._session);
+    if (sync) {
+      // Cierre de sesión (puede venir justo antes de app.quit()): sincrónico
+      // para garantizar que el archivo quede en disco antes de salir.
+      try {
+        fs.writeFileSync(file, json, 'utf-8');
+        this._pruneOld();
+        this._emitChange();
+      } catch (err) {
+        console.error('[recorder] error guardando:', err.message);
+      }
+      return;
     }
+    // Escritura periódica (cada ~800ms mientras se graba): asíncrona para no
+    // bloquear el main (el JSON de una sesión larga pesa varios MB), y
+    // encadenada para no solapar dos escrituras al mismo archivo.
+    this._writeChain = (this._writeChain || Promise.resolve())
+      .then(() => fs.promises.writeFile(file, json, 'utf-8'))
+      .then(() => { this._pruneOld(); this._emitChange(); })
+      .catch((err) => { console.error('[recorder] error guardando:', err.message); });
   }
 
   _pruneOld() {

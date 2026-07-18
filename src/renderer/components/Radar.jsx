@@ -55,7 +55,22 @@ export function Radar({ previewMode = false, injectedTelemetry = null, settings 
     if (injectedTelemetry) return;
     if (typeof window === "undefined" || !window.fly) return;
     if (typeof window.fly.onTelemetry !== "function") return;
-    try { return window.fly.onTelemetry((data) => setTelemetry((p) => ({ ...p, ...data }))); } catch (_) {}
+    // Del canal rápido (60 Hz) el radar usa 3 flags + carLeftRight (spotter).
+    // Sin cambios → prev → sin re-render (el resto llega por el canal heavy).
+    try {
+      return window.fly.onTelemetry((data) => {
+        setTelemetry((p) => {
+          const connected = !!data.connected;
+          const onTrack = !!data.onTrack;
+          const preview = !!data.preview;
+          const carLeftRight = data.carLeftRight ?? 0;
+          if (p.connected === connected && p.onTrack === onTrack && p.preview === preview && p.carLeftRight === carLeftRight) {
+            return p;
+          }
+          return { ...p, connected, onTrack, preview, carLeftRight };
+        });
+      });
+    } catch (_) {}
   }, [injectedTelemetry]);
 
   useEffect(() => {

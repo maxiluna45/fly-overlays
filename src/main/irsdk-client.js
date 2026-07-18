@@ -550,6 +550,8 @@ class IrsdkClient {
     // Invalidar el cache TTL del session YAML (la próxima conexión es otra sesión).
     this._sessCache = null;
     this._sessCacheAt = 0;
+    this._tickTelemetry = null;
+    this._tickTelemetryAt = 0;
     // Reset del estado de grabación: la próxima conexión re-detecta track/car
     // y no arrastra el número de vuelta viejo.
     this._recPrevLap = null;
@@ -595,6 +597,24 @@ class IrsdkClient {
     return this._sessCache;
   }
 
+  // Snapshot de telemetría por tick. getTelemetry() de irsdk-node copia las
+  // ~300 variables de nativo a JS en CADA llamada (incluidos los arrays de 64
+  // slots por auto). _updateCache la lee una vez por tick (60 Hz) y la cachea
+  // acá; los getters del mismo frame (getRelative, getLapTimes, getTyres,
+  // _getSessionInfo, getDeltaBest) reúsan esa copia en vez de re-copiar todo
+  // (~83 copias/s → 60). Fallback: si el snapshot no está fresco (>50ms), se
+  // lee del SDK como antes.
+  _getTelemetrySnapshot() {
+    if (this._tickTelemetry && Date.now() - (this._tickTelemetryAt || 0) < 50) {
+      return this._tickTelemetry;
+    }
+    if (!this.sdk) return null;
+    try {
+      this.sdk.waitForData(0);
+      return this.sdk.getTelemetry();
+    } catch (_) { return null; }
+  }
+
   // Recibe las etiquetas de pilotos desde la config (main) y las precomputa
   // normalizadas para el match por nombre.
   setDriverTags(tags) {
@@ -618,6 +638,11 @@ class IrsdkClient {
     let telemetry, session;
     try {
       telemetry = this.sdk.getTelemetry();
+      // Publicar el snapshot del tick: los getters (getRelative, getLapTimes,
+      // getTyres, _getSessionInfo, getDeltaBest) reúsan esta copia vía
+      // _getTelemetrySnapshot() en vez de re-copiar todo del SDK.
+      this._tickTelemetry = telemetry;
+      this._tickTelemetryAt = Date.now();
       session = this._getSession();
     } catch (err) {
       // Camino a 60 Hz: SIEMPRE throttled (si no, 60 líneas/seg).
@@ -1163,8 +1188,7 @@ class IrsdkClient {
     const out = { currentLap: 0, bestLap: 0, lastLap: 0, lastLapInvalid: false };
     if (this.sdk && this._connected) {
       try {
-        this.sdk.waitForData(0);
-        const telemetry = this.sdk.getTelemetry();
+        const telemetry = this._getTelemetrySnapshot();
         if (telemetry) {
           out.currentLap = this._read(telemetry, 'LapCurrentLapTime') || 0;
           out.bestLap = this._read(telemetry, 'LapBestLapTime') || 0;
@@ -1234,8 +1258,7 @@ class IrsdkClient {
 
     if (this.sdk && this._connected) {
       try {
-        this.sdk.waitForData(0);
-        const telemetry = this.sdk.getTelemetry();
+        const telemetry = this._getTelemetrySnapshot();
         if (telemetry) {
           const now = Date.now();
           // Actualizar cache solo si el sim publicó un valor NUEVO (distinto
@@ -1321,8 +1344,7 @@ class IrsdkClient {
 
     if (this.sdk && this._connected) {
       try {
-        this.sdk.waitForData(0);
-        const telemetry = this.sdk.getTelemetry();
+        const telemetry = this._getTelemetrySnapshot();
         const driverInfo = this.sdk.getDriverInfo();
         // Diagnóstico: si el SDK devuelve datos incompletos estando conectados
         // (pasó en producción: overlays "sin datos" hasta reiniciar iRacing),
@@ -1761,8 +1783,7 @@ class IrsdkClient {
       let simRemain = 0;
       let state = 0; // irsdk_SessionState: 2 warmup · 3 parade · 4 racing · 5 checkered
       try {
-        this.sdk.waitForData(0);
-        const tel = this.sdk.getTelemetry();
+        const tel = this._getTelemetrySnapshot();
         if (tel) {
           session.time = this._read(tel, 'SessionTime') || 0;
           simRemain = this._read(tel, 'SessionTimeRemain') || 0;
@@ -1846,8 +1867,7 @@ class IrsdkClient {
     // según tipo de sesión y vuelta actual.
     if (this.sdk && this._connected) {
       try {
-        this.sdk.waitForData(0);
-        const telemetry = this.sdk.getTelemetry();
+        const telemetry = this._getTelemetrySnapshot();
         if (telemetry) {
           const lap = this._read(telemetry, 'Lap') || 0;
           const bestLap = this._read(telemetry, 'LapBestLapTime') || 0;

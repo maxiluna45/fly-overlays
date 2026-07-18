@@ -184,8 +184,20 @@ export function Relative({ previewMode = false, injectedTelemetry = null, settin
     if (typeof window === "undefined" || !window.fly) return;
     if (typeof window.fly.onTelemetry !== "function") return;
     try {
+      // Del canal rápido (60 Hz) este overlay solo usa 3 flags; el contenido
+      // real (relative) llega por el canal heavy a ~1-10 Hz. Si los flags no
+      // cambiaron devolvemos prev → React NO re-renderiza (evita 60
+      // reconciliaciones/seg para pintar lo mismo).
       const unsub = window.fly.onTelemetry((data) => {
-        setTelemetry((prev) => ({ ...prev, ...data }));
+        setTelemetry((prev) => {
+          const connected = !!data.connected;
+          const onTrack = !!data.onTrack;
+          const preview = !!data.preview;
+          if (prev.connected === connected && prev.onTrack === onTrack && prev.preview === preview) {
+            return prev;
+          }
+          return { ...prev, connected, onTrack, preview };
+        });
       });
       return unsub;
     } catch (_) {}

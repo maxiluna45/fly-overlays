@@ -102,7 +102,17 @@ export function Standings({ previewMode = false, injectedTelemetry = null, setti
     if (typeof window === "undefined" || !window.fly) return;
     if (typeof window.fly.onTelemetry !== "function") return;
     try {
-      const unsub = window.fly.onTelemetry((data) => setTelemetry((p) => ({ ...p, ...data })));
+      // Del canal rápido (60 Hz) solo usamos 3 flags; el contenido real llega
+      // por el canal heavy. Sin cambios → prev → sin re-render.
+      const unsub = window.fly.onTelemetry((data) => {
+        setTelemetry((p) => {
+          const connected = !!data.connected;
+          const onTrack = !!data.onTrack;
+          const preview = !!data.preview;
+          if (p.connected === connected && p.onTrack === onTrack && p.preview === preview) return p;
+          return { ...p, connected, onTrack, preview };
+        });
+      });
       return unsub;
     } catch (_) {}
   }, [injectedTelemetry]);
