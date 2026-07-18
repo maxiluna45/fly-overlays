@@ -43,13 +43,25 @@ function initLogger({ getDiagnosticMode } = {}) {
   elog.transports.file.resolvePathFn = () => getLogFilePath();
   elog.transports.file.maxSize = MAX_SIZE;
   elog.transports.file.archiveLogFn = archiveLogFn;
-  // Formato del contrato (mismo que el parser). msg.data = args pasados a elog.
-  elog.transports.file.format = (msg) => {
-    const scope = msg.scope || 'app';
-    const text = msg.data
+  // Formato del contrato (mismo que el parser).
+  // ⚠️ Firma de electron-log v5 (distinta de v4, verificada contra el código
+  // de la librería):
+  //   1. El format custom recibe { data, level, logger, message, transport } —
+  //      la fecha y el scope viven en `message`, NO en el primer nivel. Usar
+  //      msg.date directo (v4) produce new Date(undefined) → toISOString()
+  //      lanza "Invalid time value" en CADA escritura y el archivo queda vacío
+  //      (el error lo traga processInternalErrorFn).
+  //   2. Debe devolver un ARRAY (pasa a ser el `data` de los transforms
+  //      siguientes: concatFirstStringElements → toString). Devolver un string
+  //      hace que lo descompongan en caracteres separados por espacios.
+  // Bug real que nos dejó ciegos en producción — no "simplificar" esta firma.
+  elog.transports.file.format = ({ data, level, message }) => {
+    const scope = (message && message.scope) || 'app';
+    const date = (message && message.date instanceof Date) ? message.date : new Date();
+    const text = (data || [])
       .map((d) => (typeof d === 'string' ? d : JSON.stringify(d)))
       .join(' ');
-    return formatLine({ scope, level: msg.level, date: msg.date, text });
+    return [formatLine({ scope, level: level || (message && message.level) || 'info', date, text })];
   };
   // Consola: solo en dev (útil al correr `npm run dev`).
   elog.transports.console.level = process.env.NODE_ENV === 'development' ? 'debug' : false;

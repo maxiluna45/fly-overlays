@@ -30,6 +30,11 @@ contextBridge.exposeInMainWorld('fly', {
     return () => ipcRenderer.removeListener('config:changed', listener);
   },
   toggleLock: () => ipcRenderer.invoke('overlay:toggle-lock'),
+  // Estado de lock ACTUAL (pull). Los componentes lo piden al montar porque el
+  // push 'overlay:lock-state' puede haberse emitido antes de que el renderer
+  // cargara (ej: F7 crea la ventana y manda el evento antes del did-finish-load)
+  // → sin esto, el overlay quedaba "quieto" sin poder arrastrarse.
+  getLockState: () => ipcRenderer.invoke('overlay:get-lock-state', overlayId),
   openPanel: () => ipcRenderer.invoke('overlay:open-panel'),
 
   // Panel only

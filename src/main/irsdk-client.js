@@ -4,7 +4,10 @@ const { ReferenceLapStore } = require('./reference-lap-store');
 const { createLogger, logThrottled } = require('./logger');
 const log = createLogger('irsdk');
 
-const TIMEOUT = Math.floor((1 / 60) * 1000); // 60fps
+// Intervalo de poll del loop del SDK. waitForData se llama con timeout 0 (no
+// bloqueante) y el pacing lo pone este setTimeout: frames de 60 Hz (~16.7ms)
+// se capturan con ≤5ms de latencia sin bloquear el event loop del main.
+const POLL_MS = 5;
 const MOCK_MODE = process.env.FLY_MOCK === '1';
 
 const TOTAL_SUBS = 24; // 3 sectores × 8 micro-sectores
@@ -469,26 +472,39 @@ class IrsdkClient {
     if (!this.sdk) return;
     let hasData = false;
     try {
-      hasData = this.sdk.waitForData(TIMEOUT);
+      // timeout 0 = chequeo NO bloqueante. Antes se usaba waitForData(16) en un
+      // bucle con setImmediate: el main process quedaba bloqueado en código
+      // nativo esperando el próximo frame casi el 100% del tiempo, starving
+      // IPC, hotkeys (F7) y el manejo de ventanas → mouse/juego trabados.
+      // Con poll de 5ms el frame de 60 Hz se captura con ≤5ms de latencia y el
+      // event loop queda libre entre polls.
+      hasData = this.sdk.waitForData(0);
     } catch (err) {
       log.error('waitForData error', { pid: process.pid, error: err.message });
       this._disconnect();
       return;
     }
 
+    const now = Date.now();
     if (hasData) {
+      this._lastDataAt = now;
       if (!this._connected) {
         log.info('conectado, recibiendo datos', { pid: process.pid });
         this._connected = true;
       }
       this._updateCache();
       // _updateCache ya emite light + heavy (cuando corresponde)
-      setImmediate(() => this._loop());
-    } else {
-      // waitForData=false puede significar dos cosas:
+      this._loopTimer = setTimeout(() => this._loop(), POLL_MS);
+    } else if (!this._lastDataAt || now - this._lastDataAt > 1500) {
+      // Sin frames nuevos hace >1.5s. Puede significar dos cosas:
       // 1. iRacing cerrado → IsSimRunning=false → reconectar
       // 2. iRacing abierto pero sin sesión activa (menú) → seguir esperando
+      // Marcamos el timestamp para no re-chequear IsSimRunning en ráfaga.
+      this._lastDataAt = now;
       this._checkAndHandleNoData();
+    } else {
+      // Sin frame nuevo todavía (polleamos más rápido que 60 Hz): normal.
+      this._loopTimer = setTimeout(() => this._loop(), POLL_MS);
     }
   }
 
@@ -505,7 +521,7 @@ class IrsdkClient {
           this._connected = false;
           this._emitLight();
         }
-        setImmediate(() => this._loop());
+        this._loopTimer = setTimeout(() => this._loop(), POLL_MS);
       }
     } catch (e) {
       this._scheduleReconnect();
@@ -517,11 +533,15 @@ class IrsdkClient {
       log.info('desconectado', { pid: process.pid });
     }
     this._connected = false;
+    if (this._loopTimer) { clearTimeout(this._loopTimer); this._loopTimer = null; }
     if (this.sdk) {
       try { this.sdk.stopSDK(); } catch (_) {}
       this.sdk = null;
     }
     this._cachedData = {};
+    // Invalidar el cache TTL del session YAML (la próxima conexión es otra sesión).
+    this._sessCache = null;
+    this._sessCacheAt = 0;
     // Reset del estado de grabación: la próxima conexión re-detecta track/car
     // y no arrastra el número de vuelta viejo.
     this._recPrevLap = null;
@@ -551,6 +571,22 @@ class IrsdkClient {
     return this._refStore;
   }
 
+  // Session YAML cacheado con TTL de 1s. irsdk-node 4.4.0 tiene el cache
+  // interno de getSessionData() roto (nunca asigna _dataVer tras parsear, ver
+  // node_modules/irsdk-node/dist/esm/index.js), así que CADA llamada re-parsea
+  // el YAML completo de sesión (cientos de KB + un replaceAll previo). Llamado
+  // a 60 Hz desde _updateCache saturaba el main process: mouse trabado, juego
+  // trabado, hotkeys (F7) sin responder. El YAML de sesión cambia poco; 1s de
+  // staleness es invisible para los overlays.
+  _getSession() {
+    const now = Date.now();
+    if (this._sessCacheAt && now - this._sessCacheAt < 1000) return this._sessCache;
+    this._sessCacheAt = now;
+    try { this._sessCache = this.sdk ? this.sdk.getSessionData() : null; }
+    catch (_) { this._sessCache = null; }
+    return this._sessCache;
+  }
+
   // Recibe las etiquetas de pilotos desde la config (main) y las precomputa
   // normalizadas para el match por nombre.
   setDriverTags(tags) {
@@ -574,14 +610,15 @@ class IrsdkClient {
     let telemetry, session;
     try {
       telemetry = this.sdk.getTelemetry();
-      session = this.sdk.getSessionData();
+      session = this._getSession();
     } catch (err) {
-      console.error('[irsdk] getTelemetry error:', err.message);
+      // Camino a 60 Hz: SIEMPRE throttled (si no, 60 líneas/seg).
+      logThrottled('cache-exc', 5000, 'irsdk', 'error', 'getTelemetry error en _updateCache', { error: err.message });
       return;
     }
 
     if (!telemetry) {
-      console.warn('[irsdk] getTelemetry devolvió null');
+      logThrottled('cache-null', 5000, 'irsdk', 'warn', 'getTelemetry devolvió null en _updateCache');
       return;
     }
 
@@ -1279,6 +1316,17 @@ class IrsdkClient {
         this.sdk.waitForData(0);
         const telemetry = this.sdk.getTelemetry();
         const driverInfo = this.sdk.getDriverInfo();
+        // Diagnóstico: si el SDK devuelve datos incompletos estando conectados
+        // (pasó en producción: overlays "sin datos" hasta reiniciar iRacing),
+        // dejamos constancia de QUÉ faltó en vez de devolver vacío en silencio.
+        if (!telemetry || !driverInfo || !driverInfo.Drivers || driverInfo.Drivers.length === 0) {
+          logThrottled('rel-empty', 5000, 'relative', 'warn',
+            'getRelative sin datos del SDK, devolviendo payload vacío', {
+              telemetry: !!telemetry,
+              driverInfo: !!driverInfo,
+              drivers: driverInfo && driverInfo.Drivers ? driverInfo.Drivers.length : -1,
+            });
+        }
         if (telemetry && driverInfo && driverInfo.Drivers && driverInfo.Drivers.length > 0) {
           const n = driverInfo.Drivers.length;
           // Auto de FOCO: el que sigue la cámara (CamCarIdx) si es válido, si no
@@ -1374,7 +1422,7 @@ class IrsdkClient {
           // Cacheado (no cambia en la sesión). Lo leemos del YAML (WeekendInfo).
           if (this._trackLengthM == null) {
             try {
-              const sd = this.sdk.getSessionData();
+              const sd = this._getSession();
               const tl = sd && sd.WeekendInfo && sd.WeekendInfo.TrackLength;
               const km = tl != null ? parseFloat(String(tl)) : NaN;
               if (isFinite(km) && km > 0) this._trackLengthM = km * 1000;
@@ -1522,7 +1570,7 @@ class IrsdkClient {
           let official = false;
           const qualPosByCarIdx = {};
           try {
-            const sd = this.sdk.getSessionData();
+            const sd = this._getSession();
             official = !!(sd && sd.WeekendInfo && sd.WeekendInfo.Official);
             const qr = sd && sd.QualifyResultsInfo && sd.QualifyResultsInfo.Results;
             if (Array.isArray(qr)) {
@@ -1631,7 +1679,12 @@ class IrsdkClient {
           };
         }
       } catch (err) {
-        logThrottled('rel-exc', 5000, 'relative', 'error', 'excepción en getRelative', { error: err.message });
+        // El stack (aplanado a una línea) es clave para diagnosticar: con solo
+        // err.message no se sabe QUÉ línea del pipeline falló.
+        logThrottled('rel-exc', 5000, 'relative', 'error', 'excepción en getRelative', {
+          error: err.message,
+          stack: String(err.stack || '').replace(/[\r\n]+\s*/g, ' ⏎ ').slice(0, 600),
+        });
       }
     }
     return empty();
@@ -1713,7 +1766,7 @@ class IrsdkClient {
       // SessionData puede tirar excepción por YAML malformado;
       // lo aíslamos en su propio try para que la telemetría siga funcionando.
       try {
-        const sd = this.sdk.getSessionData();
+        const sd = this._getSession();
         const cur = this._currentSession(sd, sessionNum);
         if (cur) {
           session.type = cur.SessionType || cur.SessionName || "Practice";

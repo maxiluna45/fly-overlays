@@ -367,6 +367,19 @@ class OverlayManager {
       win.setResizable(false);
     }
     win.webContents.send('overlay:lock-state', { unlocked, overlayId: id });
+    // Si la ventana recién se creó (F7 puede crearla si estaba oculta por el
+    // filtro de sesión), el send de arriba se pierde: el renderer todavía no
+    // cargó ni suscribió el listener. Reenviamos al terminar de cargar, con el
+    // estado VIGENTE en ese momento (puede haber cambiado en el medio).
+    if (win.webContents.isLoading()) {
+      win.webContents.once('did-finish-load', () => {
+        if (win.isDestroyed()) return;
+        win.webContents.send('overlay:lock-state', {
+          unlocked: this.isUnlocked(id),
+          overlayId: id,
+        });
+      });
+    }
   }
 }
 

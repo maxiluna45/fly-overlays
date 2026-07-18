@@ -407,6 +407,13 @@ ipcMain.handle('overlay:toggle-lock', () => {
   return results;
 });
 
+// Estado de lock actual de UN overlay (pull al montar el componente). Cubre la
+// carrera en la que el push 'overlay:lock-state' se emitió antes de que el
+// renderer terminara de cargar (F7 puede crear la ventana en ese instante).
+ipcMain.handle('overlay:get-lock-state', (_e, id) => ({
+  unlocked: !!(overlayManager && id && overlayManager.isUnlocked(id)),
+}));
+
 ipcMain.handle('sectors:get', () => {
   if (!irsdk || typeof irsdk.getSectors !== 'function') {
     return {
