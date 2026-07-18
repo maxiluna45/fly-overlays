@@ -83,7 +83,34 @@ contextBridge.exposeInMainWorld('fly', {
     ipcRenderer.on('updater:' + channel, listener);
     return () => ipcRenderer.removeListener('updater:' + channel, listener);
   },
+  // Logs / diagnóstico
+  log: (entry) => ipcRenderer.invoke('log:write', entry),
+  getLogs: (opts) => ipcRenderer.invoke('log:tail', opts),
+  onLogLine: (callback) => {
+    const listener = (_event, line) => callback(line);
+    ipcRenderer.on('log:line', listener);
+    return () => ipcRenderer.removeListener('log:line', listener);
+  },
+  openLogsFolder: () => ipcRenderer.invoke('log:open-folder'),
+  getDiagnosticMode: () => ipcRenderer.invoke('diag:get'),
+  setDiagnosticMode: (v) => ipcRenderer.invoke('diag:set', v),
   installUpdate: () => ipcRenderer.invoke('updater:install'),
   checkUpdate: () => ipcRenderer.invoke('updater:check'),
 
 });
+
+// Captura global de errores del renderer → log al main. Se ejecuta en cada
+// ventana (overlays y panel). El scope lleva el overlayId para saber cuál falló.
+(() => {
+  const scope = overlayId ? `overlay:${overlayId}` : 'panel';
+  const send = (level, text) => {
+    try { ipcRenderer.invoke('log:write', { scope, level, text }); } catch (_) {}
+  };
+  window.addEventListener('error', (e) => {
+    send('error', `window.onerror: ${e.message} @ ${e.filename}:${e.lineno}`);
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    const r = e.reason;
+    send('error', `unhandledrejection: ${(r && r.stack) || r}`);
+  });
+})();
