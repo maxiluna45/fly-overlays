@@ -1358,6 +1358,12 @@ class IrsdkClient {
           // overlay de Standings para el gap al líder / intervalo.
           const f2A = this._readCarIdxArray(telemetry, 'CarIdxF2Time', n, playerIdx);
           const isRace = /race/i.test(this._cachedSessionType || '');
+          // irsdk_SessionState: 1 GetInCar · 2 Warmup · 3 ParadeLaps · 4 Racing
+          // · 5 Checkered. Antes de "Racing" (grilla / vueltas de formación) las
+          // posiciones de carrera de iRacing todavía no son fiables (vienen 0),
+          // así que no recalculamos live-position para no hacer bailar los números.
+          const sessionState = this._read(telemetry, 'SessionState') || 0;
+          const preRace = isRace && sessionState > 0 && sessionState < 4;
 
           const pctSelf = lapDistPct[playerIdx];
           const estSelf = estA[playerIdx];
@@ -1431,7 +1437,11 @@ class IrsdkClient {
                 gapSource = 'ref';
               }
             }
-            if (relDelta == null && !isPlayer && estReal && estSelf > 0) {
+            // Exigimos estA[i] > 0: un auto quieto en grilla / sin estimación aún
+            // reporta EstTime = 0; sin esta guarda su relDelta quedaba en -estSelf
+            // (basura) y todos esos autos se apilaban en el mismo punto del orden.
+            // Con estA[i] <= 0 caemos al fallback por posición (dPct * L).
+            if (relDelta == null && !isPlayer && estReal && estSelf > 0 && estA[i] > 0) {
               // EstTime real: respeta el pace no uniforme a lo largo de la vuelta.
               const S = estSelf;
               const C = estA[i];
@@ -1503,32 +1513,10 @@ class IrsdkClient {
           }
           const totalInClass = drivers.filter((x) => x.isPlayerClass).length;
 
-          // Rellenar classPosition faltante por clase (iRacing no siempre la
-          // publica en práctica). Ordenamos cada clase por best lap.
-          const byClass = {};
-          for (const dr of drivers) (byClass[dr.carClassId] ||= []).push(dr);
-          for (const cls of Object.values(byClass)) {
-            if (cls.some((d) => !d.classPosition)) {
-              cls.slice().sort((a, b) => (a.bestLapTime || 1e9) - (b.bestLapTime || 1e9))
-                .forEach((d, k) => { if (!d.classPosition) d.classPosition = k + 1; });
-            }
-          }
-
-          // ── Live positions: en carrera, recalculamos la posición de CLASE por
-          // progreso real (vuelta completada + fracción), así los adelantamientos
-          // se ven al instante (la posición oficial de iRacing tarda un poco).
-          if (isRace && lapReal) {
-            for (const cls of Object.values(byClass)) {
-              const prog = (d) => (lapCompleted[d.carIdx] || 0) + (d.lapDistPct || 0);
-              cls.slice().sort((a, b) => prog(b) - prog(a)).forEach((d, k) => {
-                d.classPosition = k + 1;
-                d.livePosition = true;
-              });
-            }
-          }
-
-          // ── Posiciones de clasificación (para el cambio de posición vs qualy)
-          // + flag de carrera oficial (para la predicción de iRating).
+          // ── Posiciones de clasificación / grilla (para mostrarlas pre-largada
+          // y para el cambio de posición vs qualy) + flag de carrera oficial.
+          // Se extrae ANTES de resolver classPosition para poder usar la grilla
+          // como fuente cuando el SDK aún no publica posición (grilla/práctica).
           let official = false;
           const qualPosByCarIdx = {};
           try {
@@ -1548,6 +1536,49 @@ class IrsdkClient {
             const qp = qualPosByCarIdx[dr.carIdx];
             if (qp != null && qp > 0) dr.qualClassPos = qp;
           }
+
+          // ── Resolver classPosition por clase. iRacing no siempre la publica
+          // (práctica, y sobre todo en grilla/pre-largada donde vale 0 para todos).
+          // Prioridad: (1) la del SDK · (2) posición de grilla/qualy · (3) síntesis
+          // por best lap tomando el PRIMER NÚMERO LIBRE. El bug anterior asignaba
+          // k+1 usando el índice global sobre una lista que incluía autos ya
+          // posicionados, colisionando y produciendo duplicados ("dos autos en P1").
+          const byClass = {};
+          for (const dr of drivers) (byClass[dr.carClassId] ||= []).push(dr);
+          for (const cls of Object.values(byClass)) {
+            // (2) Adoptar la posición de grilla/qualy donde falte la del SDK.
+            for (const d of cls) {
+              if (!d.classPosition && d.qualClassPos > 0) d.classPosition = d.qualClassPos;
+            }
+            // (3) Sintetizar sólo los que SIGUEN sin posición, sin colisionar.
+            const missing = cls.filter((d) => !d.classPosition);
+            if (missing.length === 0) continue;
+            const taken = new Set(cls.filter((d) => d.classPosition > 0).map((d) => d.classPosition));
+            let next = 1;
+            missing
+              .sort((a, b) => (a.bestLapTime || 1e9) - (b.bestLapTime || 1e9))
+              .forEach((d) => {
+                while (taken.has(next)) next++;
+                d.classPosition = next;
+                taken.add(next);
+              });
+          }
+
+          // ── Live positions: SÓLO con la carrera en verde (SessionState racing).
+          // Recalculamos la posición de CLASE por progreso real (vuelta + fracción)
+          // para que los adelantamientos se vean al instante. En grilla/formación
+          // (preRace) NO se toca: se respeta el orden de grilla y así los números
+          // no bailan ni aparecen duplicados antes de largar.
+          if (isRace && lapReal && !preRace) {
+            for (const cls of Object.values(byClass)) {
+              const prog = (d) => (lapCompleted[d.carIdx] || 0) + (d.lapDistPct || 0);
+              cls.slice().sort((a, b) => prog(b) - prog(a)).forEach((d, k) => {
+                d.classPosition = k + 1;
+                d.livePosition = true;
+              });
+            }
+          }
+
           if (isRace && official) {
             const byCls2 = {};
             for (const dr of drivers) {
