@@ -11,7 +11,8 @@
     "build:renderer": "vite build",
     "build:electron": "npm run build:renderer && cross-env NODE_OPTIONS=--no-deprecation ELECTRON_BUILDER_CACHE=%LOCALAPPDATA%\\electron-builder\\Cache electron-builder --win nsis --x64",
     "start": "npm run build:renderer && cross-env NODE_ENV=production electron .",
-    "dist": "npm run build:electron"
+    "dist": "npm run build:electron",
+    "test": "node --test"
   },
   "dependencies": {
     "@radix-ui/react-slider": "^1.2.2",
@@ -20,6 +21,7 @@
     "@tailwindcss/vite": "^4.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "electron-log": "^5.2.0",
     "electron-updater": "^6.3.9",
     "irsdk-node": "^4.4.0",
     "lucide-react": "^0.469.0",
