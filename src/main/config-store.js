@@ -143,6 +143,9 @@ const DEFAULTS = {
   // Grabación de sesiones en vivo por iFly. Si el usuario ya loguea telemetría
   // desde iRacing (.ibt), puede apagar esto para no generar duplicados.
   recordingEnabled: true,
+  // Modo diagnóstico: sube el logging a nivel DEBUG y activa snapshots de salud
+  // muestreados. Off por defecto (solo se prende para reproducir un bug).
+  diagnosticMode: false,
 };
 
 class ConfigStore {
@@ -184,6 +187,7 @@ class ConfigStore {
           iracingAuth: parsed.iracingAuth || null,
           driverTags: Array.isArray(parsed.driverTags) ? parsed.driverTags : [],
           recordingEnabled: parsed.recordingEnabled !== false, // default: true
+          diagnosticMode: parsed.diagnosticMode === true,
         };
       }
     } catch (err) {
@@ -266,6 +270,17 @@ class ConfigStore {
     this._save();
     this._emit();
     return this.data.recordingEnabled;
+  }
+
+  getDiagnosticMode() {
+    return this.data.diagnosticMode === true;
+  }
+
+  setDiagnosticMode(v) {
+    this.data.diagnosticMode = !!v;
+    this._save();
+    this._emit();
+    return this.data.diagnosticMode;
   }
 
   setSessionLabel(id, label) {
