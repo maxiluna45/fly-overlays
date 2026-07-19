@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Keyboard, Gamepad2 } from "lucide-react";
+import { Switch } from "./ui/switch.jsx";
 
 // Apartado HOTKEYS: administra todos los bindings de la app en un solo lugar,
 // separados por categoría. Teclado: atajos globales de Electron (funcionan con
@@ -173,15 +174,24 @@ export function HotkeysView() {
 // de una pulsación con la ventana enfocada — por eso el bindeo se hace acá.
 function WheelBindRow({ config }) {
   const [listening, setListening] = useState(false);
-  const value = config?.overlays?.delta?.settings?.cycleButton || null;
+  const settings = config?.overlays?.delta?.settings || {};
+  const value = settings.cycleButton || null;
+  const enabled = !!settings.wheelInputEnabled;
 
   const save = async (binding) => {
-    const settings = { ...(config?.overlays?.delta?.settings || {}), cycleButton: binding };
-    await window.fly.setOverlay("delta", { settings });
+    const s = { ...(config?.overlays?.delta?.settings || {}), cycleButton: binding };
+    await window.fly.setOverlay("delta", { settings: s });
+  };
+
+  const setEnabled = async (val) => {
+    setListening(false); // cortar cualquier escucha en curso al cambiar el modo
+    const s = { ...(config?.overlays?.delta?.settings || {}), wheelInputEnabled: val };
+    await window.fly.setOverlay("delta", { settings: s });
   };
 
   useEffect(() => {
-    if (!listening) return;
+    // Sin opt-in NO tocamos la Gamepad API (protege el FFB del volante).
+    if (!listening || !enabled) return;
     const prev = new Map(); // gamepad.index → [pressed...] para detectar transición
     const iv = setInterval(() => {
       const pads = navigator.getGamepads ? navigator.getGamepads() : [];
@@ -200,42 +210,71 @@ function WheelBindRow({ config }) {
     }, 50);
     const t = setTimeout(() => setListening(false), 10000);
     return () => { clearInterval(iv); clearTimeout(t); };
-  }, [listening]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [listening, enabled]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div className="flex items-center gap-3 py-1.5">
-      <div className="min-w-0 flex-1">
-        <div className="text-xs font-semibold flex items-center gap-1.5">
-          <Gamepad2 className="size-3.5 text-muted-foreground" />
-          Botón del volante
+    <div className="py-1.5 space-y-2">
+      {/* Toggle opt-in: leer el volante por Gamepad API (riesgo de FFB). */}
+      <div className="flex items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-semibold flex items-center gap-1.5">
+            <Gamepad2 className="size-3.5 text-muted-foreground" />
+            Leer botón del volante (Gamepad API)
+          </div>
+          <div className="text-[10px] text-muted-foreground">
+            Cicla la referencia del delta desde un botón del volante, sin teclado.
+          </div>
         </div>
-        <div className="text-[10px] text-muted-foreground truncate">
-          Cicla la referencia del delta sin teclado (además del atajo de arriba)
-        </div>
+        <Switch checked={enabled} onCheckedChange={setEnabled} />
       </div>
-      <span className="text-[10px] font-mono truncate text-foreground/80 max-w-[180px] shrink-0">
-        {listening ? "Apretá un botón..." : value ? `Botón ${value.btn} · ${value.pad}` : "—"}
-      </span>
-      <button
-        type="button"
-        className="px-2 py-1 text-[10px] font-bold rounded-md border transition-colors hover:bg-white/5 shrink-0"
+
+      {/* Aviso de FFB: siempre visible, para que la decisión sea informada. */}
+      <div
+        className="text-[10px] leading-snug rounded-md px-2 py-1.5 border"
         style={{
-          background: listening ? "rgba(125,211,252,0.15)" : "transparent",
-          color: listening ? "rgb(125,211,252)" : "rgba(255,255,255,0.6)",
-          borderColor: "rgba(255,255,255,0.12)",
+          background: "rgba(249,115,22,0.08)",
+          borderColor: "rgba(249,115,22,0.25)",
+          color: "rgba(255,255,255,0.7)",
         }}
-        onClick={() => setListening((v) => !v)}
       >
-        {listening ? "Cancelar" : "Detectar"}
-      </button>
-      {value && !listening && (
-        <button
-          type="button"
-          className="px-2 py-1 text-[10px] font-bold rounded-md border border-white/10 text-white/50 hover:bg-white/5 shrink-0"
-          onClick={() => save(null)}
-        >
-          Quitar
-        </button>
+        ⚠️ En algunos volantes (Logitech G29/G27, etc.) esto puede{" "}
+        <span className="font-semibold text-orange-300">cortar el force feedback</span> en iRacing,
+        porque el navegador abre el volante por DirectInput. Alternativa sin riesgo:{" "}
+        <span className="font-semibold">mapeá un botón a una tecla en G HUB</span> y usá el atajo de
+        teclado de arriba ({config?.hotkeys?.cycleDeltaRef || "F10"}).
+      </div>
+
+      {/* Fila de bindeo: solo cuando el opt-in está activo. */}
+      {enabled && (
+        <div className="flex items-center gap-3">
+          <span className="text-[10px] text-muted-foreground flex-1 min-w-0 truncate">
+            Botón asignado
+          </span>
+          <span className="text-[10px] font-mono truncate text-foreground/80 max-w-[180px] shrink-0">
+            {listening ? "Apretá un botón..." : value ? `Botón ${value.btn} · ${value.pad}` : "—"}
+          </span>
+          <button
+            type="button"
+            className="px-2 py-1 text-[10px] font-bold rounded-md border transition-colors hover:bg-white/5 shrink-0"
+            style={{
+              background: listening ? "rgba(125,211,252,0.15)" : "transparent",
+              color: listening ? "rgb(125,211,252)" : "rgba(255,255,255,0.6)",
+              borderColor: "rgba(255,255,255,0.12)",
+            }}
+            onClick={() => setListening((v) => !v)}
+          >
+            {listening ? "Cancelar" : "Detectar"}
+          </button>
+          {value && !listening && (
+            <button
+              type="button"
+              className="px-2 py-1 text-[10px] font-bold rounded-md border border-white/10 text-white/50 hover:bg-white/5 shrink-0"
+              onClick={() => save(null)}
+            >
+              Quitar
+            </button>
+          )}
+        </div>
       )}
     </div>
   );

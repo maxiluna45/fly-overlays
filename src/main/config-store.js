@@ -18,6 +18,12 @@ const OVERLAY_DEFAULT_SETTINGS = {
     range: 5,               // rango de la barra en segundos (±)
     deltaReference: "sessionBest", // sessionBest | fieldBest | lastLap | personalBest | optimal
     cycleButton: null,      // botón de volante/joystick para ciclar: { pad, btn }
+    // OPT-IN: leer el volante vía Gamepad API de Chromium. APAGADO por defecto
+    // porque en algunos volantes DirectInput (G29/G27) el fetcher de gamepad de
+    // Chromium pisa la adquisición del volante de iRacing y CORTA el force
+    // feedback. Con esto en false, getGamepads() no se llama nunca. Alternativa
+    // sin riesgo: mapear el botón a una tecla en G HUB y usar el atajo de teclado.
+    wheelInputEnabled: false,
   },
   sectors: {
     headerFontSize: 10,     // tamaño de "CURRENT" / "BEST" / etc.

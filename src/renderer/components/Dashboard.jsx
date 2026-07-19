@@ -162,14 +162,19 @@ export function Dashboard() {
   // ventana tiene backgroundThrottling off, así sigue leyendo el gamepad aun
   // oculto con F8. Edge-detect: dispara solo en la transición a presionado.
   const cycleBtnRef = useRef(null);
+  // Opt-in: si está apagado NO tocamos la Gamepad API (evita que el fetcher de
+  // Chromium pise el FFB del volante en iRacing). Ver wheelInputEnabled.
+  const wheelEnabledRef = useRef(false);
   useEffect(() => {
     cycleBtnRef.current = config?.overlays?.delta?.settings?.cycleButton || null;
+    wheelEnabledRef.current = !!config?.overlays?.delta?.settings?.wheelInputEnabled;
   }, [config]);
   useEffect(() => {
     let prevPressed = false;
     const iv = setInterval(() => {
       const bind = cycleBtnRef.current;
-      if (!bind || typeof bind.btn !== "number") return;
+      // Guarda dura: sin opt-in o sin botón asignado, jamás llamamos getGamepads.
+      if (!wheelEnabledRef.current || !bind || typeof bind.btn !== "number") return;
       let pressed = false;
       try {
         const pads = navigator.getGamepads ? navigator.getGamepads() : [];
