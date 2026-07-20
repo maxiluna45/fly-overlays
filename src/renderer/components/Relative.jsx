@@ -509,6 +509,7 @@ const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg, multiCl
   const isLeader = d.classPosition === 1;
   const lapAhead = !isPlayer && (d.lapDelta || 0) > 0;
   const lapBehind = !isPlayer && (d.lapDelta || 0) < 0;
+  const offRow = !isPlayer && !!d.offTrack;
   // Resuelve la clase real del piloto (a veces LicLevel viene mal del SDK
   // pero LicString — el string que muestra iRacing — es la fuente confiable).
   const licLevel = resolveLicLevel(d);
@@ -520,6 +521,8 @@ const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg, multiCl
   // resto alterna muy sutil.
   const rowBg = isPlayer
     ? "linear-gradient(90deg, rgba(234,179,8,0.28) 0%, rgba(234,179,8,0.12) 70%, rgba(234,179,8,0.04) 100%)"
+    : offRow
+    ? "linear-gradient(90deg, rgba(148,163,184,0.20) 0%, rgba(148,163,184,0.10) 70%, rgba(148,163,184,0.03) 100%)"
     : lapAhead
     ? "linear-gradient(90deg, rgba(248,113,113,0.20) 0%, rgba(248,113,113,0.08) 70%, rgba(248,113,113,0.02) 100%)"
     : lapBehind
@@ -534,6 +537,8 @@ const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg, multiCl
   // color de su clase; si no, el líder va cian y los demás sin borde.
   const stripe = isPlayer
     ? "rgb(234, 179, 8)"
+    : offRow
+    ? "rgb(148, 163, 184)"
     : classColor
     ? classColor
     : isLeader
@@ -546,12 +551,16 @@ const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg, multiCl
   const gap = d.gapToPlayer;
   const gapColor = isPlayer
     ? "rgba(255,255,255,0.35)"
+    : offRow
+    ? "rgba(255,255,255,0.45)"
     : gap == null
     ? "rgba(255,255,255,0.35)"
     : "white";
 
   const nameColor = isPlayer
     ? "white"
+    : offRow
+    ? "rgba(255,255,255,0.62)"
     : d.out
     ? "rgba(255,200,80,0.55)"
     : "rgba(255,255,255,0.92)";
@@ -567,6 +576,7 @@ const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg, multiCl
       className="relative flex items-center px-2.5 gap-2"
       style={{
         background: rowBg,
+        opacity: offRow ? 0.65 : 1,
         height: `${cfg.rowHeight}px`,
         borderLeft: `3px solid ${stripe}`,
         fontSize: `${cfg.fontSize}px`,
@@ -666,21 +676,6 @@ const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg, multiCl
             }}
           >
             PIT
-          </span>
-        )}
-        {!d.out && d.offTrack && (
-          <span
-            className="font-bold tracking-widest px-1 rounded-sm flex-shrink-0"
-            style={{
-              fontSize: "8px",
-              background: "rgba(239, 68, 68, 0.18)",
-              color: "rgb(239, 68, 68)",
-              height: "13px",
-              display: "inline-flex",
-              alignItems: "center",
-            }}
-          >
-            OFF
           </span>
         )}
       </div>
