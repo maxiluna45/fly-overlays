@@ -23,13 +23,17 @@ test('clubes multipaís con país dominante representativo', () => {
   assert.strictEqual(flagCodeForClub('UK and I'), 'gb');
   assert.strictEqual(flagCodeForClub('Iberia'), 'es');
   assert.strictEqual(flagCodeForClub('DE-AT-CH'), 'de');
+  assert.strictEqual(flagCodeForClub('Benelux'), 'nl');
+  assert.strictEqual(flagCodeForClub('Scandinavia'), 'se');
+  assert.strictEqual(flagCodeForClub('South America'), 'ar');
+  assert.strictEqual(flagCodeForClub('Asia'), 'jp');
+  assert.strictEqual(flagCodeForClub('International'), 'un');
 });
 
-test('clubes pan-regionales sin país único → null (no inventar bandera)', () => {
-  for (const club of ['Benelux', 'Scandinavia', 'Central-Eastern Europe',
-    'Asia', 'International', 'South America']) {
-    assert.strictEqual(flagCodeForClub(club), null, `${club} debería ser null`);
-  }
+test('alias y variantes de escritura se normalizan correctamente', () => {
+  assert.strictEqual(flagCodeForClub('UK&I'), 'gb');
+  assert.strictEqual(flagCodeForClub('Australia/NZ'), 'au');
+  assert.strictEqual(flagCodeForClub('  central-eastern   europe  '), 'pl');
 });
 
 test('normalización robusta: mayúsculas, espacios, acentos', () => {

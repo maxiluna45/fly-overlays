@@ -1,5 +1,5 @@
 import React from "react";
-import { flagCodeForClub } from "../../lib/club-flags.js";
+import { flagCodeForClub } from "../../lib/club-flags-esm.js";
 
 // Bandera del país del club del piloto, vía flag-icons (clase `fi fi-<code>`).
 // Si el club no mapea a un país único (pan-regional como South America /
@@ -13,7 +13,9 @@ import { flagCodeForClub } from "../../lib/club-flags.js";
 // fila del propio player, cuya nacionalidad configura a mano (el club "South
 // America" no distingue países). Ver el setting "Mi país" en el Dashboard.
 export const Flag = React.memo(function Flag({ club, size = 14, title, overrideCode }) {
-  const code = overrideCode ? String(overrideCode).toLowerCase() : flagCodeForClub(club);
+  const mapped = overrideCode ? String(overrideCode).toLowerCase() : flagCodeForClub(club);
+  const hasClub = !!(club && String(club).trim());
+  const code = mapped || null;
   const w = Math.round((size * 4) / 3); // relación 4:3 de flag-icons/flags/4x3
   const base = {
     width: `${w}px`,
@@ -21,18 +23,24 @@ export const Flag = React.memo(function Flag({ club, size = 14, title, overrideC
     borderRadius: "2px",
   };
 
-  // Sin país conocido → recuadro atenuado que ocupa el mismo espacio.
+  // Sin país conocido: placeholder. Si había club pero no mapeo, mostramos
+  // "?" para indicar que existe dato pero falta mapeo.
   if (!code) {
+    const showQuestion = hasClub && !overrideCode;
     return (
       <span
-        className="flex-shrink-0"
-        title={club ? `${club} (sin bandera)` : "País desconocido"}
+        className="flex-shrink-0 inline-flex items-center justify-center font-mono font-bold"
+        title={showQuestion ? `${club} (club no mapeado)` : "Pais desconocido"}
         style={{
           ...base,
           background: "rgba(255,255,255,0.06)",
           boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.10)",
+          color: "rgba(255,255,255,0.75)",
+          fontSize: `${Math.max(9, size - 2)}px`,
         }}
-      />
+      >
+        {showQuestion ? "?" : ""}
+      </span>
     );
   }
 

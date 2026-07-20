@@ -1,6 +1,5 @@
-// Mapea ClubName de iRacing a ISO2 (flag-icons).
-// Nota: ClubName es region de club, no nacionalidad real. Para regiones
-// multipais usamos una bandera representativa para evitar filas sin bandera.
+// Version ESM para el renderer (Vite/browser).
+// Mantiene la misma logica que club-flags.js (CJS) para evitar discrepancias.
 
 // Estados / regiones de EE.UU. (iRacing no tiene club "USA"): todos -> us.
 const US_CLUBS = [
@@ -105,7 +104,6 @@ const CLUB_TO_ISO = {
 for (const club of US_CLUBS) CLUB_TO_ISO[club] = 'us';
 for (const club of CA_CLUBS) CLUB_TO_ISO[club] = 'ca';
 
-// Normaliza ClubName para capturar variantes comunes (UK&I, Australia/NZ, etc.)
 function normalizeClub(club) {
   if (!club || typeof club !== 'string') return '';
   return club
@@ -125,4 +123,4 @@ function flagCodeForClub(club) {
   return CLUB_TO_ISO[key] || null;
 }
 
-module.exports = { flagCodeForClub, normalizeClub };
+export { flagCodeForClub, normalizeClub };

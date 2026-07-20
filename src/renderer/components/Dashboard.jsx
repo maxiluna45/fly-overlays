@@ -47,7 +47,7 @@ export function Dashboard() {
   const [view, setView] = useState("overlays"); // 'overlays' | 'analysis'
   const [preview, setPreview] = useState(false);
   const [previewShowAll, setPreviewShowAll] = useState(false);
-  const [scale, setScale] = useState(0.6);
+  const [scale, setScale] = useState(1);
   const [recordingEnabled, setRecordingEnabled] = useState(true);
   const toast = useToast();
 
@@ -899,16 +899,16 @@ const RELATIVE_MOCK = {
   totalInClass: 12,
   totalOverall: 24,
   drivers: [
-    { carIdx: 1, classPosition: 1, name: "Tre Blohm",      carNumber: "9",  irating: 14500, licString: "A 4.6", licLevel: 5, licSubLevel: 4.6, licColor: 5, carClassColor: 1, lastLapTime: 96.7, bestLapTime: 95.1, gapToPlayer: 22.5, isAhead: true,  onTrack: true, onPit: false, offTrack: false, out: false, isFastest: true },
-    { carIdx: 2, classPosition: 2, name: "Max Josten",     carNumber: "12", irating:  1850, licString: "D 3.4", licLevel: 2, licSubLevel: 3.4, licColor: 2, carClassColor: 1, lastLapTime: 97.2, bestLapTime: 95.4, gapToPlayer: 16.0, isAhead: true,  onTrack: true, onPit: false, offTrack: false, out: false },
-    { carIdx: 3, classPosition: 3, name: "Henrique Silva", carNumber: "10", irating:  2400, licString: "D 2.7", licLevel: 2, licSubLevel: 2.7, licColor: 2, carClassColor: 1, lastLapTime: 98.4, bestLapTime: 96.2, gapToPlayer:  3.2, isAhead: true,  onTrack: true, onPit: false, offTrack: false, out: false },
-    { carIdx: 4, classPosition: 4, name: "Joao Rocha",     carNumber: "7",  irating:  3200, licString: "C 3.9", licLevel: 3, licSubLevel: 3.9, licColor: 3, carClassColor: 1, lastLapTime: 98.9, bestLapTime: 96.5, gapToPlayer:  1.1, isAhead: true,  onTrack: true, onPit: false, offTrack: false, out: false },
-    { carIdx: 5, classPosition: 5, name: "Suleiman Himmo", carNumber: "23", irating:  1100, licString: "R 2.1", licLevel: 1, licSubLevel: 2.1, licColor: 1, carClassColor: 1, lastLapTime: 99.3, bestLapTime: 97.1, gapToPlayer:  0.4, isAhead: true,  onTrack: true, onPit: false, offTrack: false, out: false },
-    { carIdx: 6, classPosition: 6, name: "Jose Ferrada",   carNumber: "17", irating:  6700, licString: "B 4.2", licLevel: 4, licSubLevel: 4.2, licColor: 4, carClassColor: 1, lastLapTime: 99.7, bestLapTime: 96.8, gapToPlayer:  0.0, isAhead: false, onTrack: true, onPit: false, offTrack: false, out: false },
-    { carIdx: 7, classPosition: 7, name: "Maximiliano Luna2", carNumber: "62", irating: 1500, licString: "D 2.3", licLevel: 2, licSubLevel: 2.3, licColor: 2, carClassColor: 1, lastLapTime: 100.1, bestLapTime: 97.5, gapToPlayer:  0.0, isAhead: false, onTrack: true, onPit: false, offTrack: true, out: false, isPlayer: true },
-    { carIdx: 8, classPosition: 8, name: "Anders Krog",    carNumber: "44", irating:  2800, licString: "D 3.7", licLevel: 2, licSubLevel: 3.7, licColor: 2, carClassColor: 1, lastLapTime: 100.4, bestLapTime: 98.0, gapToPlayer:  1.2, isAhead: false, onTrack: true, onPit: false, offTrack: false, out: false },
-    { carIdx: 9, classPosition: 9, name: "Marc Vidal",     carNumber: "8",  irating:  1400, licString: "R 1.8", licLevel: 1, licSubLevel: 1.8, licColor: 1, carClassColor: 1, lastLapTime: 101.0, bestLapTime: 98.6, gapToPlayer:  6.7, isAhead: false, onTrack: true, onPit: false, offTrack: false, out: false },
-    { carIdx: 10, classPosition: 10, name: "Park Joon",     carNumber: "21", irating:  1700, licString: "D 2.9", licLevel: 2, licSubLevel: 2.9, licColor: 2, carClassColor: 1, lastLapTime: 101.8, bestLapTime: 99.2, gapToPlayer:  8.0, isAhead: false, onTrack: true, onPit: false, offTrack: false, out: false },
+    { carIdx: 1, classPosition: 1, name: "Tre Blohm",      carNumber: "9",  club: "Scandinavia",  irating: 14500, licString: "A 4.6", licLevel: 5, licSubLevel: 4.6, licColor: 5, carClassColor: 1, lastLapTime: 96.7, bestLapTime: 95.1, gapToPlayer: 22.5, isAhead: true,  onTrack: true, onPit: false, offTrack: false, out: false, isFastest: true },
+    { carIdx: 2, classPosition: 2, name: "Max Josten",     carNumber: "12", club: "DE-AT-CH",     irating:  1850, licString: "D 3.4", licLevel: 2, licSubLevel: 3.4, licColor: 2, carClassColor: 1, lastLapTime: 97.2, bestLapTime: 95.4, gapToPlayer: 16.0, isAhead: true,  onTrack: true, onPit: false, offTrack: false, out: false },
+    { carIdx: 3, classPosition: 3, name: "Henrique Silva", carNumber: "10", club: "Brazil",        irating:  2400, licString: "D 2.7", licLevel: 2, licSubLevel: 2.7, licColor: 2, carClassColor: 1, lastLapTime: 98.4, bestLapTime: 96.2, gapToPlayer:  3.2, isAhead: true,  onTrack: true, onPit: false, offTrack: false, out: false },
+    { carIdx: 4, classPosition: 4, name: "Joao Rocha",     carNumber: "7",  club: "Brazil",        irating:  3200, licString: "C 3.9", licLevel: 3, licSubLevel: 3.9, licColor: 3, carClassColor: 1, lastLapTime: 98.9, bestLapTime: 96.5, gapToPlayer:  1.1, isAhead: true,  onTrack: true, onPit: false, offTrack: false, out: false },
+    { carIdx: 5, classPosition: 5, name: "Suleiman Himmo", carNumber: "23", club: "UK and I",      irating:  1100, licString: "R 2.1", licLevel: 1, licSubLevel: 2.1, licColor: 1, carClassColor: 1, lastLapTime: 99.3, bestLapTime: 97.1, gapToPlayer:  0.4, isAhead: true,  onTrack: true, onPit: false, offTrack: false, out: false },
+    { carIdx: 6, classPosition: 6, name: "Jose Ferrada",   carNumber: "17", club: "Iberia",        irating:  6700, licString: "B 4.2", licLevel: 4, licSubLevel: 4.2, licColor: 4, carClassColor: 1, lastLapTime: 99.7, bestLapTime: 96.8, gapToPlayer:  0.0, isAhead: false, onTrack: true, onPit: false, offTrack: false, out: false },
+    { carIdx: 7, classPosition: 7, name: "Maximiliano Luna2", carNumber: "62", club: "South America", irating: 1500, licString: "D 2.3", licLevel: 2, licSubLevel: 2.3, licColor: 2, carClassColor: 1, lastLapTime: 100.1, bestLapTime: 97.5, gapToPlayer:  0.0, isAhead: false, onTrack: true, onPit: false, offTrack: true, out: false, isPlayer: true },
+    { carIdx: 8, classPosition: 8, name: "Anders Krog",    carNumber: "44", club: "Finland",       irating:  2800, licString: "D 3.7", licLevel: 2, licSubLevel: 3.7, licColor: 2, carClassColor: 1, lastLapTime: 100.4, bestLapTime: 98.0, gapToPlayer:  1.2, isAhead: false, onTrack: true, onPit: false, offTrack: false, out: false },
+    { carIdx: 9, classPosition: 9, name: "Marc Vidal",     carNumber: "8",  club: "France",        irating:  1400, licString: "R 1.8", licLevel: 1, licSubLevel: 1.8, licColor: 1, carClassColor: 1, lastLapTime: 101.0, bestLapTime: 98.6, gapToPlayer:  6.7, isAhead: false, onTrack: true, onPit: false, offTrack: false, out: false },
+    { carIdx: 10, classPosition: 10, name: "Park Joon",     carNumber: "21", club: "Asia",          irating:  1700, licString: "D 2.9", licLevel: 2, licSubLevel: 2.9, licColor: 2, carClassColor: 1, lastLapTime: 101.8, bestLapTime: 99.2, gapToPlayer:  8.0, isAhead: false, onTrack: true, onPit: false, offTrack: false, out: false },
   ],
   session: {
     type: "Practice",

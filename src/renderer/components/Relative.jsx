@@ -507,6 +507,8 @@ const EmptyRow = React.memo(function EmptyRow({ cfg }) {
 const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg, multiClass = false }) {
   const d = driver;
   const isLeader = d.classPosition === 1;
+  const lapAhead = !isPlayer && (d.lapDelta || 0) > 0;
+  const lapBehind = !isPlayer && (d.lapDelta || 0) < 0;
   // Resuelve la clase real del piloto (a veces LicLevel viene mal del SDK
   // pero LicString — el string que muestra iRacing — es la fuente confiable).
   const licLevel = resolveLicLevel(d);
@@ -518,6 +520,10 @@ const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg, multiCl
   // resto alterna muy sutil.
   const rowBg = isPlayer
     ? "linear-gradient(90deg, rgba(234,179,8,0.28) 0%, rgba(234,179,8,0.12) 70%, rgba(234,179,8,0.04) 100%)"
+    : lapAhead
+    ? "linear-gradient(90deg, rgba(248,113,113,0.20) 0%, rgba(248,113,113,0.08) 70%, rgba(248,113,113,0.02) 100%)"
+    : lapBehind
+    ? "linear-gradient(90deg, rgba(74,222,128,0.20) 0%, rgba(74,222,128,0.08) 70%, rgba(74,222,128,0.02) 100%)"
     : isLeader
     ? "linear-gradient(90deg, rgba(125,211,252,0.10) 0%, rgba(125,211,252,0.02) 100%)"
     : d.classPosition % 2 === 0
@@ -749,21 +755,6 @@ const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg, multiCl
       {cfg.showIRating && d.iratingChange != null && (
         <RatingChange value={d.iratingChange} fontSize={cfg.fontSize} />
       )}
-
-      {/* Vueltas de diferencia en carrera (+1L = te va a doblar, -1L = lo doblás) */}
-      {!isPlayer && d.lapDelta ? (
-        <span
-          className="font-mono font-bold text-center flex-shrink-0"
-          style={{
-            fontSize: `${cfg.fontSize - 2}px`,
-            minWidth: "24px",
-            color: d.lapDelta > 0 ? "rgb(248, 113, 113)" : "rgb(96, 165, 250)",
-          }}
-          title={d.lapDelta > 0 ? "Te está por doblar" : "Lo estás por doblar"}
-        >
-          {d.lapDelta > 0 ? `+${d.lapDelta}L` : `${d.lapDelta}L`}
-        </span>
-      ) : null}
 
       {/* Gap al player (segundos y décimas) */}
       <span
