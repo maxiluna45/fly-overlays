@@ -908,6 +908,19 @@ export function AnalysisView() {
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleInput, setTitleInput] = useState("");
   const [hoverIdx, setHoverIdx] = useState(null); // bucket bajo el cursor (charts↔mapa)
+  // Hover throttleado a un frame: mousemove dispara cientos de eventos/seg y cada
+  // setHoverIdx re-renderiza la vista entera. Coalescemos a ≤1 update por rAF.
+  const hoverRaf = useRef(0);
+  const hoverNext = useRef(null);
+  const setHover = useCallback((v) => {
+    hoverNext.current = v;
+    if (hoverRaf.current) return;
+    hoverRaf.current = requestAnimationFrame(() => {
+      hoverRaf.current = 0;
+      setHoverIdx(hoverNext.current);
+    });
+  }, []);
+  useEffect(() => () => { if (hoverRaf.current) cancelAnimationFrame(hoverRaf.current); }, []);
   const [detailOpen, setDetailOpen] = useState(false); // vista de análisis detallado (pantalla completa)
   const [zoomRange, setZoomRange] = useState(null); // [aFrac,bFrac] porción de la vuelta ampliada en los gráficos
   const [rangeTool, setRangeTool] = useState(false); // herramienta de selección de rango activa
@@ -2148,7 +2161,7 @@ export function AnalysisView() {
                       svgMap={activeMap}
                       corners={corners}
                       hoverIdx={hoverIdx}
-                      setHoverIdx={setHoverIdx}
+                      setHoverIdx={setHover}
                       showLapLine={showLapLine}
                       setShowLapLine={setShowLapLine}
                       showRefLine={showRefLine}
@@ -2424,6 +2437,27 @@ export function AnalysisView() {
 // mitades (mapa izq / gráficos der) para la vista de análisis detallado; si no,
 // apilado (mapa arriba, gráficos abajo) para la vista normal.
 function AnalysisDetail({ charts, svgMap, corners, hoverIdx, setHoverIdx, showLapLine, setShowLapLine, showRefLine, setShowRefLine, split = false, range = null, selecting = false, onSelectRange, mapRot = 0, onMapRotChange = null }) {
+  // Path strings de las series MEMOIZADOS: son O(800) de armado de string y NO
+  // dependen de `hoverIdx`. Sin este memo se reconstruían las ~11 series en CADA
+  // mousemove (setHoverIdx re-renderiza AnalysisView entero) → stutter. Con deps
+  // [charts, range] solo se recalculan al cambiar de vuelta o el zoom.
+  const P = useMemo(() => {
+    if (!charts) return null;
+    const sp = (vals, yMin, yMax) => seriesPath(vals, charts.n, yMin, yMax, 1000, 110, range);
+    return {
+      delta: sp(charts.delta, -charts.dMax, charts.dMax),
+      speedBest: sp(charts.speedBest, charts.spMin, charts.spMax),
+      speedLap: sp(charts.speedLap, charts.spMin, charts.spMax),
+      throttleRef: sp(charts.throttleRef, 0, 1),
+      brakeRef: sp(charts.brakeRef, 0, 1),
+      throttle: sp(charts.throttle, 0, 1),
+      brake: sp(charts.brake, 0, 1),
+      steerRef: sp(charts.steerRef, -charts.stMax, charts.stMax),
+      steer: sp(charts.steer, -charts.stMax, charts.stMax),
+      rpmRef: sp(charts.rpmRef, 0, charts.rpmMax),
+      rpm: sp(charts.rpm, 0, charts.rpmMax),
+    };
+  }, [charts, range]);
   if (!charts) return null;
 
   const mapPanel = (svgMap || charts.hasMap) ? (
@@ -2450,9 +2484,8 @@ function AnalysisDetail({ charts, svgMap, corners, hoverIdx, setHoverIdx, showLa
     />
   ) : null;
 
-  // Props comunes a todos los gráficos (incluye rango/selección) + helper de path.
+  // Props comunes a todos los gráficos (incluye rango/selección).
   const cp = { n: charts.n, hoverIdx, onHover: setHoverIdx, corners, range, selecting, onSelectRange };
-  const sp = (vals, yMin, yMax) => seriesPath(vals, charts.n, yMin, yMax, 1000, 110, range);
 
   const chartsCol = (
     <>
@@ -2467,13 +2500,13 @@ function AnalysisDetail({ charts, svgMap, corners, hoverIdx, setHoverIdx, showLa
       <Chart title="Delta vs mejor vuelta (s)" {...cp}
         tooltip={[{ label: "Delta (s)", value: tSec(atv(charts.delta, hoverIdx)), color: "rgb(125,211,252)" }]}>
         <line x1="0" y1="55" x2="1000" y2="55" stroke="rgba(255,255,255,0.15)" strokeWidth="1" strokeDasharray="4 4" />
-        <path d={sp(charts.delta, -charts.dMax, charts.dMax)} fill="none" stroke="rgb(125,211,252)" strokeWidth="2" />
+        <path d={P.delta} fill="none" stroke="rgb(125,211,252)" strokeWidth="2" />
       </Chart>
 
       <Chart title="Velocidad (km/h) — vuelta vs mejor" {...cp} hasRef={charts.hasRef}
         tooltip={[{ label: "Vel (km/h)", value: tKmh(atv(charts.speedLap, hoverIdx)), ref: tKmh(atv(charts.speedBest, hoverIdx)), color: "rgb(52,211,153)" }]}>
-        {showRefLine && charts.hasRef && <path d={sp(charts.speedBest, charts.spMin, charts.spMax)} fill="none" stroke="rgba(168,85,247,0.7)" strokeWidth="1.5" strokeDasharray="5 3" />}
-        {showLapLine && <path d={sp(charts.speedLap, charts.spMin, charts.spMax)} fill="none" stroke="rgb(52,211,153)" strokeWidth="2" />}
+        {showRefLine && charts.hasRef && <path d={P.speedBest} fill="none" stroke="rgba(168,85,247,0.7)" strokeWidth="1.5" strokeDasharray="5 3" />}
+        {showLapLine && <path d={P.speedLap} fill="none" stroke="rgb(52,211,153)" strokeWidth="2" />}
       </Chart>
 
       <Chart title="Acelerador (verde) y freno (rojo)" {...cp} hasRef={charts.hasRef}
@@ -2481,23 +2514,23 @@ function AnalysisDetail({ charts, svgMap, corners, hoverIdx, setHoverIdx, showLa
           { label: "Acelerador", value: tPct(atv(charts.throttle, hoverIdx)), ref: tPct(atv(charts.throttleRef, hoverIdx)), color: "rgb(52,211,153)" },
           { label: "Freno", value: tPct(atv(charts.brake, hoverIdx)), ref: tPct(atv(charts.brakeRef, hoverIdx)), color: "rgb(239,68,68)" },
         ]}>
-        {showRefLine && charts.hasRef && <path d={sp(charts.throttleRef, 0, 1)} fill="none" stroke="rgba(52,211,153,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
-        {showRefLine && charts.hasRef && <path d={sp(charts.brakeRef, 0, 1)} fill="none" stroke="rgba(239,68,68,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
-        {showLapLine && <path d={sp(charts.throttle, 0, 1)} fill="none" stroke="rgb(52,211,153)" strokeWidth="2" />}
-        {showLapLine && <path d={sp(charts.brake, 0, 1)} fill="none" stroke="rgb(239,68,68)" strokeWidth="2" />}
+        {showRefLine && charts.hasRef && <path d={P.throttleRef} fill="none" stroke="rgba(52,211,153,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
+        {showRefLine && charts.hasRef && <path d={P.brakeRef} fill="none" stroke="rgba(239,68,68,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
+        {showLapLine && <path d={P.throttle} fill="none" stroke="rgb(52,211,153)" strokeWidth="2" />}
+        {showLapLine && <path d={P.brake} fill="none" stroke="rgb(239,68,68)" strokeWidth="2" />}
       </Chart>
 
       <Chart title="Volante (ángulo)" {...cp} hasRef={charts.hasRef}
         tooltip={[{ label: "Volante", value: tDeg(atv(charts.steer, hoverIdx)), ref: tDeg(atv(charts.steerRef, hoverIdx)), color: "rgb(234,179,8)" }]}>
         <line x1="0" y1="55" x2="1000" y2="55" stroke="rgba(255,255,255,0.15)" strokeWidth="1" strokeDasharray="4 4" />
-        {showRefLine && charts.hasRef && <path d={sp(charts.steerRef, -charts.stMax, charts.stMax)} fill="none" stroke="rgba(234,179,8,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
-        {showLapLine && <path d={sp(charts.steer, -charts.stMax, charts.stMax)} fill="none" stroke="rgb(234,179,8)" strokeWidth="2" />}
+        {showRefLine && charts.hasRef && <path d={P.steerRef} fill="none" stroke="rgba(234,179,8,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
+        {showLapLine && <path d={P.steer} fill="none" stroke="rgb(234,179,8)" strokeWidth="2" />}
       </Chart>
 
       <Chart title="RPM" {...cp} hasRef={charts.hasRef}
         tooltip={[{ label: "RPM", value: tRpm(atv(charts.rpm, hoverIdx)), ref: tRpm(atv(charts.rpmRef, hoverIdx)), color: "rgb(129,140,248)" }]}>
-        {showRefLine && charts.hasRef && <path d={sp(charts.rpmRef, 0, charts.rpmMax)} fill="none" stroke="rgba(129,140,248,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
-        {showLapLine && <path d={sp(charts.rpm, 0, charts.rpmMax)} fill="none" stroke="rgb(129,140,248)" strokeWidth="2" />}
+        {showRefLine && charts.hasRef && <path d={P.rpmRef} fill="none" stroke="rgba(129,140,248,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
+        {showLapLine && <path d={P.rpm} fill="none" stroke="rgb(129,140,248)" strokeWidth="2" />}
       </Chart>
 
       <div className="text-[10px] text-muted-foreground/60">
