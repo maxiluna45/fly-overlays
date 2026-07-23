@@ -15,10 +15,10 @@ export const FORMATS = {
 // arriba con los datos debajo.
 export function shareMapBox(format) {
   switch (format) {
-    case 'story': return { x: 64, y: 250, w: 952, h: 1000 };
-    case 'wide':  return { x: 64, y: 150, w: 1120, h: 800 };
+    case 'story': return { x: 64, y: 210, w: 952, h: 900 };
+    case 'wide':  return { x: 56, y: 130, w: 1060, h: 820 };
     case 'square':
-    default:      return { x: 64, y: 150, w: 952, h: 560 };
+    default:      return { x: 64, y: 120, w: 952, h: 520 };
   }
 }
 
@@ -44,16 +44,42 @@ export function sanitizeFilename(name) {
   return replaced.replace(/[\s-]{2,}/g, (m) => (m.includes('-') ? '-' : ' ')).trim();
 }
 
-// Construye el modelo de datos de la tarjeta (tiempos formateados, badges, metadatos) para renderizar.
+// Sparkline de velocidad + Vmáx/Vprom a partir de las muestras (por distancia) de
+// la vuelta. `spark` = puntos {x,y} en 0..1 (x = avance de vuelta, y = velocidad
+// normalizada, 1 = más rápido). Velocidades en m/s → km/h para mostrar.
+export function buildSpeedStats(lap, n = 120) {
+  const samples = Array.isArray(lap && lap.samples) ? lap.samples : [];
+  const pts = [];
+  for (let i = 0; i < samples.length; i++) {
+    const s = samples[i];
+    if (s && s.sp != null && isFinite(s.sp)) pts.push({ i, v: s.sp });
+  }
+  if (pts.length < 8) return { topSpeedKmh: null, avgSpeedKmh: null, spark: null };
+  let lo = Infinity, hi = -Infinity, sum = 0;
+  for (const p of pts) { if (p.v < lo) lo = p.v; if (p.v > hi) hi = p.v; sum += p.v; }
+  const span = (hi - lo) || 1;
+  const N = (samples.length - 1) || 1;
+  const stride = Math.max(1, Math.floor(pts.length / n));
+  const spark = [];
+  for (let k = 0; k < pts.length; k += stride) spark.push({ x: pts[k].i / N, y: (pts[k].v - lo) / span });
+  return { topSpeedKmh: Math.round(hi * 3.6), avgSpeedKmh: Math.round((sum / pts.length) * 3.6), spark };
+}
+
+// Construye el modelo de datos de la tarjeta (tiempos, badges, metadatos, stats de
+// velocidad y sparkline) para renderizar.
 export function buildCardModel({ lap, session, best, displayName }) {
   const s = session || {};
   const sectors = Array.isArray(lap.sectors)
     ? lap.sectors.map((v, i) => ({ label: `S${i + 1}`, value: fmtSector(v) }))
     : [];
   const isPB = !!(best && lap && best.lapTime === lap.lapTime);
+  const { topSpeedKmh, avgSpeedKmh, spark } = buildSpeedStats(lap);
   return {
     time: fmtLapTime(lap.lapTime),
     sectors,
+    topSpeedKmh,
+    avgSpeedKmh,
+    spark,
     badge: isPB ? 'PB' : (lap.valid ? 'VÁLIDA' : 'INVÁLIDA'),
     isPB,
     driver: displayName || '',

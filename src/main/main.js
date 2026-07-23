@@ -692,18 +692,36 @@ ipcMain.handle('export:copy-image', (_e, payload) => {
 // contaminado → toBlob falla), así que los traemos desde el main (sin CORS) y
 // los embebemos en el SVG de la tarjeta. Se valida el host para evitar SSRF.
 const ESRI_TILE_PREFIX = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/';
+async function fetchTileDataUrl(u, tries = 3) {
+  if (typeof u !== 'string' || !u.startsWith(ESRI_TILE_PREFIX)) return null;
+  for (let attempt = 0; attempt < tries; attempt++) {
+    try {
+      const r = await fetch(u);
+      if (r.ok) {
+        const buf = Buffer.from(await r.arrayBuffer());
+        const ct = r.headers.get('content-type') || 'image/jpeg';
+        return `data:${ct};base64,${buf.toString('base64')}`;
+      }
+    } catch (_) { /* reintentar */ }
+    // Backoff corto entre reintentos (Esri throttlea ráfagas grandes).
+    await new Promise((res) => setTimeout(res, 150 * (attempt + 1)));
+  }
+  return null;
+}
 ipcMain.handle('share:tiles', async (_e, urls) => {
   if (!Array.isArray(urls)) return null;
-  return Promise.all(urls.map(async (u) => {
-    try {
-      if (typeof u !== 'string' || !u.startsWith(ESRI_TILE_PREFIX)) return null;
-      const r = await fetch(u);
-      if (!r.ok) return null;
-      const buf = Buffer.from(await r.arrayBuffer());
-      const ct = r.headers.get('content-type') || 'image/jpeg';
-      return `data:${ct};base64,${buf.toString('base64')}`;
-    } catch (_) { return null; }
-  }));
+  // Concurrencia limitada (pool de 6) para no gatillar el throttling de Esri,
+  // que dejaba tiles sin bajar (cuadrados oscuros en la tarjeta).
+  const out = new Array(urls.length).fill(null);
+  let next = 0;
+  const worker = async () => {
+    while (next < urls.length) {
+      const i = next++;
+      out[i] = await fetchTileDataUrl(urls[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(6, urls.length) }, worker));
+  return out;
 });
 
 // === Garage 61: mapear circuito/auto de iRacing a la URL de laps ===

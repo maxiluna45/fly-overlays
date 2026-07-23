@@ -2204,7 +2204,7 @@ export function AnalysisView() {
               {/* Preview */}
               <div className="flex-1 min-w-0 flex items-start justify-center">
                 <div className="rounded-lg overflow-hidden border border-border [&>svg]:block [&>svg]:max-h-[64vh] [&>svg]:max-w-full [&>svg]:h-auto [&>svg]:w-auto">
-                  <ShareCard ref={shareSvgRef} model={cardModel} mapEls={shareMapEls} format={shareFormat} logoUrl={shareLogoUrl} />
+                  <ShareCard ref={shareSvgRef} model={cardModel} mapEls={shareMapEls} format={shareFormat} logoUrl={shareLogoUrl} hasSat={effShareSource === "sat"} />
                 </div>
               </div>
             </div>
