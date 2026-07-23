@@ -3,7 +3,7 @@ import { Trash2, Trophy, Clock, Activity, Gauge, Upload, FolderOpen, RotateCcw, 
 import { analyzeLap, bestLapOf, consistency, sectorTimes, sessionOptimal, cornerConsistency, resampleSamples, drivingMetrics } from "../lib/coach.js";
 import { buildTrackSegments, fitSimilarity, applySim, fitAffine, applyAffine, speedColor } from "../lib/track-render.js";
 import { ShareCard } from "./ShareCard.jsx";
-import { buildCardModel, FORMATS, sanitizeFilename } from "../lib/share-card-data.js";
+import { buildCardModel, FORMATS, shareMapBox, sanitizeFilename } from "../lib/share-card-data.js";
 import { svgToPngBlob } from "../lib/render-svg-to-png.js";
 import lovelyTracks from "../assets/lovely-tracks.json"; // curvas + sectores por pista (© Lovely Sim Racing, CC BY-NC-SA)
 
@@ -805,6 +805,25 @@ export function AnalysisView() {
   const [shareMsg, setShareMsg] = useState(null); // feedback efímero de acciones
   const [shareBusy, setShareBusy] = useState(false);
   const shareSvgRef = useRef(null);
+  const [shareLogoUrl, setShareLogoUrl] = useState(null);
+  // Logo (ala) como data URL compacto para embeberlo en la tarjeta: al rasterizar
+  // el <svg> a PNG, una URL relativa (./logo.png) no cargaría dentro del data: URL
+  // del SVG. Lo dibujamos una vez en un canvas chico (mismo origen → sin taint) y
+  // guardamos un PNG data URL liviano que sí viaja embebido.
+  useEffect(() => {
+    let alive = true;
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const c = document.createElement("canvas");
+        c.width = 160; c.height = 160;
+        c.getContext("2d").drawImage(img, 0, 0, 160, 160);
+        if (alive) setShareLogoUrl(c.toDataURL("image/png"));
+      } catch (_) {}
+    };
+    img.src = "./logo.png";
+    return () => { alive = false; };
+  }, []);
 
   // URL fija del botón general de Garage 61 (la que pediste).
   const GARAGE61_URL = "https://garage61.net/app/laps/498/153;a=-1;bw=0,;bp=,0";
@@ -1483,11 +1502,10 @@ export function AnalysisView() {
   // Fuente REALMENTE usada (tras el fallback), para resaltar el botón correcto.
   const effShareSource = shareMap && shareMap === gpsMap ? "osm" : shareMap === svgMap ? "svg" : null;
 
-  // Zona del mapa de la tarjeta según formato (DEBE coincidir con ShareCard).
+  // Zona del mapa de la tarjeta según formato (fuente única compartida con ShareCard).
   const shareBox = useMemo(() => {
-    const F = FORMATS[shareFormat] || FORMATS.square;
-    const { w, h } = F;
-    return shareFormat === "story" ? { w: w - 120, h: h * 0.5 } : { w: w * 0.52, h: h - 260 };
+    const b = shareMapBox(shareFormat);
+    return { w: b.w, h: b.h };
   }, [shareFormat]);
 
   // Subárbol del mapa ya ajustado a la caja de la tarjeta (trazada + contorno).
@@ -2147,7 +2165,7 @@ export function AnalysisView() {
               {/* Preview */}
               <div className="flex-1 min-w-0 flex items-start justify-center">
                 <div className="rounded-lg overflow-hidden border border-border [&>svg]:block [&>svg]:max-h-[64vh] [&>svg]:max-w-full [&>svg]:h-auto [&>svg]:w-auto">
-                  <ShareCard ref={shareSvgRef} model={cardModel} mapEls={shareMapEls} format={shareFormat} />
+                  <ShareCard ref={shareSvgRef} model={cardModel} mapEls={shareMapEls} format={shareFormat} logoUrl={shareLogoUrl} />
                 </div>
               </div>
             </div>

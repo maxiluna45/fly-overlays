@@ -8,6 +8,20 @@ export const FORMATS = {
   wide:   { w: 1920, h: 1080, label: 'Apaisada 16:9' },
 };
 
+// Caja del MAPA (héroe) de la tarjeta por formato: { x, y, w, h }. Fuente única
+// de verdad compartida entre ShareCard (que traslada el mapa a x,y) y AnalysisView
+// (que escala el subárbol del mapa a w×h). En 'wide' el mapa ocupa la izquierda y
+// los datos van en una columna a la derecha; en 'story'/'square' es apaisado
+// arriba con los datos debajo.
+export function shareMapBox(format) {
+  switch (format) {
+    case 'story': return { x: 64, y: 250, w: 952, h: 1000 };
+    case 'wide':  return { x: 64, y: 150, w: 1120, h: 800 };
+    case 'square':
+    default:      return { x: 64, y: 150, w: 952, h: 560 };
+  }
+}
+
 // Formatea tiempo de vuelta completa como "m:ss.sss" (p. ej. "1:23.456").
 export function fmtLapTime(sec) {
   if (sec == null || !isFinite(sec) || sec <= 0) return '—';
