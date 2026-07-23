@@ -65,8 +65,28 @@ export function buildSpeedStats(lap, n = 120) {
   return { topSpeedKmh: Math.round(hi * 3.6), avgSpeedKmh: Math.round((sum / pts.length) * 3.6), spark };
 }
 
+// Traza normalizada 0..1 de un canal por distancia ('th' | 'br' | 'sp'...).
+// x = avance de vuelta, y = valor clampeado a 0..1 (los pedales ya vienen 0..1).
+// null si no hay muestras suficientes.
+export function buildChannelTrace(lap, key, n = 120) {
+  const samples = Array.isArray(lap && lap.samples) ? lap.samples : [];
+  const pts = [];
+  for (let i = 0; i < samples.length; i++) {
+    const s = samples[i];
+    if (s && s[key] != null && isFinite(s[key])) pts.push({ i, v: s[key] });
+  }
+  if (pts.length < 8) return null;
+  const N = (samples.length - 1) || 1;
+  const stride = Math.max(1, Math.floor(pts.length / n));
+  const out = [];
+  for (let k = 0; k < pts.length; k += stride) {
+    out.push({ x: pts[k].i / N, y: Math.max(0, Math.min(1, pts[k].v)) });
+  }
+  return out;
+}
+
 // Construye el modelo de datos de la tarjeta (tiempos, badges, metadatos, stats de
-// velocidad y sparkline) para renderizar.
+// velocidad y trazas para los gráficos) para renderizar.
 export function buildCardModel({ lap, session, best, displayName }) {
   const s = session || {};
   const sectors = Array.isArray(lap.sectors)
@@ -80,6 +100,8 @@ export function buildCardModel({ lap, session, best, displayName }) {
     topSpeedKmh,
     avgSpeedKmh,
     spark,
+    sparkTh: buildChannelTrace(lap, 'th'),
+    sparkBr: buildChannelTrace(lap, 'br'),
     badge: isPB ? 'PB' : (lap.valid ? 'VÁLIDA' : 'INVÁLIDA'),
     isPB,
     driver: displayName || '',

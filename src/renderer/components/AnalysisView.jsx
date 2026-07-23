@@ -726,7 +726,7 @@ function DrivingMetricsCard({ m, hasRef }) {
 // (`buildTrackSegments`). Color por velocidad vía el `hue` precomputado, que es
 // idéntico a `speedColor` (240=azul → 0=rojo). NO embebe tiles satelitales.
 // `box` = { w, h } de la zona de mapa que calcula ShareCard para el formato.
-function buildShareMapEls(map, box) {
+function buildShareMapEls(map, box, mode = "speed") {
   if (!map || !Array.isArray(map.mapPath) || !box) return null;
   const BV = map.baseView || { x: 0, y: 0, w: 1000, h: 380 };
   const scale = Math.min(box.w / (BV.w || 1), box.h / (BV.h || 1));
@@ -773,12 +773,21 @@ function buildShareMapEls(map, box) {
             strokeLinecap="round"
           />
         )}
-        {/* Trazada coloreada por velocidad (azul → rojo), con glow neón (solo la
-            trazada, no la foto satelital). */}
+        {/* Trazada coloreada según el modo elegido (velocidad / acelerador /
+            freno), con glow neón (solo la trazada, no la foto satelital). El
+            degradado gris→color de pedales es el mismo que usa MapPanel. */}
         <g filter="url(#sc-glow)">
-          {segs.map((s, i) => (
-            <path key={i} d={dpath(s)} fill="none" stroke={`hsl(${Math.round(s.hue)},85%,55%)`} strokeWidth={4.5 * k} strokeLinecap="round" strokeLinejoin="round" />
-          ))}
+          {segs.map((s, i) => {
+            const BASE = [70, 78, 90];
+            const lerp3 = (a, b, u) => {
+              const c = Math.max(0, Math.min(1, u == null ? 0 : u));
+              return `rgb(${Math.round(a[0] + (b[0] - a[0]) * c)},${Math.round(a[1] + (b[1] - a[1]) * c)},${Math.round(a[2] + (b[2] - a[2]) * c)})`;
+            };
+            const color = mode === "throttle" ? lerp3(BASE, [46, 204, 113], s.th)
+              : mode === "brake" ? lerp3(BASE, [239, 68, 68], s.br)
+              : `hsl(${Math.round(s.hue)},85%,55%)`;
+            return <path key={i} d={dpath(s)} fill="none" stroke={color} strokeWidth={4.5 * k} strokeLinecap="round" strokeLinejoin="round" />;
+          })}
         </g>
       </g>
     </g>
@@ -814,7 +823,9 @@ export function AnalysisView() {
   // === Compartir vuelta (tarjeta PNG + .iflylap) ===
   const [shareOpen, setShareOpen] = useState(false);
   const [shareFormat, setShareFormat] = useState("square"); // story | square | wide
-  const [shareMapSource, setShareMapSource] = useState("osm"); // osm | svg (satélite diferido)
+  const [shareMapSource, setShareMapSource] = useState("osm"); // osm | sat | svg
+  const [shareMapMode, setShareMapMode] = useState("speed"); // speed | throttle | brake (color del mapa)
+  const [shareCharts, setShareCharts] = useState(["speed"]); // gráficos elegidos: speed | pedals
   const [displayName, setDisplayName] = useState("");
   const [shareMsg, setShareMsg] = useState(null); // feedback efímero de acciones
   const [shareBusy, setShareBusy] = useState(false);
@@ -1545,7 +1556,8 @@ export function AnalysisView() {
   }, [shareFormat]);
 
   // Subárbol del mapa ya ajustado a la caja de la tarjeta (trazada + contorno).
-  const shareMapEls = useMemo(() => buildShareMapEls(shareMap, shareBox), [shareMap, shareBox]);
+  const shareMapEls = useMemo(() => buildShareMapEls(shareMap, shareBox, shareMapMode), [shareMap, shareBox, shareMapMode]);
+  const toggleShareChart = (k) => setShareCharts((cs) => (cs.includes(k) ? cs.filter((c) => c !== k) : [...cs, k]));
 
   const flashShare = (text) => { setShareMsg(text); setTimeout(() => setShareMsg(null), 2600); };
 
@@ -2164,6 +2176,52 @@ export function AnalysisView() {
                     <div className="text-[10px] text-muted-foreground/70 leading-tight">Sin mapa para esta vuelta; la tarjeta se comparte sin trazada.</div>
                   )}
                 </div>
+                {/* Color del mapa */}
+                <div>
+                  <div className="text-[10px] uppercase tracking-widest text-muted-foreground/70 font-bold mb-1.5">Color del mapa</div>
+                  <div className="flex gap-1">
+                    {[
+                      { v: "speed", label: "Velocidad" },
+                      { v: "throttle", label: "Acelerador" },
+                      { v: "brake", label: "Freno" },
+                    ].map((o) => (
+                      <button
+                        key={o.v}
+                        onClick={() => setShareMapMode(o.v)}
+                        className={`flex-1 px-2 py-1 rounded-md text-xs font-semibold border transition-colors ${
+                          shareMapMode === o.v
+                            ? "bg-sky-500/20 border-sky-500/50 text-sky-300"
+                            : "bg-transparent border-border text-muted-foreground hover:bg-accent/50"
+                        }`}
+                      >
+                        {o.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {/* Gráficos de la tarjeta */}
+                <div>
+                  <div className="text-[10px] uppercase tracking-widest text-muted-foreground/70 font-bold mb-1.5">Gráficos</div>
+                  <div className="flex gap-1">
+                    {[
+                      { v: "speed", label: "Velocidad" },
+                      { v: "pedals", label: "Acelerador y freno" },
+                    ].map((o) => (
+                      <button
+                        key={o.v}
+                        onClick={() => toggleShareChart(o.v)}
+                        className={`flex-1 px-2 py-1 rounded-md text-xs font-semibold border transition-colors ${
+                          shareCharts.includes(o.v)
+                            ? "bg-sky-500/20 border-sky-500/50 text-sky-300"
+                            : "bg-transparent border-border text-muted-foreground hover:bg-accent/50"
+                        }`}
+                      >
+                        {o.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="text-[9px] text-muted-foreground/60 leading-tight mt-0.5">Elegí cuáles mostrar; el espacio se redistribuye solo.</div>
+                </div>
                 {/* Nombre a mostrar */}
                 <div>
                   <div className="text-[10px] uppercase tracking-widest text-muted-foreground/70 font-bold mb-1.5">Nombre a mostrar</div>
@@ -2204,7 +2262,7 @@ export function AnalysisView() {
               {/* Preview */}
               <div className="flex-1 min-w-0 flex items-start justify-center">
                 <div className="rounded-lg overflow-hidden border border-border [&>svg]:block [&>svg]:max-h-[64vh] [&>svg]:max-w-full [&>svg]:h-auto [&>svg]:w-auto">
-                  <ShareCard ref={shareSvgRef} model={cardModel} mapEls={shareMapEls} format={shareFormat} logoUrl={shareLogoUrl} hasSat={effShareSource === "sat"} />
+                  <ShareCard ref={shareSvgRef} model={cardModel} mapEls={shareMapEls} format={shareFormat} logoUrl={shareLogoUrl} hasSat={effShareSource === "sat"} mapMode={shareMapMode} charts={shareCharts} />
                 </div>
               </div>
             </div>
