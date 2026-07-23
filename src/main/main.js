@@ -717,6 +717,7 @@ ipcMain.handle('ibt:delete', async (_e, id) => {
   const safeInDir = (file) => (!file.includes('/') && !file.includes('\\') && !file.includes('..'))
     ? path.join(iracingTelemetryDir(), file) : null;
   if (id.startsWith('csvpath:') || id.startsWith('ibtpath:')) full = id.slice(8);
+  else if (id.startsWith('iflypath:')) full = id.slice(9);
   else if (id.startsWith('csv:')) full = safeInDir(id.slice(4));
   else if (id.startsWith('ibt:')) full = safeInDir(id.slice(4));
   if (!full || !fs.existsSync(full)) return false;
