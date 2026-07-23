@@ -43,6 +43,7 @@ contextBridge.exposeInMainWorld('fly', {
   setOverlay: (id, updates) => ipcRenderer.invoke('config:set-overlay', id, updates),
   cycleDeltaRef: () => ipcRenderer.invoke('delta:cycle-ref'),
   setHotkey: (name, accelerator) => ipcRenderer.invoke('hotkeys:set', name, accelerator),
+  setDisplayName: (name) => ipcRenderer.invoke('settings:set-display-name', name),
   getRegistry: () => ipcRenderer.invoke('config:registry'),
   togglePreview: () => ipcRenderer.invoke('preview:toggle'),
   getPreview: () => ipcRenderer.invoke('preview:get'),
@@ -58,6 +59,10 @@ contextBridge.exposeInMainWorld('fly', {
   getIbtSession: (id) => ipcRenderer.invoke('ibt:get', id),
   deleteTelemetry: (id) => ipcRenderer.invoke('ibt:delete', id),
   importIbt: () => ipcRenderer.invoke('ibt:import'),
+  exportSaveLap: (obj, defaultName) => ipcRenderer.invoke('export:save-lap', { obj, defaultName }),
+  exportSaveImage: (buffer, defaultName) => ipcRenderer.invoke('export:save-image', { buffer, defaultName }),
+  exportCopyImage: (buffer) => ipcRenderer.invoke('export:copy-image', { buffer }),
+  shareTiles: (urls) => ipcRenderer.invoke('share:tiles', urls),
   getSessionLabels: () => ipcRenderer.invoke('sessions:labels'),
   setSessionLabel: (id, label) => ipcRenderer.invoke('sessions:set-label', { id, label }),
   // Driver tags

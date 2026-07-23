@@ -1,5 +1,27 @@
 const YAML = require('yaml');
 
+// El SessionInfo de iRacing NO es YAML estricto: los valores de texto libre
+// (nombres de piloto/equipo/pista) pueden traer caracteres que rompen el parser,
+// p. ej. "UserName: ? ?" (el '?' es un indicador de YAML), ':' sin comillas,
+// comillas sueltas, etc. Este saneo cita esos valores (comilla simple, con
+// escape de comillas internas '') para que el parser los tome como string literal.
+const FREE_TEXT_KEYS = [
+  'UserName', 'TeamName', 'AbbrevName', 'Initials', 'DriverSetupName',
+  'TrackName', 'TrackDisplayName', 'TrackDisplayShortName', 'TrackConfigName',
+  'TrackCity', 'TrackCountry', 'CarScreenName', 'CarScreenNameShort', 'CarPath',
+  'CarClassShortName', 'SessionName', 'LeagueName', 'ClubName',
+];
+const FREE_TEXT_RE = new RegExp('^(\\s*(?:' + FREE_TEXT_KEYS.join('|') + '):[ \\t]+)(\\S.*?)[ \\t]*$');
+function sanitizeIracingYaml(str) {
+  return str.split('\n').map((line) => {
+    const m = line.match(FREE_TEXT_RE);
+    if (!m) return line;
+    const val = m[2];
+    if (val[0] === "'" || val[0] === '"') return line; // ya citado
+    return m[1] + "'" + val.replace(/'/g, "''") + "'";
+  }).join('\n');
+}
+
 /**
  * Parsea el SessionInfo YAML de iRacing y extrae info útil para overlays.
  *
@@ -15,8 +37,13 @@ function parseSessionInfo(yamlString) {
   try {
     return YAML.parse(yamlString);
   } catch (err) {
-    console.error('[session-parser] YAML parse error:', err.message);
-    return null;
+    // Reintento saneando los valores de texto libre (ver sanitizeIracingYaml).
+    try {
+      return YAML.parse(sanitizeIracingYaml(yamlString));
+    } catch (err2) {
+      console.error('[session-parser] YAML parse error:', err2.message);
+      return null;
+    }
   }
 }
 

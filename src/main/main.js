@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, globalShortcut, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, dialog, shell, clipboard, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { IrsdkClient } = require('./irsdk-client');
@@ -6,7 +6,9 @@ const { ConfigStore } = require('./config-store');
 const { OverlayManager, REGISTRY } = require('./overlay-manager');
 const { SessionRecorder } = require('./session-recorder');
 const { parseIbtMeta, parseIbtSession } = require('./ibt-parser');
+const { Worker } = require('worker_threads');
 const { parseCsvMeta, parseCsvSession } = require('./csv-parser');
+const { buildIflyLap, parseIflyLapSession } = require('./ifly-lap');
 const trackmapStore = require('./trackmap-store');
 const logger = require('./logger');
 const log = logger.createLogger('main');
@@ -361,6 +363,7 @@ app.on('window-all-closed', () => {
 });
 
 ipcMain.handle('config:get', () => configStore.get());
+ipcMain.handle('settings:set-display-name', (_e, name) => configStore.setDisplayName(name));
 ipcMain.handle('config:toggle-overlay', (_e, id) => {
   const enabled = overlayManager.toggle(id);
   applyPreviewMode();
@@ -522,17 +525,26 @@ ipcMain.handle('ibt:import', async () => {
   try {
     const parent = dashboardWindow && !dashboardWindow.isDestroyed() ? dashboardWindow : null;
     const res = await dialog.showOpenDialog(parent, {
-      title: 'Importar telemetría (.ibt de iRacing o .csv)',
+      title: 'Importar telemetría (.ibt de iRacing, .csv o .iflylap)',
       filters: [
-        { name: 'Telemetría (.ibt, .csv)', extensions: ['ibt', 'csv'] },
+        { name: 'Telemetría (.ibt, .csv, .iflylap)', extensions: ['ibt', 'csv', 'iflylap'] },
         { name: 'iRacing telemetry (.ibt)', extensions: ['ibt'] },
         { name: 'CSV', extensions: ['csv'] },
+        { name: 'iFly lap (.iflylap)', extensions: ['iflylap'] },
       ],
       properties: ['openFile'],
     });
     if (res.canceled || !res.filePaths[0]) return null;
     const full = res.filePaths[0];
-    if (full.toLowerCase().endsWith('.csv')) {
+    const low = full.toLowerCase();
+    if (low.endsWith('.iflylap')) {
+      try {
+        const s = parseIflyLapSession(full);
+        return { id: `iflypath:${full}`, source: 'ifly', imported: true, file: path.basename(full),
+          track: s.track, car: s.car, sessionType: s.sessionType, startedAt: s.startedAt, lapCount: 1, bestLap: s.laps[0].lapTime ?? null };
+      } catch (err) { console.error('[ifly] import error:', err.message); return null; }
+    }
+    if (low.endsWith('.csv')) {
       const meta = parseCsvMeta(full);
       if (!meta) return null;
       return { id: `csvpath:${full}`, source: 'csv', imported: true, file: path.basename(full), ...meta };
@@ -589,7 +601,32 @@ ipcMain.handle('ibt:list', async () => {
   return out;
 });
 
-ipcMain.handle('ibt:get', (_e, id) => {
+// Parsea un .ibt en un worker thread (no bloquea el main). Si el worker no
+// arranca (p. ej. algún entorno donde no cargue desde asar) o falla, cae al
+// parseo síncrono → nunca es peor que antes.
+function parseIbtSessionOffThread(filePath) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const syncFallback = () => {
+      if (settled) return; settled = true;
+      try { resolve(parseIbtSession(filePath)); } catch (_) { resolve(null); }
+    };
+    let worker;
+    try {
+      worker = new Worker(path.join(__dirname, 'ibt-worker.js'), { workerData: { filePath } });
+    } catch (_) { syncFallback(); return; }
+    worker.once('message', (m) => {
+      if (settled) return; settled = true;
+      worker.terminate();
+      if (m && m.ok) resolve(m.session);
+      else { try { resolve(parseIbtSession(filePath)); } catch (_) { resolve(null); } }
+    });
+    worker.once('error', () => { try { worker.terminate(); } catch (_) {} syncFallback(); });
+    worker.once('exit', (code) => { if (code !== 0) syncFallback(); });
+  });
+}
+
+ipcMain.handle('ibt:get', async (_e, id) => {
   if (typeof id !== 'string') return null;
   let full = null;
   let kind = 'ibt';
@@ -614,15 +651,105 @@ ipcMain.handle('ibt:get', (_e, id) => {
     if (!file.includes('/') && !file.includes('\\') && !file.includes('..')) {
       full = path.join(iracingTelemetryDir(), file);
     }
+  } else if (id.startsWith('iflypath:')) {
+    const p = id.slice(9);
+    if (p.toLowerCase().endsWith('.iflylap') && fs.existsSync(p)) { full = p; kind = 'ifly'; }
   }
   if (!full) return null;
   try {
-    const session = kind === 'csv' ? parseCsvSession(full) : parseIbtSession(full);
+    // .ibt (pesado) → worker thread; csv/ifly (una vuelta) → síncrono, es barato.
+    const session = kind === 'csv' ? parseCsvSession(full)
+      : kind === 'ifly' ? parseIflyLapSession(full)
+      : await parseIbtSessionOffThread(full);
+    if (!session) return null;
     return { id, source: kind, ...session };
   } catch (err) {
     console.error('[ibt] error parseando:', err.message);
     return null;
   }
+});
+
+// Exporta una vuelta de referencia a un archivo .iflylap (para compartir/import).
+ipcMain.handle('export:save-lap', async (_e, payload) => {
+  try {
+    const parent = dashboardWindow && !dashboardWindow.isDestroyed() ? dashboardWindow : null;
+    const defaultName = (payload && payload.defaultName) || 'vuelta.iflylap';
+    const res = await dialog.showSaveDialog(parent, {
+      title: 'Guardar vuelta de referencia (.iflylap)',
+      defaultPath: defaultName,
+      filters: [{ name: 'iFly lap', extensions: ['iflylap'] }],
+    });
+    if (res.canceled || !res.filePath) return { ok: false, canceled: true };
+    const { lap, session, meta } = payload.obj || {};
+    const obj = buildIflyLap(lap, session, meta);
+    fs.writeFileSync(res.filePath, JSON.stringify(obj), 'utf-8');
+    return { ok: true, path: res.filePath };
+  } catch (err) {
+    console.error('[export] save-lap error:', err.message);
+    return { ok: false, error: err.message };
+  }
+});
+
+// Guarda un PNG (rasterizado en el renderer) a disco vía diálogo.
+ipcMain.handle('export:save-image', async (_e, payload) => {
+  try {
+    const parent = dashboardWindow && !dashboardWindow.isDestroyed() ? dashboardWindow : null;
+    const res = await dialog.showSaveDialog(parent, {
+      title: 'Guardar imagen de la vuelta',
+      defaultPath: (payload && payload.defaultName) || 'iFly.png',
+      filters: [{ name: 'PNG', extensions: ['png'] }],
+    });
+    if (res.canceled || !res.filePath) return { ok: false, canceled: true };
+    fs.writeFileSync(res.filePath, Buffer.from(payload.buffer));
+    return { ok: true, path: res.filePath };
+  } catch (err) { console.error('[export] save-image:', err.message); return { ok: false, error: err.message }; }
+});
+
+// Copia un PNG (rasterizado en el renderer) al portapapeles del sistema.
+ipcMain.handle('export:copy-image', (_e, payload) => {
+  try {
+    const img = nativeImage.createFromBuffer(Buffer.from(payload.buffer));
+    if (img.isEmpty()) return { ok: false, error: 'imagen vacía' };
+    clipboard.writeImage(img);
+    return { ok: true };
+  } catch (err) { console.error('[export] copy-image:', err.message); return { ok: false, error: err.message }; }
+});
+
+// Baja tiles satelitales (Esri) y los devuelve como data URLs. El renderer no
+// puede dibujar tiles remotos en un <canvas> para exportar (CORS → canvas
+// contaminado → toBlob falla), así que los traemos desde el main (sin CORS) y
+// los embebemos en el SVG de la tarjeta. Se valida el host para evitar SSRF.
+const ESRI_TILE_PREFIX = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/';
+async function fetchTileDataUrl(u, tries = 3) {
+  if (typeof u !== 'string' || !u.startsWith(ESRI_TILE_PREFIX)) return null;
+  for (let attempt = 0; attempt < tries; attempt++) {
+    try {
+      const r = await fetch(u);
+      if (r.ok) {
+        const buf = Buffer.from(await r.arrayBuffer());
+        const ct = r.headers.get('content-type') || 'image/jpeg';
+        return `data:${ct};base64,${buf.toString('base64')}`;
+      }
+    } catch (_) { /* reintentar */ }
+    // Backoff corto entre reintentos (Esri throttlea ráfagas grandes).
+    await new Promise((res) => setTimeout(res, 150 * (attempt + 1)));
+  }
+  return null;
+}
+ipcMain.handle('share:tiles', async (_e, urls) => {
+  if (!Array.isArray(urls)) return null;
+  // Concurrencia limitada (pool de 6) para no gatillar el throttling de Esri,
+  // que dejaba tiles sin bajar (cuadrados oscuros en la tarjeta).
+  const out = new Array(urls.length).fill(null);
+  let next = 0;
+  const worker = async () => {
+    while (next < urls.length) {
+      const i = next++;
+      out[i] = await fetchTileDataUrl(urls[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(6, urls.length) }, worker));
+  return out;
 });
 
 // === Garage 61: mapear circuito/auto de iRacing a la URL de laps ===
@@ -655,6 +782,7 @@ ipcMain.handle('ibt:delete', async (_e, id) => {
   const safeInDir = (file) => (!file.includes('/') && !file.includes('\\') && !file.includes('..'))
     ? path.join(iracingTelemetryDir(), file) : null;
   if (id.startsWith('csvpath:') || id.startsWith('ibtpath:')) full = id.slice(8);
+  else if (id.startsWith('iflypath:')) full = id.slice(9);
   else if (id.startsWith('csv:')) full = safeInDir(id.slice(4));
   else if (id.startsWith('ibt:')) full = safeInDir(id.slice(4));
   if (!full || !fs.existsSync(full)) return false;

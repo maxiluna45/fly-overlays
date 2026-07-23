@@ -1,6 +1,10 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { Trash2, Trophy, Clock, Activity, Gauge, Upload, FolderOpen, RotateCcw, Pencil, Check, X, Search, ExternalLink, Maximize2, Crop } from "lucide-react";
 import { analyzeLap, bestLapOf, consistency, sectorTimes, sessionOptimal, cornerConsistency, resampleSamples, drivingMetrics } from "../lib/coach.js";
+import { buildTrackSegments, fitSimilarity, applySim, fitAffine, applyAffine, speedColor } from "../lib/track-render.js";
+import { ShareCard } from "./ShareCard.jsx";
+import { buildCardModel, FORMATS, shareMapBox, countShareCharts, sanitizeFilename } from "../lib/share-card-data.js";
+import { svgToPngBlob } from "../lib/render-svg-to-png.js";
 import lovelyTracks from "../assets/lovely-tracks.json"; // curvas + sectores por pista (© Lovely Sim Racing, CC BY-NC-SA)
 
 // Ancho de asfalto (metros) para engrosar el eje de OSM y dibujar ambos bordes.
@@ -141,72 +145,6 @@ function parseTrackSvg(svgText) {
     if (!sampleD) return null;
     return { sampleD, outlineD: ds.join(" "), viewBox: vb };
   } catch (_) { return null; }
-}
-
-// Ajuste de similitud 2D (Umeyama): src → dst. Devuelve {s,cos,sin,tx,ty,err}.
-function fitSimilarity(src, dst) {
-  const n = src.length;
-  if (n < 3) return null;
-  let msx = 0, msy = 0, mdx = 0, mdy = 0;
-  for (let i = 0; i < n; i++) { msx += src[i].x; msy += src[i].y; mdx += dst[i].x; mdy += dst[i].y; }
-  msx /= n; msy /= n; mdx /= n; mdy /= n;
-  let a = 0, b = 0, varS = 0;
-  for (let i = 0; i < n; i++) {
-    const sx = src[i].x - msx, sy = src[i].y - msy, dx = dst[i].x - mdx, dy = dst[i].y - mdy;
-    a += sx * dx + sy * dy;
-    b += sx * dy - sy * dx;
-    varS += sx * sx + sy * sy;
-  }
-  const mag = Math.hypot(a, b) || 1e-9;
-  const cos = a / mag, sin = b / mag;
-  const s = mag / (varS || 1e-9);
-  const tx = mdx - s * (cos * msx - sin * msy);
-  const ty = mdy - s * (sin * msx + cos * msy);
-  let err = 0;
-  for (let i = 0; i < n; i++) {
-    const x = s * (cos * src[i].x - sin * src[i].y) + tx;
-    const y = s * (sin * src[i].x + cos * src[i].y) + ty;
-    err += (x - dst[i].x) ** 2 + (y - dst[i].y) ** 2;
-  }
-  return { s, cos, sin, tx, ty, err };
-}
-function applySim(T, x, y) {
-  return { x: T.s * (T.cos * x - T.sin * y) + T.tx, y: T.s * (T.sin * x + T.cos * y) + T.ty };
-}
-
-// Ajuste AFÍN por mínimos cuadrados (matriz 2x2 + traslación). A diferencia de
-// la similitud, absorbe reflexión, escala distinta por eje y shear → sirve para
-// posiciones en cualquier sistema/unidad (ej. Lat/Lon de un CSP externo). Se
-// centra src y dst para quedar bien condicionado. Correspondencia por índice.
-function fitAffine(src, dst) {
-  const n = src.length;
-  if (n < 3) return null;
-  let mx = 0, my = 0, mu = 0, mv = 0;
-  for (let i = 0; i < n; i++) { mx += src[i].x; my += src[i].y; mu += dst[i].x; mv += dst[i].y; }
-  mx /= n; my /= n; mu /= n; mv /= n;
-  let Sxx = 0, Sxy = 0, Syy = 0, gxu = 0, gyu = 0, gxv = 0, gyv = 0;
-  for (let i = 0; i < n; i++) {
-    const sx = src[i].x - mx, sy = src[i].y - my, du = dst[i].x - mu, dv = dst[i].y - mv;
-    Sxx += sx * sx; Sxy += sx * sy; Syy += sy * sy;
-    gxu += sx * du; gyu += sy * du; gxv += sx * dv; gyv += sy * dv;
-  }
-  const det = Sxx * Syy - Sxy * Sxy;
-  if (Math.abs(det) < 1e-9) return null;
-  const inv00 = Syy / det, inv01 = -Sxy / det, inv11 = Sxx / det;
-  // A = [[a,b],[c,d]] resolviendo G·col = rhs para cada fila de salida.
-  const a = inv00 * gxu + inv01 * gyu, b = inv01 * gxu + inv11 * gyu;
-  const c = inv00 * gxv + inv01 * gyv, d = inv01 * gxv + inv11 * gyv;
-  let err = 0;
-  for (let i = 0; i < n; i++) {
-    const sx = src[i].x - mx, sy = src[i].y - my;
-    const u = a * sx + b * sy + mu, v = c * sx + d * sy + mv;
-    err += (u - dst[i].x) ** 2 + (v - dst[i].y) ** 2;
-  }
-  return { a, b, c, d, mx, my, mu, mv, err };
-}
-function applyAffine(T, x, y) {
-  const sx = x - T.mx, sy = y - T.my;
-  return { x: T.a * sx + T.b * sy + T.mu, y: T.c * sx + T.d * sy + T.mv };
 }
 
 function Chart({ title, height = 110, n, hoverIdx, onHover, corners, children, tooltip = null, hasRef = false, range = null, selecting = false, onSelectRange }) {
@@ -449,7 +387,7 @@ const TrackLayer = React.memo(function TrackLayer({ segs, segsRef = [], refD, sh
 
 // Mapa interactivo: zoom (rueda / +−), pan (arrastrar), toggle de trazadas y
 // marcador del instante bajo el cursor (vinculado a los gráficos de telemetría).
-function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, outlineD, corners, fill = false, highlightRange = null, roadWidth = 0, outlineMode = null, tiles = null, attribution = null, scrim = false, gripLap = null, gripRef = null }) {
+function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, outlineD, corners, fill = false, highlightRange = null, roadWidth = 0, outlineMode = null, tiles = null, attribution = null, scrim = false, gripLap = null, gripRef = null, rot = 0, onRotChange = null }) {
   const BV = baseView || { x: 0, y: 0, w: 1000, h: 380 };
   const W = BV.w, H = BV.h, X0 = BV.x, Y0 = BV.y;
   const [showLap, setShowLap] = useState(true);
@@ -467,19 +405,52 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
   // unidades, o metros reales ~miles). Referencia fija 1200 en vez de W.
   const k = view.w / 1200;
 
-  // Resetear el encuadre cuando cambia la pista (baseView).
-  useEffect(() => { setView(BV); }, [BV.x, BV.y, BV.w, BV.h]);
+  // Centro de rotación: el del baseView. El contenido se rota con un <g> y el
+  // encuadre base pasa a ser el bounding box de la trazada ROTADA (expandido al
+  // aspect del contenedor). Con rot=0 devuelve exactamente el BV → sin cambios.
+  const rcx = X0 + W / 2, rcy = Y0 + H / 2;
+  const rotView = useMemo(() => {
+    if (!rot) return BV;
+    const th = (rot * Math.PI) / 180, cos = Math.cos(th), sin = Math.sin(th);
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    let any = false;
+    if (Array.isArray(mapPath)) {
+      for (const p of mapPath) {
+        if (!p) continue;
+        any = true;
+        const dx = p.x - rcx, dy = p.y - rcy;
+        const rx = dx * cos - dy * sin, ry = dx * sin + dy * cos;
+        if (rx < minX) minX = rx; if (rx > maxX) maxX = rx;
+        if (ry < minY) minY = ry; if (ry > maxY) maxY = ry;
+      }
+    }
+    if (!any) {
+      for (const [dx, dy] of [[-W / 2, -H / 2], [W / 2, -H / 2], [W / 2, H / 2], [-W / 2, H / 2]]) {
+        const rx = dx * cos - dy * sin, ry = dx * sin + dy * cos;
+        if (rx < minX) minX = rx; if (rx > maxX) maxX = rx;
+        if (ry < minY) minY = ry; if (ry > maxY) maxY = ry;
+      }
+    }
+    let rw = (maxX - minX) * 1.1 || 1, rh = (maxY - minY) * 1.1 || 1;
+    const target = W / H;
+    if (rw / rh < target) rw = rh * target; else rh = rw / target;
+    return { x: rcx + (minX + maxX) / 2 - rw / 2, y: rcy + (minY + maxY) / 2 - rh / 2, w: rw, h: rh };
+  }, [rot, mapPath, rcx, rcy, W, H]);
+  const B = rotView; // encuadre base efectivo (pan/zoom se acotan a él)
 
-  const reset = () => setView(BV);
+  // Resetear el encuadre cuando cambia la pista o la rotación.
+  useEffect(() => { setView(B); }, [B.x, B.y, B.w, B.h]);
+
+  const reset = () => setView(B);
   const zoomAt = (fx, fy, factor) => setView((v) => {
     let nw = v.w * factor;
-    if (nw >= W * 0.98) return { x: X0, y: Y0, w: W, h: H }; // snap a completo
+    if (nw >= B.w * 0.98) return { x: B.x, y: B.y, w: B.w, h: B.h }; // snap a completo
     // Zoom-in máximo: ancho visible mínimo = 4% del total (25×).
-    nw = Math.max(W * 0.04, nw);
-    const nh = nw * (H / W);
+    nw = Math.max(B.w * 0.04, nw);
+    const nh = nw * (B.h / B.w);
     const cx = v.x + fx * v.w, cy = v.y + fy * v.h;
-    const nx = Math.max(X0, Math.min(X0 + W - nw, cx - fx * nw));
-    const ny = Math.max(Y0, Math.min(Y0 + H - nh, cy - fy * nh));
+    const nx = Math.max(B.x, Math.min(B.x + B.w - nw, cx - fx * nw));
+    const ny = Math.max(B.y, Math.min(B.y + B.h - nh, cy - fy * nh));
     return { x: nx, y: ny, w: nw, h: nh };
   });
 
@@ -493,7 +464,7 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [W, H, X0, Y0]);
+  }, [B.x, B.y, B.w, B.h]);
 
   const onDown = (e) => {
     const r = wrapRef.current.getBoundingClientRect();
@@ -505,35 +476,37 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
     if (!d) return;
     const dx = ((e.clientX - d.sx) / d.rw) * view.w;
     const dy = ((e.clientY - d.sy) / d.rh) * view.h;
-    setView((v) => ({ ...v, x: Math.max(X0, Math.min(X0 + W - v.w, d.vx - dx)), y: Math.max(Y0, Math.min(Y0 + H - v.h, d.vy - dy)) }));
+    setView((v) => ({ ...v, x: Math.max(B.x, Math.min(B.x + B.w - v.w, d.vx - dx)), y: Math.max(B.y, Math.min(B.y + B.h - v.h, d.vy - dy)) }));
   };
   const onUp = () => { dragRef.current = null; setDragging(false); };
+  // Transform de rotación del contenido (todo el mapa gira junto).
+  const rotT = rot ? `rotate(${rot} ${rcx} ${rcy})` : undefined;
 
   // Capa de trazadas memoizada: no se reconstruye en cada hover (solo cuando
   // cambian datos/zoom/toggles), así el marcador de hover se mueve fluido.
   const segs = useMemo(() => {
-    const out = [];
-    if (!showLap || !mapPath) return out;
-    // Puntos válidos (no nulos) con su índice original. Conectamos consecutivos
-    // salvo que haya un hueco grande (>6 buckets = posible pérdida de datos), y
-    // así puenteamos dropouts chicos en vez de cortar la línea.
+    if (!showLap || !mapPath) return [];
+    // Geometría base (Catmull-Rom) compartida con ShareCard.
+    const base = buildTrackSegments(mapPath);
+    // Recorremos los mismos puntos válidos (mismo filtro de huecos) para saber
+    // a qué índice original corresponde cada segmento de `base` y así inyectar
+    // dv (comparación, depende de mapDelta) y gr (grip, depende de gripLap) —
+    // ambos quedan fuera de buildTrackSegments porque no son geometría pura.
     const pts = [];
     for (let i = 0; i < mapPath.length; i++) if (mapPath[i]) pts.push({ i, p: mapPath[i] });
     const W = 3; // ventana de suavizado del delta (reduce ruido bucket a bucket)
+    const out = [];
+    let bi = 0;
     for (let k = 1; k < pts.length; k++) {
       const prv = pts[k - 1], cur = pts[k];
       if (cur.i - prv.i > 6) continue; // hueco grande → no puenteamos
-      const a = prv.p, b = cur.p;
+      const s = base[bi++];
       // dv = pendiente del delta promediada sobre ~W buckets.
       const j = Math.max(0, cur.i - W);
       const dv = mapDelta && mapDelta[cur.i] != null && mapDelta[j] != null && cur.i > j
         ? (mapDelta[cur.i] - mapDelta[j]) / (cur.i - j)
         : 0;
-      // Catmull-Rom (tensión 1/6) usando los vecinos VÁLIDos → curva continua.
-      const p0 = (pts[k - 2] || prv).p, p3 = (pts[k + 1] || cur).p;
-      const c1x = a.x + (b.x - p0.x) / 6, c1y = a.y + (b.y - p0.y) / 6;
-      const c2x = b.x - (p3.x - a.x) / 6, c2y = b.y - (p3.y - a.y) / 6;
-      out.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, c1x, c1y, c2x, c2y, hue: b.hue, dv, th: b.th, br: b.br, gr: gripLap ? gripLap[cur.i] : null });
+      out.push({ ...s, dv, gr: gripLap ? gripLap[cur.i] : null });
     }
     return out;
   }, [mapPath, showLap, mapDelta, gripLap]);
@@ -603,6 +576,21 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
         <div className="flex items-center gap-1">
           <ToggleBtn active={showLap} onClick={() => setShowLap((v) => !v)} color="rgb(52,211,153)">Tu vuelta</ToggleBtn>
           {mapPathRef && <ToggleBtn active={showRef} onClick={() => setShowRef((v) => !v)} color="rgba(255,255,255,0.85)">Referencia</ToggleBtn>}
+          {onRotChange && (
+            <div className="flex items-center gap-1 pl-1" title="Rotación del mapa (se guarda por circuito)">
+              <RotateCcw className="size-3 text-muted-foreground/60" />
+              <input
+                type="range"
+                min="0"
+                max="355"
+                step="5"
+                value={rot}
+                onChange={(e) => onRotChange(parseInt(e.target.value, 10) || 0)}
+                className="w-20 accent-sky-400"
+              />
+              <span className="text-[10px] font-mono tabular-nums w-7 text-right text-muted-foreground">{rot}°</span>
+            </div>
+          )}
           <button onClick={() => zoomAt(0.5, 0.5, 0.7)} className="px-2 py-0.5 rounded-md text-xs font-bold hover:bg-white/10">+</button>
           <button onClick={() => zoomAt(0.5, 0.5, 1.45)} className="px-2 py-0.5 rounded-md text-xs font-bold hover:bg-white/10">−</button>
           <button onClick={reset} className="px-2 py-0.5 rounded-md text-[10px] font-semibold hover:bg-white/10">Reset</button>
@@ -613,11 +601,17 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
             negras (el contenedor es más cuadrado que el viewBox). Resto: 'meet'. */}
         <svg viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`} preserveAspectRatio={tiles ? "xMidYMid slice" : "xMidYMid meet"} className={fill ? "w-full h-full block" : "w-full block"} style={fill ? undefined : { aspectRatio: `${W} / ${H}` }}>
           {/* Foto satelital (tiles de Esri) como fondo, en el mismo espacio de la
-              trazada. Scrim oscuro encima para que las líneas de color resalten. */}
-          {tiles && tiles.map((t) => (
-            <image key={`${t.x}/${t.y}`} href={t.url} x={t.px} y={t.py} width={256.7} height={256.7} preserveAspectRatio="none" style={{ imageRendering: "auto" }} />
-          ))}
+              trazada (rota junto con todo el contenido). Scrim oscuro encima,
+              SIN rotar (alineado a pantalla), para que cubra siempre la vista. */}
+          {tiles && (
+            <g transform={rotT}>
+              {tiles.map((t) => (
+                <image key={`${t.x}/${t.y}`} href={t.url} x={t.px} y={t.py} width={256.7} height={256.7} preserveAspectRatio="none" style={{ imageRendering: "auto" }} />
+              ))}
+            </g>
+          )}
           {scrim && <rect x={view.x} y={view.y} width={view.w} height={view.h} fill="rgba(0,0,0,0.28)" />}
+          <g transform={rotT}>
           {outlineD && outlineMode === "stroke" && (
             // Trazado REAL de OSM (highway=raceway) como líneas finas: el eje real
             // del circuito superpuesto a la línea GPS (misma proyección, SIN
@@ -663,6 +657,7 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
               <g key={`cn-${i}`}>
                 <circle cx={p.x} cy={p.y} r={3.5 * k} fill="white" stroke="black" strokeWidth={1.5 * k} />
                 <text
+                  transform={rot ? `rotate(${-rot} ${p.x} ${p.y})` : undefined}
                   x={p.x + 7 * k}
                   y={p.y - 6 * k}
                   fontSize={22 * k}
@@ -681,6 +676,7 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
           })}
           {hRef && <circle cx={hRef.x} cy={hRef.y} r={7 * k} fill="none" stroke="white" strokeWidth={2.5 * k} />}
           {hLap && <circle cx={hLap.x} cy={hLap.y} r={7 * k} fill="rgb(52,211,153)" stroke="black" strokeWidth={1.5 * k} />}
+          </g>
         </svg>
         {attribution && (
           <div className="absolute bottom-1 right-1.5 text-[8px] text-white/70 bg-black/45 px-1.5 py-0.5 rounded pointer-events-none">{attribution}</div>
@@ -780,6 +776,124 @@ function DrivingMetricsCard({ m, hasRef }) {
   );
 }
 
+// Construye el subárbol SVG del mapa (contorno + trazada) YA AJUSTADO a la caja
+// del ShareCard. ShareCard solo TRASLADA `mapEls` a (map.x, map.y): acá metemos
+// un <g> con la ESCALA que encaja el `baseView` del mapa dentro de la caja
+// (fit "meet", centrado). Reusa la MISMA alineación que MapPanel — el `mapPath`
+// ya viene alineado por svgMap/gpsMap (afín) — y la MISMA geometría Bézier
+// (`buildTrackSegments`). Color por velocidad vía el `hue` precomputado, que es
+// idéntico a `speedColor` (240=azul → 0=rojo). NO embebe tiles satelitales.
+// `box` = { w, h } de la zona de mapa que calcula ShareCard para el formato.
+// Rotación preferida del mapa POR CIRCUITO, persistida en localStorage: girás
+// una vez y ese circuito queda siempre con esa orientación (análisis y tarjeta).
+const ROT_STORE_KEY = "ifly.trackRotation";
+function loadTrackRot(trackKey) {
+  if (!trackKey) return 0;
+  try {
+    const m = JSON.parse(localStorage.getItem(ROT_STORE_KEY) || "{}");
+    const v = m[trackKey];
+    return isFinite(v) ? ((Math.round(v) % 360) + 360) % 360 : 0;
+  } catch (_) { return 0; }
+}
+function saveTrackRot(trackKey, deg) {
+  if (!trackKey) return;
+  try {
+    const m = JSON.parse(localStorage.getItem(ROT_STORE_KEY) || "{}");
+    m[trackKey] = ((Math.round(deg) % 360) + 360) % 360;
+    localStorage.setItem(ROT_STORE_KEY, JSON.stringify(m));
+  } catch (_) {}
+}
+
+function buildShareMapEls(map, box, mode = "speed", rotDeg = 0) {
+  if (!map || !Array.isArray(map.mapPath) || !box) return null;
+  const BV = map.baseView || { x: 0, y: 0, w: 1000, h: 380 };
+  // Encuadre por ROTACIÓN: rotamos los puntos reales de la trazada alrededor
+  // del centro del view y ajustamos la caja al bounding box rotado (con un 6%
+  // de margen para el contorno). Esto maximiza el tamaño del trazado en la
+  // caja para CUALQUIER ángulo — con 0° también: encuadra a la trazada real,
+  // no al viewport con padding, así el mapa se ve más grande.
+  const th = ((rotDeg || 0) * Math.PI) / 180;
+  const cos = Math.cos(th), sin = Math.sin(th);
+  const cx = BV.x + BV.w / 2, cy = BV.y + BV.h / 2;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of map.mapPath) {
+    if (!p) continue;
+    const dx = p.x - cx, dy = p.y - cy;
+    const rx = dx * cos - dy * sin, ry = dx * sin + dy * cos;
+    if (rx < minX) minX = rx; if (rx > maxX) maxX = rx;
+    if (ry < minY) minY = ry; if (ry > maxY) maxY = ry;
+  }
+  if (!isFinite(minX)) { minX = -BV.w / 2; maxX = BV.w / 2; minY = -BV.h / 2; maxY = BV.h / 2; }
+  const rw = (maxX - minX) * 1.06 || 1, rh = (maxY - minY) * 1.06 || 1;
+  const scale = Math.min(box.w / rw, box.h / rh);
+  const midX = (minX + maxX) / 2, midY = (minY + maxY) / 2;
+  // Punto p → s·R·(p−c) + centroCaja − s·mid (bbox rotado centrado en la caja).
+  const tx = box.w / 2 - scale * midX;
+  const ty = box.h / 2 - scale * midY;
+  // Grosor de trazo en UNIDADES NATIVAS del mapa (la <g> lo escala luego), con el
+  // mismo factor k que MapPanel para que la tarjeta se vea como el análisis.
+  const k = (BV.w || 1200) / 1200;
+  const segs = buildTrackSegments(map.mapPath);
+  const dpath = (s) => `M${s.x1.toFixed(1)},${s.y1.toFixed(1)}C${s.c1x.toFixed(1)},${s.c1y.toFixed(1)} ${s.c2x.toFixed(1)},${s.c2y.toFixed(1)} ${s.x2.toFixed(1)},${s.y2.toFixed(1)}`;
+  const roadWidth = map.roadWidth || 0;
+  const outlineMode = map.outlineMode || null;
+  // Tiles satelitales YA embebidos como data URL (los baja el main sin CORS para
+  // que el canvas no se contamine al exportar el PNG).
+  const tiles = Array.isArray(map.tiles) ? map.tiles.filter((t) => t && t.dataUrl) : null;
+  return (
+    <g clipPath="url(#sc-mapclip)">
+      <defs><clipPath id="sc-mapclip"><rect x="0" y="0" width={box.w} height={box.h} /></clipPath></defs>
+      <g transform={`translate(${tx.toFixed(2)},${ty.toFixed(2)}) scale(${scale}) rotate(${rotDeg || 0}) translate(${-cx},${-cy})`}>
+        {/* Fondo satelital (foto) + scrim oscuro para que resalte la trazada. */}
+        {tiles && tiles.map((t) => (
+          <image key={`${t.x}/${t.y}`} href={t.dataUrl} x={t.px} y={t.py} width={256.7} height={256.7} preserveAspectRatio="none" />
+        ))}
+        {/* Scrim sobredimensionado: con el re-encuadre (zoom/rotación) el área
+            visible puede exceder el viewport original de los tiles. */}
+        {tiles && map.scrim && <rect x={BV.x - BV.w} y={BV.y - BV.h} width={BV.w * 3} height={BV.h * 3} fill="rgba(0,0,0,0.30)" />}
+        {/* Contorno real: OSM = cinta de asfalto (rim claro + asfalto oscuro),
+            SVG estilizado = bordes del circuito. Misma lógica que MapPanel. */}
+        {map.outlineD && outlineMode === "stroke" && (
+          <path d={map.outlineD} fill="none" stroke="rgba(125,211,252,0.55)" strokeWidth={2.2 * k} strokeLinejoin="round" strokeLinecap="round" />
+        )}
+        {map.outlineD && outlineMode !== "stroke" && roadWidth > 0 && (
+          <g>
+            <path d={map.outlineD} fill="none" stroke="rgba(255,255,255,0.32)" strokeWidth={roadWidth} strokeLinejoin="round" strokeLinecap="round" />
+            <path d={map.outlineD} fill="none" stroke="rgb(24,26,32)" strokeWidth={Math.max(0.5, roadWidth - 2.6)} strokeLinejoin="round" strokeLinecap="round" />
+          </g>
+        )}
+        {map.outlineD && outlineMode !== "stroke" && !(roadWidth > 0) && (
+          <path
+            d={map.outlineD}
+            fill={(map.outlineD.match(/M/gi) || []).length >= 2 ? "rgba(255,255,255,0.07)" : "none"}
+            fillRule="evenodd"
+            stroke="rgba(255,255,255,0.4)"
+            strokeWidth={2.5 * k}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+        )}
+        {/* Trazada coloreada según el modo elegido (velocidad / acelerador /
+            freno), con glow neón (solo la trazada, no la foto satelital). El
+            degradado gris→color de pedales es el mismo que usa MapPanel. */}
+        <g filter="url(#sc-glow)">
+          {segs.map((s, i) => {
+            const BASE = [70, 78, 90];
+            const lerp3 = (a, b, u) => {
+              const c = Math.max(0, Math.min(1, u == null ? 0 : u));
+              return `rgb(${Math.round(a[0] + (b[0] - a[0]) * c)},${Math.round(a[1] + (b[1] - a[1]) * c)},${Math.round(a[2] + (b[2] - a[2]) * c)})`;
+            };
+            const color = mode === "throttle" ? lerp3(BASE, [46, 204, 113], s.th)
+              : mode === "brake" ? lerp3(BASE, [239, 68, 68], s.br)
+              : `hsl(${Math.round(s.hue)},85%,55%)`;
+            return <path key={i} d={dpath(s)} fill="none" stroke={color} strokeWidth={4.5 * k} strokeLinecap="round" strokeLinejoin="round" />;
+          })}
+        </g>
+      </g>
+    </g>
+  );
+}
+
 export function AnalysisView() {
   const [sessions, setSessions] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
@@ -794,6 +908,19 @@ export function AnalysisView() {
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleInput, setTitleInput] = useState("");
   const [hoverIdx, setHoverIdx] = useState(null); // bucket bajo el cursor (charts↔mapa)
+  // Hover throttleado a un frame: mousemove dispara cientos de eventos/seg y cada
+  // setHoverIdx re-renderiza la vista entera. Coalescemos a ≤1 update por rAF.
+  const hoverRaf = useRef(0);
+  const hoverNext = useRef(null);
+  const setHover = useCallback((v) => {
+    hoverNext.current = v;
+    if (hoverRaf.current) return;
+    hoverRaf.current = requestAnimationFrame(() => {
+      hoverRaf.current = 0;
+      setHoverIdx(hoverNext.current);
+    });
+  }, []);
+  useEffect(() => () => { if (hoverRaf.current) cancelAnimationFrame(hoverRaf.current); }, []);
   const [detailOpen, setDetailOpen] = useState(false); // vista de análisis detallado (pantalla completa)
   const [zoomRange, setZoomRange] = useState(null); // [aFrac,bFrac] porción de la vuelta ampliada en los gráficos
   const [rangeTool, setRangeTool] = useState(false); // herramienta de selección de rango activa
@@ -806,6 +933,47 @@ export function AnalysisView() {
   const [refSession, setRefSession] = useState(null);
   const [refLapIdx, setRefLapIdx] = useState(-1); // vuelta de la referencia (-1 = mejor)
   const [g61Url, setG61Url] = useState(null); // URL de Garage 61 para este circuito+auto
+  // === Compartir vuelta (tarjeta PNG + .iflylap) ===
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareFormat, setShareFormat] = useState("square"); // story | square | wide
+  const [shareMapSource, setShareMapSource] = useState("osm"); // osm | sat | svg
+  const [shareMapMode, setShareMapMode] = useState("speed"); // speed | throttle | brake (color del mapa)
+  const [shareCharts, setShareCharts] = useState(["speed"]); // gráficos elegidos: speed | pedals
+  // Rotación del mapa (grados 0..359): UN estado por circuito, compartido por el
+  // mapa del análisis y la tarjeta, y persistido por trackKey.
+  const [trackRot, setTrackRotState] = useState(0);
+  const rotKey = session ? (session.trackKey || session.track || null) : null;
+  useEffect(() => { setTrackRotState(loadTrackRot(rotKey)); }, [rotKey]);
+  const setTrackRot = (d) => {
+    const v = ((Math.round(d) % 360) + 360) % 360;
+    setTrackRotState(v);
+    saveTrackRot(rotKey, v);
+  };
+  const [displayName, setDisplayName] = useState("");
+  const [shareMsg, setShareMsg] = useState(null); // feedback efímero de acciones
+  const [shareBusy, setShareBusy] = useState(false);
+  const shareSvgRef = useRef(null);
+  const [shareLogoUrl, setShareLogoUrl] = useState(null);
+  // Tiles satelitales para la tarjeta: { tiles:[{...,dataUrl}] } | 'loading' | 'error' | null.
+  const [satShareTiles, setSatShareTiles] = useState(null);
+  // Logo (ala) como data URL compacto para embeberlo en la tarjeta: al rasterizar
+  // el <svg> a PNG, una URL relativa (./logo.png) no cargaría dentro del data: URL
+  // del SVG. Lo dibujamos una vez en un canvas chico (mismo origen → sin taint) y
+  // guardamos un PNG data URL liviano que sí viaja embebido.
+  useEffect(() => {
+    let alive = true;
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const c = document.createElement("canvas");
+        c.width = 160; c.height = 160;
+        c.getContext("2d").drawImage(img, 0, 0, 160, 160);
+        if (alive) setShareLogoUrl(c.toDataURL("image/png"));
+      } catch (_) {}
+    };
+    img.src = "./logo.png";
+    return () => { alive = false; };
+  }, []);
 
   // URL fija del botón general de Garage 61 (la que pediste).
   const GARAGE61_URL = "https://garage61.net/app/laps/498/153;a=-1;bw=0,;bp=,0";
@@ -853,7 +1021,7 @@ export function AnalysisView() {
 
   useEffect(() => {
     if (!selectedId) { setSession(null); return; }
-    const isFile = /^(ibt|csv)/.test(selectedId); // .ibt/.csv escaneados o importados
+    const isFile = /^(ibt|csv|ifly)/.test(selectedId); // .ibt/.csv/.iflylap escaneados o importados
     const getter = isFile ? window.fly?.getIbtSession : window.fly?.getRecording;
     if (!getter) { setSession(null); return; }
     let mounted = true;
@@ -982,7 +1150,7 @@ export function AnalysisView() {
   // Cargar la sesión de referencia (ghost) cuando se elige otra.
   useEffect(() => {
     if (!refSessionId || refSessionId === selectedId) { setRefSession(null); return; }
-    const getter = /^(ibt|csv)/.test(refSessionId) ? window.fly?.getIbtSession : window.fly?.getRecording;
+    const getter = /^(ibt|csv|ifly)/.test(refSessionId) ? window.fly?.getIbtSession : window.fly?.getRecording;
     if (!getter) { setRefSession(null); return; }
     let m = true;
     setRefLapIdx(-1); // al cambiar de referencia, arrancar en su mejor vuelta
@@ -996,8 +1164,8 @@ export function AnalysisView() {
 
   const handleDelete = async (id, source, e) => {
     e.stopPropagation();
-    // .ibt/.csv son archivos reales → van a la papelera del SO (recuperables).
-    if (source === "ibt" || source === "csv") {
+    // .ibt/.csv/.iflylap son archivos reales → van a la papelera del SO (recuperables).
+    if (source === "ibt" || source === "csv" || source === "ifly") {
       if (!window.fly?.deleteTelemetry) {
         console.warn("[analysis] deleteTelemetry no existe — reiniciá Electron (el preload no se recarga con HMR)");
         return;
@@ -1459,6 +1627,104 @@ export function AnalysisView() {
   const activeMap = (fallbackOrder[mapSource] || ["svg", "osm", "sat"]).map((k) => availMaps[k]).find(Boolean) || null;
   const mapAvail = { svg: !!svgMap, osm: !!gpsMap, sat: !!satMap };
 
+  // === Compartir: datos y acciones ===
+  // Nombre a mostrar en la tarjeta (default vacío; el usuario decide qué poner —
+  // NO se toma el nombre real de iRacing automáticamente).
+  useEffect(() => {
+    if (window.fly?.getConfig) window.fly.getConfig().then((c) => setDisplayName(c?.displayName || "")).catch(() => {});
+  }, []);
+
+  // ¿La vuelta seleccionada tiene muestras utilizables para compartir?
+  const canShare = !!(lap && Array.isArray(lap.samples) && lap.samples.some(Boolean));
+
+  // Modelo de la tarjeta (tiempo, sectores, badge PB/válida, meta).
+  const cardModel = useMemo(
+    () => (lap ? buildCardModel({ lap, session, best: sessionBest, displayName }) : null),
+    [lap, session, sessionBest, displayName]
+  );
+
+  // Fuentes de mapa disponibles PARA COMPARTIR. El satélite queda diferido
+  // (los tiles remotos de Esri contaminan el canvas → toBlob falla), así que
+  // solo ofrecemos OSM y SVG estilizado, con fallback automático a SVG.
+  // Satélite listo para la tarjeta cuando ya se bajaron los tiles (data URLs).
+  const satReady = satShareTiles && satShareTiles.tiles ? { ...satMap, tiles: satShareTiles.tiles } : null;
+  const shareMapAvail = { osm: !!gpsMap, svg: !!svgMap, sat: !!satMap };
+  const shareSources = { osm: gpsMap, svg: svgMap, sat: satReady };
+  const shareFallback = { osm: ["osm", "svg"], svg: ["svg", "osm"], sat: ["sat", "osm", "svg"] };
+  const shareMap = ((shareFallback[shareMapSource] || ["osm", "svg"]).map((k) => shareSources[k]).find(Boolean)) || null;
+  // Fuente REALMENTE usada (tras el fallback), para resaltar el botón correcto.
+  const effShareSource = shareMap && shareMap === satReady ? "sat" : shareMap === gpsMap ? "osm" : shareMap === svgMap ? "svg" : null;
+  const satLoading = shareMapSource === "sat" && satShareTiles === "loading";
+
+  // Bajar los tiles satelitales (como data URLs, vía main) cuando se elige
+  // satélite para compartir. Sin esto el PNG saldría en blanco (canvas contaminado).
+  useEffect(() => {
+    if (shareMapSource !== "sat" || !satMap || !shareOpen || !window.fly?.shareTiles) { setSatShareTiles(null); return; }
+    let alive = true;
+    setSatShareTiles("loading");
+    const urls = (satMap.tiles || []).map((t) => t.url);
+    window.fly.shareTiles(urls).then((dataUrls) => {
+      if (!alive) return;
+      if (!Array.isArray(dataUrls)) { setSatShareTiles("error"); return; }
+      const tiles = (satMap.tiles || []).map((t, i) => ({ ...t, dataUrl: dataUrls[i] })).filter((t) => t.dataUrl);
+      setSatShareTiles(tiles.length ? { tiles } : "error");
+    }).catch(() => { if (alive) setSatShareTiles("error"); });
+    return () => { alive = false; };
+  }, [shareMapSource, satMap, shareOpen]);
+
+  // Zona del mapa de la tarjeta según formato Y nº de gráficos (el mapa cede
+  // altura). Fuente única compartida con ShareCard (mismo countShareCharts).
+  const shareBox = useMemo(() => {
+    const b = shareMapBox(shareFormat, countShareCharts(cardModel, shareCharts));
+    return { w: b.w, h: b.h };
+  }, [shareFormat, cardModel, shareCharts]);
+
+  // Subárbol del mapa ya ajustado a la caja de la tarjeta (trazada + contorno).
+  const shareMapEls = useMemo(() => buildShareMapEls(shareMap, shareBox, shareMapMode, trackRot), [shareMap, shareBox, shareMapMode, trackRot]);
+  const toggleShareChart = (k) => setShareCharts((cs) => (cs.includes(k) ? cs.filter((c) => c !== k) : [...cs, k]));
+
+  const flashShare = (text) => { setShareMsg(text); setTimeout(() => setShareMsg(null), 2600); };
+
+  const doCopy = async () => {
+    if (!shareSvgRef.current) return;
+    setShareBusy(true);
+    try {
+      const { w, h } = FORMATS[shareFormat] || FORMATS.square;
+      const blob = await svgToPngBlob(shareSvgRef.current, w, h);
+      const buf = await blob.arrayBuffer();
+      const r = await window.fly.exportCopyImage(buf);
+      flashShare(r && r.ok ? "Imagen copiada al portapapeles" : `No se pudo copiar${r && r.error ? `: ${r.error}` : ""}`);
+    } catch (err) { flashShare(`Error al generar la imagen: ${err.message}`); }
+    finally { setShareBusy(false); }
+  };
+  const doSave = async () => {
+    if (!shareSvgRef.current) return;
+    setShareBusy(true);
+    try {
+      const { w, h } = FORMATS[shareFormat] || FORMATS.square;
+      const blob = await svgToPngBlob(shareSvgRef.current, w, h);
+      const buf = await blob.arrayBuffer();
+      const r = await window.fly.exportSaveImage(buf, sanitizeFilename(`iFly - ${session.track} - ${cardModel.time}.png`));
+      if (r && r.ok) flashShare("PNG guardado");
+      else if (r && r.error) flashShare(`No se pudo guardar: ${r.error}`);
+    } catch (err) { flashShare(`Error al generar la imagen: ${err.message}`); }
+    finally { setShareBusy(false); }
+  };
+  const doExportLap = async () => {
+    setShareBusy(true);
+    try {
+      const meta = { driver: displayName, exportedAt: Date.now(), appVersion: "0.7.6" };
+      const r = await window.fly.exportSaveLap({ lap, session, meta }, sanitizeFilename(`${session.track} - ${session.car} - ${cardModel.time}.iflylap`));
+      if (r && r.ok) flashShare("Vuelta .iflylap exportada");
+      else if (r && r.error) flashShare(`No se pudo exportar: ${r.error}`);
+    } catch (err) { flashShare(`Error al exportar: ${err.message}`); }
+    finally { setShareBusy(false); }
+  };
+  const saveDisplayName = (name) => {
+    setDisplayName(name);
+    if (window.fly?.setDisplayName) window.fly.setDisplayName(name).catch(() => {});
+  };
+
   return (
     <div className="flex-1 flex overflow-hidden">
       {/* Sesiones */}
@@ -1564,14 +1830,14 @@ export function AnalysisView() {
               <div className="flex items-center justify-between gap-1">
                 <span className="text-xs font-semibold truncate">{titleOf(s)}</span>
                 <div className="flex items-center gap-1 shrink-0">
-                  {(s.source === "ibt" || s.source === "csv") && (
+                  {(s.source === "ibt" || s.source === "csv" || s.source === "ifly") && (
                     <span className="text-[8px] font-bold uppercase tracking-widest px-1 py-px rounded bg-sky-500/15 text-sky-300">
-                      {s.source === "ibt" ? "iRacing" : "CSV"}
+                      {s.source === "ibt" ? "iRacing" : s.source === "csv" ? "CSV" : "iFly"}
                     </span>
                   )}
                   <Trash2
                     className="size-3 opacity-0 group-hover:opacity-60 hover:!opacity-100"
-                    title={s.source === "ibt" || s.source === "csv" ? "Eliminar archivo (va a la papelera)" : "Eliminar grabación"}
+                    title={s.source === "ibt" || s.source === "csv" || s.source === "ifly" ? "Eliminar archivo (va a la papelera)" : "Eliminar grabación"}
                     onClick={(e) => handleDelete(s.id, s.source, e)}
                   />
                 </div>
@@ -1872,24 +2138,36 @@ export function AnalysisView() {
                   <>
                     <div className="flex items-center justify-between gap-2">
                       <MapSourceSwitch source={mapSource} setSource={setMapSource} avail={mapAvail} />
-                      <button
-                        onClick={() => setDetailOpen(true)}
-                        title="Abrir análisis detallado a pantalla completa (mapa + gráficos)"
-                        className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold bg-accent/60 hover:bg-accent transition-colors"
-                      >
-                        <Maximize2 className="size-3" /> Análisis detallado
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => setShareOpen(true)}
+                          disabled={!canShare}
+                          title={canShare ? "Compartir esta vuelta como imagen (.png) o archivo de referencia (.iflylap)" : "Esta vuelta no tiene muestras de telemetría para compartir"}
+                          className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold bg-sky-500/15 text-sky-300 hover:bg-sky-500/25 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          <Upload className="size-3" /> Compartir
+                        </button>
+                        <button
+                          onClick={() => setDetailOpen(true)}
+                          title="Abrir análisis detallado a pantalla completa (mapa + gráficos)"
+                          className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold bg-accent/60 hover:bg-accent transition-colors"
+                        >
+                          <Maximize2 className="size-3" /> Análisis detallado
+                        </button>
+                      </div>
                     </div>
                     <AnalysisDetail
                       charts={charts}
                       svgMap={activeMap}
                       corners={corners}
                       hoverIdx={hoverIdx}
-                      setHoverIdx={setHoverIdx}
+                      setHoverIdx={setHover}
                       showLapLine={showLapLine}
                       setShowLapLine={setShowLapLine}
                       showRefLine={showRefLine}
                       setShowRefLine={setShowRefLine}
+                      mapRot={trackRot}
+                      onMapRotChange={setTrackRot}
                     />
                   </>
                 )}
@@ -1950,7 +2228,204 @@ export function AnalysisView() {
               range={zoomRange}
               selecting={rangeTool}
               onSelectRange={(r) => { setZoomRange(r); setRangeTool(false); }}
+              mapRot={trackRot}
+              onMapRotChange={setTrackRot}
             />
+          </div>
+        </div>
+      )}
+
+      {/* Panel Compartir: tarjeta PNG (3 formatos, mapa OSM/SVG) + export .iflylap */}
+      {shareOpen && session && cardModel && (
+        <div className="fixed inset-0 z-[60] bg-background/98 backdrop-blur-sm flex flex-col">
+          <div className="flex items-center justify-between px-4 py-2 border-b border-border shrink-0">
+            <div className="flex items-baseline gap-2 min-w-0">
+              <span className="text-sm font-bold truncate">Compartir vuelta</span>
+              {lap && <span className="text-[11px] text-muted-foreground font-mono">L{lap.lap} · {cardModel.time}</span>}
+            </div>
+            <button
+              onClick={() => setShareOpen(false)}
+              title="Cerrar"
+              className="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold bg-accent/60 hover:bg-accent transition-colors"
+            >
+              <X className="size-4" /> Cerrar
+            </button>
+          </div>
+          <div className="flex-1 min-h-0 overflow-y-auto p-4">
+            <div className="flex flex-col md:flex-row gap-6 max-w-5xl mx-auto">
+              {/* Controles */}
+              <div className="w-full md:w-72 shrink-0 space-y-4">
+                {/* Formato */}
+                <div>
+                  <div className="text-[10px] uppercase tracking-widest text-muted-foreground/70 font-bold mb-1.5">Formato</div>
+                  <div className="flex flex-col gap-1">
+                    {Object.entries(FORMATS).map(([k, F]) => (
+                      <button
+                        key={k}
+                        onClick={() => setShareFormat(k)}
+                        className={`text-left px-2 py-1 rounded-md text-xs font-semibold border transition-colors ${
+                          shareFormat === k ? "bg-sky-500/20 border-sky-500/50 text-sky-300" : "bg-transparent border-border text-muted-foreground hover:bg-accent/50"
+                        }`}
+                      >
+                        {F.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {/* Fuente del mapa */}
+                <div>
+                  <div className="text-[10px] uppercase tracking-widest text-muted-foreground/70 font-bold mb-1.5">Mapa</div>
+                  {(shareMapAvail.osm || shareMapAvail.svg || shareMapAvail.sat) ? (
+                    <div className="flex flex-col gap-1">
+                      {[
+                        { v: "osm", label: "Open Street Map" },
+                        { v: "sat", label: "Satélite" },
+                        { v: "svg", label: "SVG estilizado" },
+                      ].filter((o) => shareMapAvail[o.v]).map((o) => (
+                        <button
+                          key={o.v}
+                          onClick={() => setShareMapSource(o.v)}
+                          className={`text-left px-2 py-1 rounded-md text-xs font-semibold border transition-colors ${
+                            shareMapSource === o.v
+                              ? "bg-sky-500/20 border-sky-500/50 text-sky-300"
+                              : "bg-transparent border-border text-muted-foreground hover:bg-accent/50"
+                          }`}
+                        >
+                          {o.label}{o.v === "sat" && satLoading ? " · cargando…" : ""}
+                        </button>
+                      ))}
+                      {shareMapSource === "sat" && satShareTiles === "error" && (
+                        <div className="text-[9px] text-amber-400/80 leading-tight mt-0.5">
+                          No se pudo cargar el satélite (¿sin conexión?). Se usa OSM.
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-[10px] text-muted-foreground/70 leading-tight">Sin mapa para esta vuelta; la tarjeta se comparte sin trazada.</div>
+                  )}
+                </div>
+                {/* Rotación del mapa */}
+                <div>
+                  <div className="text-[10px] uppercase tracking-widest text-muted-foreground/70 font-bold mb-1.5">Rotación del mapa</div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="range"
+                      min="0"
+                      max="355"
+                      step="5"
+                      value={trackRot}
+                      onChange={(e) => setTrackRot(parseInt(e.target.value, 10) || 0)}
+                      className="flex-1 accent-sky-400"
+                    />
+                    <span className="text-xs font-mono tabular-nums w-9 text-right text-muted-foreground">{trackRot}°</span>
+                  </div>
+                  <div className="flex gap-1 mt-1">
+                    {[0, 90, 180, 270].map((d) => (
+                      <button
+                        key={d}
+                        onClick={() => setTrackRot(d)}
+                        className={`flex-1 px-2 py-0.5 rounded-md text-[10px] font-semibold border transition-colors ${
+                          trackRot === d
+                            ? "bg-sky-500/20 border-sky-500/50 text-sky-300"
+                            : "bg-transparent border-border text-muted-foreground hover:bg-accent/50"
+                        }`}
+                      >
+                        {d}°
+                      </button>
+                    ))}
+                  </div>
+                  <div className="text-[9px] text-muted-foreground/60 leading-tight mt-0.5">Se guarda por circuito (también rota el mapa del análisis).</div>
+                </div>
+                {/* Color del mapa */}
+                <div>
+                  <div className="text-[10px] uppercase tracking-widest text-muted-foreground/70 font-bold mb-1.5">Color del mapa</div>
+                  <div className="flex gap-1">
+                    {[
+                      { v: "speed", label: "Velocidad" },
+                      { v: "throttle", label: "Acelerador" },
+                      { v: "brake", label: "Freno" },
+                    ].map((o) => (
+                      <button
+                        key={o.v}
+                        onClick={() => setShareMapMode(o.v)}
+                        className={`flex-1 px-2 py-1 rounded-md text-xs font-semibold border transition-colors ${
+                          shareMapMode === o.v
+                            ? "bg-sky-500/20 border-sky-500/50 text-sky-300"
+                            : "bg-transparent border-border text-muted-foreground hover:bg-accent/50"
+                        }`}
+                      >
+                        {o.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {/* Gráficos de la tarjeta */}
+                <div>
+                  <div className="text-[10px] uppercase tracking-widest text-muted-foreground/70 font-bold mb-1.5">Gráficos</div>
+                  <div className="flex gap-1">
+                    {[
+                      { v: "speed", label: "Velocidad" },
+                      { v: "pedals", label: "Acelerador y freno" },
+                    ].map((o) => (
+                      <button
+                        key={o.v}
+                        onClick={() => toggleShareChart(o.v)}
+                        className={`flex-1 px-2 py-1 rounded-md text-xs font-semibold border transition-colors ${
+                          shareCharts.includes(o.v)
+                            ? "bg-sky-500/20 border-sky-500/50 text-sky-300"
+                            : "bg-transparent border-border text-muted-foreground hover:bg-accent/50"
+                        }`}
+                      >
+                        {o.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="text-[9px] text-muted-foreground/60 leading-tight mt-0.5">Elegí cuáles mostrar; el espacio se redistribuye solo.</div>
+                </div>
+                {/* Nombre a mostrar */}
+                <div>
+                  <div className="text-[10px] uppercase tracking-widest text-muted-foreground/70 font-bold mb-1.5">Nombre a mostrar</div>
+                  <input
+                    value={displayName}
+                    onChange={(e) => saveDisplayName(e.target.value.slice(0, 40))}
+                    placeholder="Tu nombre o alias (opcional)"
+                    className="w-full bg-background border border-border rounded-md text-xs px-2 py-1 text-foreground"
+                  />
+                  <div className="text-[9px] text-muted-foreground/60 leading-tight mt-0.5">Se guarda para la próxima. Dejalo vacío si no querés que aparezca.</div>
+                </div>
+                {/* Acciones */}
+                <div className="flex flex-col gap-1.5 pt-1">
+                  <button
+                    onClick={doCopy}
+                    disabled={shareBusy}
+                    className="flex items-center justify-center gap-1 px-2 py-1.5 rounded-md text-xs font-semibold bg-sky-500/20 text-sky-300 hover:bg-sky-500/30 transition-colors disabled:opacity-40"
+                  >
+                    Copiar imagen
+                  </button>
+                  <button
+                    onClick={doSave}
+                    disabled={shareBusy}
+                    className="flex items-center justify-center gap-1 px-2 py-1.5 rounded-md text-xs font-semibold bg-accent/60 hover:bg-accent transition-colors disabled:opacity-40"
+                  >
+                    Guardar PNG
+                  </button>
+                  <button
+                    onClick={doExportLap}
+                    disabled={shareBusy}
+                    className="flex items-center justify-center gap-1 px-2 py-1.5 rounded-md text-xs font-semibold bg-accent/60 hover:bg-accent transition-colors disabled:opacity-40"
+                  >
+                    Exportar .iflylap
+                  </button>
+                  {shareMsg && <div className="text-[11px] text-emerald-400 mt-1 leading-snug">{shareMsg}</div>}
+                </div>
+              </div>
+              {/* Preview */}
+              <div className="flex-1 min-w-0 flex items-start justify-center">
+                <div className="rounded-lg overflow-hidden border border-border [&>svg]:block [&>svg]:max-h-[64vh] [&>svg]:max-w-full [&>svg]:h-auto [&>svg]:w-auto">
+                  <ShareCard ref={shareSvgRef} model={cardModel} mapEls={shareMapEls} format={shareFormat} logoUrl={shareLogoUrl} hasSat={effShareSource === "sat"} mapMode={shareMapMode} charts={shareCharts} />
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -1961,7 +2436,28 @@ export function AnalysisView() {
 // Mapa + gráficos de telemetría (con hover vinculado). `split` = layout a dos
 // mitades (mapa izq / gráficos der) para la vista de análisis detallado; si no,
 // apilado (mapa arriba, gráficos abajo) para la vista normal.
-function AnalysisDetail({ charts, svgMap, corners, hoverIdx, setHoverIdx, showLapLine, setShowLapLine, showRefLine, setShowRefLine, split = false, range = null, selecting = false, onSelectRange }) {
+function AnalysisDetail({ charts, svgMap, corners, hoverIdx, setHoverIdx, showLapLine, setShowLapLine, showRefLine, setShowRefLine, split = false, range = null, selecting = false, onSelectRange, mapRot = 0, onMapRotChange = null }) {
+  // Path strings de las series MEMOIZADOS: son O(800) de armado de string y NO
+  // dependen de `hoverIdx`. Sin este memo se reconstruían las ~11 series en CADA
+  // mousemove (setHoverIdx re-renderiza AnalysisView entero) → stutter. Con deps
+  // [charts, range] solo se recalculan al cambiar de vuelta o el zoom.
+  const P = useMemo(() => {
+    if (!charts) return null;
+    const sp = (vals, yMin, yMax) => seriesPath(vals, charts.n, yMin, yMax, 1000, 110, range);
+    return {
+      delta: sp(charts.delta, -charts.dMax, charts.dMax),
+      speedBest: sp(charts.speedBest, charts.spMin, charts.spMax),
+      speedLap: sp(charts.speedLap, charts.spMin, charts.spMax),
+      throttleRef: sp(charts.throttleRef, 0, 1),
+      brakeRef: sp(charts.brakeRef, 0, 1),
+      throttle: sp(charts.throttle, 0, 1),
+      brake: sp(charts.brake, 0, 1),
+      steerRef: sp(charts.steerRef, -charts.stMax, charts.stMax),
+      steer: sp(charts.steer, -charts.stMax, charts.stMax),
+      rpmRef: sp(charts.rpmRef, 0, charts.rpmMax),
+      rpm: sp(charts.rpm, 0, charts.rpmMax),
+    };
+  }, [charts, range]);
   if (!charts) return null;
 
   const mapPanel = (svgMap || charts.hasMap) ? (
@@ -1983,12 +2479,13 @@ function AnalysisDetail({ charts, svgMap, corners, hoverIdx, setHoverIdx, showLa
       corners={corners}
       fill={split}
       highlightRange={range}
+      rot={mapRot}
+      onRotChange={onMapRotChange}
     />
   ) : null;
 
-  // Props comunes a todos los gráficos (incluye rango/selección) + helper de path.
+  // Props comunes a todos los gráficos (incluye rango/selección).
   const cp = { n: charts.n, hoverIdx, onHover: setHoverIdx, corners, range, selecting, onSelectRange };
-  const sp = (vals, yMin, yMax) => seriesPath(vals, charts.n, yMin, yMax, 1000, 110, range);
 
   const chartsCol = (
     <>
@@ -2003,13 +2500,13 @@ function AnalysisDetail({ charts, svgMap, corners, hoverIdx, setHoverIdx, showLa
       <Chart title="Delta vs mejor vuelta (s)" {...cp}
         tooltip={[{ label: "Delta (s)", value: tSec(atv(charts.delta, hoverIdx)), color: "rgb(125,211,252)" }]}>
         <line x1="0" y1="55" x2="1000" y2="55" stroke="rgba(255,255,255,0.15)" strokeWidth="1" strokeDasharray="4 4" />
-        <path d={sp(charts.delta, -charts.dMax, charts.dMax)} fill="none" stroke="rgb(125,211,252)" strokeWidth="2" />
+        <path d={P.delta} fill="none" stroke="rgb(125,211,252)" strokeWidth="2" />
       </Chart>
 
       <Chart title="Velocidad (km/h) — vuelta vs mejor" {...cp} hasRef={charts.hasRef}
         tooltip={[{ label: "Vel (km/h)", value: tKmh(atv(charts.speedLap, hoverIdx)), ref: tKmh(atv(charts.speedBest, hoverIdx)), color: "rgb(52,211,153)" }]}>
-        {showRefLine && charts.hasRef && <path d={sp(charts.speedBest, charts.spMin, charts.spMax)} fill="none" stroke="rgba(168,85,247,0.7)" strokeWidth="1.5" strokeDasharray="5 3" />}
-        {showLapLine && <path d={sp(charts.speedLap, charts.spMin, charts.spMax)} fill="none" stroke="rgb(52,211,153)" strokeWidth="2" />}
+        {showRefLine && charts.hasRef && <path d={P.speedBest} fill="none" stroke="rgba(168,85,247,0.7)" strokeWidth="1.5" strokeDasharray="5 3" />}
+        {showLapLine && <path d={P.speedLap} fill="none" stroke="rgb(52,211,153)" strokeWidth="2" />}
       </Chart>
 
       <Chart title="Acelerador (verde) y freno (rojo)" {...cp} hasRef={charts.hasRef}
@@ -2017,23 +2514,23 @@ function AnalysisDetail({ charts, svgMap, corners, hoverIdx, setHoverIdx, showLa
           { label: "Acelerador", value: tPct(atv(charts.throttle, hoverIdx)), ref: tPct(atv(charts.throttleRef, hoverIdx)), color: "rgb(52,211,153)" },
           { label: "Freno", value: tPct(atv(charts.brake, hoverIdx)), ref: tPct(atv(charts.brakeRef, hoverIdx)), color: "rgb(239,68,68)" },
         ]}>
-        {showRefLine && charts.hasRef && <path d={sp(charts.throttleRef, 0, 1)} fill="none" stroke="rgba(52,211,153,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
-        {showRefLine && charts.hasRef && <path d={sp(charts.brakeRef, 0, 1)} fill="none" stroke="rgba(239,68,68,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
-        {showLapLine && <path d={sp(charts.throttle, 0, 1)} fill="none" stroke="rgb(52,211,153)" strokeWidth="2" />}
-        {showLapLine && <path d={sp(charts.brake, 0, 1)} fill="none" stroke="rgb(239,68,68)" strokeWidth="2" />}
+        {showRefLine && charts.hasRef && <path d={P.throttleRef} fill="none" stroke="rgba(52,211,153,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
+        {showRefLine && charts.hasRef && <path d={P.brakeRef} fill="none" stroke="rgba(239,68,68,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
+        {showLapLine && <path d={P.throttle} fill="none" stroke="rgb(52,211,153)" strokeWidth="2" />}
+        {showLapLine && <path d={P.brake} fill="none" stroke="rgb(239,68,68)" strokeWidth="2" />}
       </Chart>
 
       <Chart title="Volante (ángulo)" {...cp} hasRef={charts.hasRef}
         tooltip={[{ label: "Volante", value: tDeg(atv(charts.steer, hoverIdx)), ref: tDeg(atv(charts.steerRef, hoverIdx)), color: "rgb(234,179,8)" }]}>
         <line x1="0" y1="55" x2="1000" y2="55" stroke="rgba(255,255,255,0.15)" strokeWidth="1" strokeDasharray="4 4" />
-        {showRefLine && charts.hasRef && <path d={sp(charts.steerRef, -charts.stMax, charts.stMax)} fill="none" stroke="rgba(234,179,8,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
-        {showLapLine && <path d={sp(charts.steer, -charts.stMax, charts.stMax)} fill="none" stroke="rgb(234,179,8)" strokeWidth="2" />}
+        {showRefLine && charts.hasRef && <path d={P.steerRef} fill="none" stroke="rgba(234,179,8,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
+        {showLapLine && <path d={P.steer} fill="none" stroke="rgb(234,179,8)" strokeWidth="2" />}
       </Chart>
 
       <Chart title="RPM" {...cp} hasRef={charts.hasRef}
         tooltip={[{ label: "RPM", value: tRpm(atv(charts.rpm, hoverIdx)), ref: tRpm(atv(charts.rpmRef, hoverIdx)), color: "rgb(129,140,248)" }]}>
-        {showRefLine && charts.hasRef && <path d={sp(charts.rpmRef, 0, charts.rpmMax)} fill="none" stroke="rgba(129,140,248,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
-        {showLapLine && <path d={sp(charts.rpm, 0, charts.rpmMax)} fill="none" stroke="rgb(129,140,248)" strokeWidth="2" />}
+        {showRefLine && charts.hasRef && <path d={P.rpmRef} fill="none" stroke="rgba(129,140,248,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
+        {showLapLine && <path d={P.rpm} fill="none" stroke="rgb(129,140,248)" strokeWidth="2" />}
       </Chart>
 
       <div className="text-[10px] text-muted-foreground/60">

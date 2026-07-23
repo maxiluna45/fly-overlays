@@ -87,6 +87,12 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null, settin
   const [renderDelta, setRenderDelta] = useState(0);
   const rafRef = useRef(null);
 
+  // Firma de los campos que ESTE overlay realmente usa: si no cambió ninguno,
+  // devolvemos prev → React no re-renderiza. El canal rápido llega a 60 Hz;
+  // en reposo (menú/pits/auto quieto) el delta y las refs no cambian, así que
+  // esto evita 60 reconciliaciones/seg para pintar exactamente lo mismo.
+  const lastSigRef = useRef("");
+
   // Suscripción a telemetría real (solo si window.fly existe y no hay telemetría inyectada)
   useEffect(() => {
     if (injectedTelemetry) return;
@@ -94,6 +100,10 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null, settin
     if (typeof window.fly.onTelemetry !== "function") return;
     try {
       const unsub = window.fly.onTelemetry((data) => {
+        const r = data.deltaRefs || {};
+        const sig = `${!!data.connected}|${!!data.onTrack}|${!!data.preview}|${data.delta}|${data.deltaRate}|${data.refLapTime}|${r.sessionBest}|${r.personalBest}|${r.optimal}|${r.lastLap}|${r.fieldBest}`;
+        if (sig === lastSigRef.current) return; // nada que ESTE overlay muestre cambió
+        lastSigRef.current = sig;
         setTelemetry((prev) => ({ ...prev, ...data }));
       });
       return unsub;
