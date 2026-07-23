@@ -5,3 +5,6 @@ release/
 *.log
 .env
 .cache/
+
+# Scratch de subagent-driven-development (no debe ir al repo)
+.superpowers/

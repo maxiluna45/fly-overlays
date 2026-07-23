@@ -1713,7 +1713,7 @@ export function AnalysisView() {
   const doExportLap = async () => {
     setShareBusy(true);
     try {
-      const meta = { driver: displayName, exportedAt: Date.now(), appVersion: "0.7.5" };
+      const meta = { driver: displayName, exportedAt: Date.now(), appVersion: "0.7.6" };
       const r = await window.fly.exportSaveLap({ lap, session, meta }, sanitizeFilename(`${session.track} - ${session.car} - ${cardModel.time}.iflylap`));
       if (r && r.ok) flashShare("Vuelta .iflylap exportada");
       else if (r && r.error) flashShare(`No se pudo exportar: ${r.error}`);
