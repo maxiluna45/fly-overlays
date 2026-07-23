@@ -726,12 +726,32 @@ function DrivingMetricsCard({ m, hasRef }) {
 // (`buildTrackSegments`). Color por velocidad vía el `hue` precomputado, que es
 // idéntico a `speedColor` (240=azul → 0=rojo). NO embebe tiles satelitales.
 // `box` = { w, h } de la zona de mapa que calcula ShareCard para el formato.
-function buildShareMapEls(map, box, mode = "speed") {
+function buildShareMapEls(map, box, mode = "speed", rotDeg = 0) {
   if (!map || !Array.isArray(map.mapPath) || !box) return null;
   const BV = map.baseView || { x: 0, y: 0, w: 1000, h: 380 };
-  const scale = Math.min(box.w / (BV.w || 1), box.h / (BV.h || 1));
-  const ox = (box.w - BV.w * scale) / 2;
-  const oy = (box.h - BV.h * scale) / 2;
+  // Encuadre por ROTACIÓN: rotamos los puntos reales de la trazada alrededor
+  // del centro del view y ajustamos la caja al bounding box rotado (con un 6%
+  // de margen para el contorno). Esto maximiza el tamaño del trazado en la
+  // caja para CUALQUIER ángulo — con 0° también: encuadra a la trazada real,
+  // no al viewport con padding, así el mapa se ve más grande.
+  const th = ((rotDeg || 0) * Math.PI) / 180;
+  const cos = Math.cos(th), sin = Math.sin(th);
+  const cx = BV.x + BV.w / 2, cy = BV.y + BV.h / 2;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of map.mapPath) {
+    if (!p) continue;
+    const dx = p.x - cx, dy = p.y - cy;
+    const rx = dx * cos - dy * sin, ry = dx * sin + dy * cos;
+    if (rx < minX) minX = rx; if (rx > maxX) maxX = rx;
+    if (ry < minY) minY = ry; if (ry > maxY) maxY = ry;
+  }
+  if (!isFinite(minX)) { minX = -BV.w / 2; maxX = BV.w / 2; minY = -BV.h / 2; maxY = BV.h / 2; }
+  const rw = (maxX - minX) * 1.06 || 1, rh = (maxY - minY) * 1.06 || 1;
+  const scale = Math.min(box.w / rw, box.h / rh);
+  const midX = (minX + maxX) / 2, midY = (minY + maxY) / 2;
+  // Punto p → s·R·(p−c) + centroCaja − s·mid (bbox rotado centrado en la caja).
+  const tx = box.w / 2 - scale * midX;
+  const ty = box.h / 2 - scale * midY;
   // Grosor de trazo en UNIDADES NATIVAS del mapa (la <g> lo escala luego), con el
   // mismo factor k que MapPanel para que la tarjeta se vea como el análisis.
   const k = (BV.w || 1200) / 1200;
@@ -745,12 +765,14 @@ function buildShareMapEls(map, box, mode = "speed") {
   return (
     <g clipPath="url(#sc-mapclip)">
       <defs><clipPath id="sc-mapclip"><rect x="0" y="0" width={box.w} height={box.h} /></clipPath></defs>
-      <g transform={`translate(${ox.toFixed(2)},${oy.toFixed(2)}) scale(${scale}) translate(${-BV.x},${-BV.y})`}>
+      <g transform={`translate(${tx.toFixed(2)},${ty.toFixed(2)}) scale(${scale}) rotate(${rotDeg || 0}) translate(${-cx},${-cy})`}>
         {/* Fondo satelital (foto) + scrim oscuro para que resalte la trazada. */}
         {tiles && tiles.map((t) => (
           <image key={`${t.x}/${t.y}`} href={t.dataUrl} x={t.px} y={t.py} width={256.7} height={256.7} preserveAspectRatio="none" />
         ))}
-        {tiles && map.scrim && <rect x={BV.x} y={BV.y} width={BV.w} height={BV.h} fill="rgba(0,0,0,0.30)" />}
+        {/* Scrim sobredimensionado: con el re-encuadre (zoom/rotación) el área
+            visible puede exceder el viewport original de los tiles. */}
+        {tiles && map.scrim && <rect x={BV.x - BV.w} y={BV.y - BV.h} width={BV.w * 3} height={BV.h * 3} fill="rgba(0,0,0,0.30)" />}
         {/* Contorno real: OSM = cinta de asfalto (rim claro + asfalto oscuro),
             SVG estilizado = bordes del circuito. Misma lógica que MapPanel. */}
         {map.outlineD && outlineMode === "stroke" && (
@@ -826,6 +848,7 @@ export function AnalysisView() {
   const [shareMapSource, setShareMapSource] = useState("osm"); // osm | sat | svg
   const [shareMapMode, setShareMapMode] = useState("speed"); // speed | throttle | brake (color del mapa)
   const [shareCharts, setShareCharts] = useState(["speed"]); // gráficos elegidos: speed | pedals
+  const [shareMapRot, setShareMapRot] = useState(0); // rotación del mapa en grados (0..359)
   const [displayName, setDisplayName] = useState("");
   const [shareMsg, setShareMsg] = useState(null); // feedback efímero de acciones
   const [shareBusy, setShareBusy] = useState(false);
@@ -1557,7 +1580,7 @@ export function AnalysisView() {
   }, [shareFormat, cardModel, shareCharts]);
 
   // Subárbol del mapa ya ajustado a la caja de la tarjeta (trazada + contorno).
-  const shareMapEls = useMemo(() => buildShareMapEls(shareMap, shareBox, shareMapMode), [shareMap, shareBox, shareMapMode]);
+  const shareMapEls = useMemo(() => buildShareMapEls(shareMap, shareBox, shareMapMode, shareMapRot), [shareMap, shareBox, shareMapMode, shareMapRot]);
   const toggleShareChart = (k) => setShareCharts((cs) => (cs.includes(k) ? cs.filter((c) => c !== k) : [...cs, k]));
 
   const flashShare = (text) => { setShareMsg(text); setTimeout(() => setShareMsg(null), 2600); };
@@ -2176,6 +2199,37 @@ export function AnalysisView() {
                   ) : (
                     <div className="text-[10px] text-muted-foreground/70 leading-tight">Sin mapa para esta vuelta; la tarjeta se comparte sin trazada.</div>
                   )}
+                </div>
+                {/* Rotación del mapa */}
+                <div>
+                  <div className="text-[10px] uppercase tracking-widest text-muted-foreground/70 font-bold mb-1.5">Rotación del mapa</div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="range"
+                      min="0"
+                      max="355"
+                      step="5"
+                      value={shareMapRot}
+                      onChange={(e) => setShareMapRot(parseInt(e.target.value, 10) || 0)}
+                      className="flex-1 accent-sky-400"
+                    />
+                    <span className="text-xs font-mono tabular-nums w-9 text-right text-muted-foreground">{shareMapRot}°</span>
+                  </div>
+                  <div className="flex gap-1 mt-1">
+                    {[0, 90, 180, 270].map((d) => (
+                      <button
+                        key={d}
+                        onClick={() => setShareMapRot(d)}
+                        className={`flex-1 px-2 py-0.5 rounded-md text-[10px] font-semibold border transition-colors ${
+                          shareMapRot === d
+                            ? "bg-sky-500/20 border-sky-500/50 text-sky-300"
+                            : "bg-transparent border-border text-muted-foreground hover:bg-accent/50"
+                        }`}
+                      >
+                        {d}°
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 {/* Color del mapa */}
                 <div>
