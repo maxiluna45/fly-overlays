@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { Trash2, Trophy, Clock, Activity, Gauge, Upload, FolderOpen, RotateCcw, Pencil, Check, X, Search, ExternalLink, Maximize2, Crop } from "lucide-react";
 import { analyzeLap, bestLapOf, consistency, sectorTimes, sessionOptimal, cornerConsistency, resampleSamples, drivingMetrics } from "../lib/coach.js";
+import { buildTrackSegments, fitSimilarity, applySim, fitAffine, applyAffine, speedColor } from "../lib/track-render.js";
 import lovelyTracks from "../assets/lovely-tracks.json"; // curvas + sectores por pista (© Lovely Sim Racing, CC BY-NC-SA)
 
 // Ancho de asfalto (metros) para engrosar el eje de OSM y dibujar ambos bordes.
@@ -141,72 +142,6 @@ function parseTrackSvg(svgText) {
     if (!sampleD) return null;
     return { sampleD, outlineD: ds.join(" "), viewBox: vb };
   } catch (_) { return null; }
-}
-
-// Ajuste de similitud 2D (Umeyama): src → dst. Devuelve {s,cos,sin,tx,ty,err}.
-function fitSimilarity(src, dst) {
-  const n = src.length;
-  if (n < 3) return null;
-  let msx = 0, msy = 0, mdx = 0, mdy = 0;
-  for (let i = 0; i < n; i++) { msx += src[i].x; msy += src[i].y; mdx += dst[i].x; mdy += dst[i].y; }
-  msx /= n; msy /= n; mdx /= n; mdy /= n;
-  let a = 0, b = 0, varS = 0;
-  for (let i = 0; i < n; i++) {
-    const sx = src[i].x - msx, sy = src[i].y - msy, dx = dst[i].x - mdx, dy = dst[i].y - mdy;
-    a += sx * dx + sy * dy;
-    b += sx * dy - sy * dx;
-    varS += sx * sx + sy * sy;
-  }
-  const mag = Math.hypot(a, b) || 1e-9;
-  const cos = a / mag, sin = b / mag;
-  const s = mag / (varS || 1e-9);
-  const tx = mdx - s * (cos * msx - sin * msy);
-  const ty = mdy - s * (sin * msx + cos * msy);
-  let err = 0;
-  for (let i = 0; i < n; i++) {
-    const x = s * (cos * src[i].x - sin * src[i].y) + tx;
-    const y = s * (sin * src[i].x + cos * src[i].y) + ty;
-    err += (x - dst[i].x) ** 2 + (y - dst[i].y) ** 2;
-  }
-  return { s, cos, sin, tx, ty, err };
-}
-function applySim(T, x, y) {
-  return { x: T.s * (T.cos * x - T.sin * y) + T.tx, y: T.s * (T.sin * x + T.cos * y) + T.ty };
-}
-
-// Ajuste AFÍN por mínimos cuadrados (matriz 2x2 + traslación). A diferencia de
-// la similitud, absorbe reflexión, escala distinta por eje y shear → sirve para
-// posiciones en cualquier sistema/unidad (ej. Lat/Lon de un CSP externo). Se
-// centra src y dst para quedar bien condicionado. Correspondencia por índice.
-function fitAffine(src, dst) {
-  const n = src.length;
-  if (n < 3) return null;
-  let mx = 0, my = 0, mu = 0, mv = 0;
-  for (let i = 0; i < n; i++) { mx += src[i].x; my += src[i].y; mu += dst[i].x; mv += dst[i].y; }
-  mx /= n; my /= n; mu /= n; mv /= n;
-  let Sxx = 0, Sxy = 0, Syy = 0, gxu = 0, gyu = 0, gxv = 0, gyv = 0;
-  for (let i = 0; i < n; i++) {
-    const sx = src[i].x - mx, sy = src[i].y - my, du = dst[i].x - mu, dv = dst[i].y - mv;
-    Sxx += sx * sx; Sxy += sx * sy; Syy += sy * sy;
-    gxu += sx * du; gyu += sy * du; gxv += sx * dv; gyv += sy * dv;
-  }
-  const det = Sxx * Syy - Sxy * Sxy;
-  if (Math.abs(det) < 1e-9) return null;
-  const inv00 = Syy / det, inv01 = -Sxy / det, inv11 = Sxx / det;
-  // A = [[a,b],[c,d]] resolviendo G·col = rhs para cada fila de salida.
-  const a = inv00 * gxu + inv01 * gyu, b = inv01 * gxu + inv11 * gyu;
-  const c = inv00 * gxv + inv01 * gyv, d = inv01 * gxv + inv11 * gyv;
-  let err = 0;
-  for (let i = 0; i < n; i++) {
-    const sx = src[i].x - mx, sy = src[i].y - my;
-    const u = a * sx + b * sy + mu, v = c * sx + d * sy + mv;
-    err += (u - dst[i].x) ** 2 + (v - dst[i].y) ** 2;
-  }
-  return { a, b, c, d, mx, my, mu, mv, err };
-}
-function applyAffine(T, x, y) {
-  const sx = x - T.mx, sy = y - T.my;
-  return { x: T.a * sx + T.b * sy + T.mu, y: T.c * sx + T.d * sy + T.mv };
 }
 
 function Chart({ title, height = 110, n, hoverIdx, onHover, corners, children, tooltip = null, hasRef = false, range = null, selecting = false, onSelectRange }) {
@@ -512,28 +447,28 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
   // Capa de trazadas memoizada: no se reconstruye en cada hover (solo cuando
   // cambian datos/zoom/toggles), así el marcador de hover se mueve fluido.
   const segs = useMemo(() => {
-    const out = [];
-    if (!showLap || !mapPath) return out;
-    // Puntos válidos (no nulos) con su índice original. Conectamos consecutivos
-    // salvo que haya un hueco grande (>6 buckets = posible pérdida de datos), y
-    // así puenteamos dropouts chicos en vez de cortar la línea.
+    if (!showLap || !mapPath) return [];
+    // Geometría base (Catmull-Rom) compartida con ShareCard.
+    const base = buildTrackSegments(mapPath);
+    // Recorremos los mismos puntos válidos (mismo filtro de huecos) para saber
+    // a qué índice original corresponde cada segmento de `base` y así inyectar
+    // dv (comparación, depende de mapDelta) y gr (grip, depende de gripLap) —
+    // ambos quedan fuera de buildTrackSegments porque no son geometría pura.
     const pts = [];
     for (let i = 0; i < mapPath.length; i++) if (mapPath[i]) pts.push({ i, p: mapPath[i] });
     const W = 3; // ventana de suavizado del delta (reduce ruido bucket a bucket)
+    const out = [];
+    let bi = 0;
     for (let k = 1; k < pts.length; k++) {
       const prv = pts[k - 1], cur = pts[k];
       if (cur.i - prv.i > 6) continue; // hueco grande → no puenteamos
-      const a = prv.p, b = cur.p;
+      const s = base[bi++];
       // dv = pendiente del delta promediada sobre ~W buckets.
       const j = Math.max(0, cur.i - W);
       const dv = mapDelta && mapDelta[cur.i] != null && mapDelta[j] != null && cur.i > j
         ? (mapDelta[cur.i] - mapDelta[j]) / (cur.i - j)
         : 0;
-      // Catmull-Rom (tensión 1/6) usando los vecinos VÁLIDos → curva continua.
-      const p0 = (pts[k - 2] || prv).p, p3 = (pts[k + 1] || cur).p;
-      const c1x = a.x + (b.x - p0.x) / 6, c1y = a.y + (b.y - p0.y) / 6;
-      const c2x = b.x - (p3.x - a.x) / 6, c2y = b.y - (p3.y - a.y) / 6;
-      out.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, c1x, c1y, c2x, c2y, hue: b.hue, dv, th: b.th, br: b.br, gr: gripLap ? gripLap[cur.i] : null });
+      out.push({ ...s, dv, gr: gripLap ? gripLap[cur.i] : null });
     }
     return out;
   }, [mapPath, showLap, mapDelta, gripLap]);
