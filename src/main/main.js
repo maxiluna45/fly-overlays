@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, globalShortcut, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, dialog, shell, clipboard, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { IrsdkClient } = require('./irsdk-client');
@@ -660,6 +660,31 @@ ipcMain.handle('export:save-lap', async (_e, payload) => {
     console.error('[export] save-lap error:', err.message);
     return { ok: false, error: err.message };
   }
+});
+
+// Guarda un PNG (rasterizado en el renderer) a disco vía diálogo.
+ipcMain.handle('export:save-image', async (_e, payload) => {
+  try {
+    const parent = dashboardWindow && !dashboardWindow.isDestroyed() ? dashboardWindow : null;
+    const res = await dialog.showSaveDialog(parent, {
+      title: 'Guardar imagen de la vuelta',
+      defaultPath: (payload && payload.defaultName) || 'iFly.png',
+      filters: [{ name: 'PNG', extensions: ['png'] }],
+    });
+    if (res.canceled || !res.filePath) return { ok: false, canceled: true };
+    fs.writeFileSync(res.filePath, Buffer.from(payload.buffer));
+    return { ok: true, path: res.filePath };
+  } catch (err) { console.error('[export] save-image:', err.message); return { ok: false, error: err.message }; }
+});
+
+// Copia un PNG (rasterizado en el renderer) al portapapeles del sistema.
+ipcMain.handle('export:copy-image', (_e, payload) => {
+  try {
+    const img = nativeImage.createFromBuffer(Buffer.from(payload.buffer));
+    if (img.isEmpty()) return { ok: false, error: 'imagen vacía' };
+    clipboard.writeImage(img);
+    return { ok: true };
+  } catch (err) { console.error('[export] copy-image:', err.message); return { ok: false, error: err.message }; }
 });
 
 // === Garage 61: mapear circuito/auto de iRacing a la URL de laps ===
