@@ -155,6 +155,11 @@ export function SectorTimes({ previewMode = false, injectedTelemetry = null, set
   // true una vez que el canal rápido entregó currentLapTime: a partir de ahí el
   // canal pesado no debe pisar currentLap con su copia stale (throttled a 500ms).
   const hasFastCurrentRef = useRef(false);
+  // Firma de reposo: en menú/pits/auto quieto, ni los flags ni currentLapTime
+  // cambian tick a tick. Si nada cambió, no tocamos el estado → no re-render.
+  // Los sectores solo cambian mientras la vuelta AVANZA (currentLapTime sube),
+  // así que atarlos a currentLapTime es seguro (no se pierden cruces de split).
+  const lastSigRef = useRef("");
 
   useEffect(() => {
     if (injectedTelemetry) return;
@@ -162,6 +167,9 @@ export function SectorTimes({ previewMode = false, injectedTelemetry = null, set
     if (typeof window.fly.onTelemetry !== "function") return;
     try {
       const unsub = window.fly.onTelemetry((data) => {
+        const sig = `${!!data.connected}|${!!data.onTrack}|${!!data.preview}|${data.currentLapTime}`;
+        if (sig === lastSigRef.current) return; // reposo: nada que mostrar cambió
+        lastSigRef.current = sig;
         // El payload de IrsdkClient ya incluye { current, last, best }.
         // Si no lo copiamos al estado, todos los sub-sectores se quedan en null
         // y se renderizan como "empty" (gris muy claro) sin colores.
