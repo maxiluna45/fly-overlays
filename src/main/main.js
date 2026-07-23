@@ -687,6 +687,25 @@ ipcMain.handle('export:copy-image', (_e, payload) => {
   } catch (err) { console.error('[export] copy-image:', err.message); return { ok: false, error: err.message }; }
 });
 
+// Baja tiles satelitales (Esri) y los devuelve como data URLs. El renderer no
+// puede dibujar tiles remotos en un <canvas> para exportar (CORS → canvas
+// contaminado → toBlob falla), así que los traemos desde el main (sin CORS) y
+// los embebemos en el SVG de la tarjeta. Se valida el host para evitar SSRF.
+const ESRI_TILE_PREFIX = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/';
+ipcMain.handle('share:tiles', async (_e, urls) => {
+  if (!Array.isArray(urls)) return null;
+  return Promise.all(urls.map(async (u) => {
+    try {
+      if (typeof u !== 'string' || !u.startsWith(ESRI_TILE_PREFIX)) return null;
+      const r = await fetch(u);
+      if (!r.ok) return null;
+      const buf = Buffer.from(await r.arrayBuffer());
+      const ct = r.headers.get('content-type') || 'image/jpeg';
+      return `data:${ct};base64,${buf.toString('base64')}`;
+    } catch (_) { return null; }
+  }));
+});
+
 // === Garage 61: mapear circuito/auto de iRacing a la URL de laps ===
 let _g61ids = null;
 function garage61Ids() {

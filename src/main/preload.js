@@ -62,6 +62,7 @@ contextBridge.exposeInMainWorld('fly', {
   exportSaveLap: (obj, defaultName) => ipcRenderer.invoke('export:save-lap', { obj, defaultName }),
   exportSaveImage: (buffer, defaultName) => ipcRenderer.invoke('export:save-image', { buffer, defaultName }),
   exportCopyImage: (buffer) => ipcRenderer.invoke('export:copy-image', { buffer }),
+  shareTiles: (urls) => ipcRenderer.invoke('share:tiles', urls),
   getSessionLabels: () => ipcRenderer.invoke('sessions:labels'),
   setSessionLabel: (id, label) => ipcRenderer.invoke('sessions:set-label', { id, label }),
   // Driver tags

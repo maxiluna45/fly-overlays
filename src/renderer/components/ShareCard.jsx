@@ -151,9 +151,10 @@ export const ShareCard = forwardRef(function ShareCard({ model, mapEls, format =
       {/* Divisor vertical entre mapa y datos (solo apaisado). */}
       {wide && <line x1={map.x + map.w + 28} y1="130" x2={map.x + map.w + 28} y2={h - 130} stroke="rgba(255,255,255,0.08)" strokeWidth="2" />}
 
-      {/* Mapa héroe: halo + trazada con glow. */}
+      {/* Mapa héroe: halo ambiental + subárbol del mapa (la trazada trae su
+          propio glow desde buildShareMapEls; la foto satelital NO se difumina). */}
       <ellipse cx={map.x + map.w / 2} cy={map.y + map.h / 2} rx={map.w * 0.52} ry={map.h * 0.52} fill="url(#sc-ambient)" />
-      <g transform={`translate(${map.x},${map.y})`} filter="url(#sc-glow)">{mapEls}</g>
+      <g transform={`translate(${map.x},${map.y})`}>{mapEls}</g>
 
       {/* Datos. */}
       <DataBlock col={col} model={model} scale={sc} />

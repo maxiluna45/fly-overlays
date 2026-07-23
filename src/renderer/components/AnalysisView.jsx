@@ -739,34 +739,48 @@ function buildShareMapEls(map, box) {
   const dpath = (s) => `M${s.x1.toFixed(1)},${s.y1.toFixed(1)}C${s.c1x.toFixed(1)},${s.c1y.toFixed(1)} ${s.c2x.toFixed(1)},${s.c2y.toFixed(1)} ${s.x2.toFixed(1)},${s.y2.toFixed(1)}`;
   const roadWidth = map.roadWidth || 0;
   const outlineMode = map.outlineMode || null;
+  // Tiles satelitales YA embebidos como data URL (los baja el main sin CORS para
+  // que el canvas no se contamine al exportar el PNG).
+  const tiles = Array.isArray(map.tiles) ? map.tiles.filter((t) => t && t.dataUrl) : null;
   return (
-    <g transform={`translate(${ox.toFixed(2)},${oy.toFixed(2)}) scale(${scale}) translate(${-BV.x},${-BV.y})`}>
-      {/* Contorno real: OSM = cinta de asfalto (rim claro + asfalto oscuro),
-          SVG estilizado = bordes del circuito. Misma lógica que MapPanel. */}
-      {map.outlineD && outlineMode === "stroke" && (
-        <path d={map.outlineD} fill="none" stroke="rgba(125,211,252,0.55)" strokeWidth={2.2 * k} strokeLinejoin="round" strokeLinecap="round" />
-      )}
-      {map.outlineD && outlineMode !== "stroke" && roadWidth > 0 && (
-        <g>
-          <path d={map.outlineD} fill="none" stroke="rgba(255,255,255,0.32)" strokeWidth={roadWidth} strokeLinejoin="round" strokeLinecap="round" />
-          <path d={map.outlineD} fill="none" stroke="rgb(24,26,32)" strokeWidth={Math.max(0.5, roadWidth - 2.6)} strokeLinejoin="round" strokeLinecap="round" />
+    <g clipPath="url(#sc-mapclip)">
+      <defs><clipPath id="sc-mapclip"><rect x="0" y="0" width={box.w} height={box.h} /></clipPath></defs>
+      <g transform={`translate(${ox.toFixed(2)},${oy.toFixed(2)}) scale(${scale}) translate(${-BV.x},${-BV.y})`}>
+        {/* Fondo satelital (foto) + scrim oscuro para que resalte la trazada. */}
+        {tiles && tiles.map((t) => (
+          <image key={`${t.x}/${t.y}`} href={t.dataUrl} x={t.px} y={t.py} width={256.7} height={256.7} preserveAspectRatio="none" />
+        ))}
+        {tiles && map.scrim && <rect x={BV.x} y={BV.y} width={BV.w} height={BV.h} fill="rgba(0,0,0,0.30)" />}
+        {/* Contorno real: OSM = cinta de asfalto (rim claro + asfalto oscuro),
+            SVG estilizado = bordes del circuito. Misma lógica que MapPanel. */}
+        {map.outlineD && outlineMode === "stroke" && (
+          <path d={map.outlineD} fill="none" stroke="rgba(125,211,252,0.55)" strokeWidth={2.2 * k} strokeLinejoin="round" strokeLinecap="round" />
+        )}
+        {map.outlineD && outlineMode !== "stroke" && roadWidth > 0 && (
+          <g>
+            <path d={map.outlineD} fill="none" stroke="rgba(255,255,255,0.32)" strokeWidth={roadWidth} strokeLinejoin="round" strokeLinecap="round" />
+            <path d={map.outlineD} fill="none" stroke="rgb(24,26,32)" strokeWidth={Math.max(0.5, roadWidth - 2.6)} strokeLinejoin="round" strokeLinecap="round" />
+          </g>
+        )}
+        {map.outlineD && outlineMode !== "stroke" && !(roadWidth > 0) && (
+          <path
+            d={map.outlineD}
+            fill={(map.outlineD.match(/M/gi) || []).length >= 2 ? "rgba(255,255,255,0.07)" : "none"}
+            fillRule="evenodd"
+            stroke="rgba(255,255,255,0.4)"
+            strokeWidth={2.5 * k}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+        )}
+        {/* Trazada coloreada por velocidad (azul → rojo), con glow neón (solo la
+            trazada, no la foto satelital). */}
+        <g filter="url(#sc-glow)">
+          {segs.map((s, i) => (
+            <path key={i} d={dpath(s)} fill="none" stroke={`hsl(${Math.round(s.hue)},85%,55%)`} strokeWidth={4.5 * k} strokeLinecap="round" strokeLinejoin="round" />
+          ))}
         </g>
-      )}
-      {map.outlineD && outlineMode !== "stroke" && !(roadWidth > 0) && (
-        <path
-          d={map.outlineD}
-          fill={(map.outlineD.match(/M/gi) || []).length >= 2 ? "rgba(255,255,255,0.07)" : "none"}
-          fillRule="evenodd"
-          stroke="rgba(255,255,255,0.4)"
-          strokeWidth={2.5 * k}
-          strokeLinejoin="round"
-          strokeLinecap="round"
-        />
-      )}
-      {/* Trazada coloreada por velocidad (azul → rojo). */}
-      {segs.map((s, i) => (
-        <path key={i} d={dpath(s)} fill="none" stroke={`hsl(${Math.round(s.hue)},85%,55%)`} strokeWidth={4.5 * k} strokeLinecap="round" strokeLinejoin="round" />
-      ))}
+      </g>
     </g>
   );
 }
@@ -806,6 +820,8 @@ export function AnalysisView() {
   const [shareBusy, setShareBusy] = useState(false);
   const shareSvgRef = useRef(null);
   const [shareLogoUrl, setShareLogoUrl] = useState(null);
+  // Tiles satelitales para la tarjeta: { tiles:[{...,dataUrl}] } | 'loading' | 'error' | null.
+  const [satShareTiles, setSatShareTiles] = useState(null);
   // Logo (ala) como data URL compacto para embeberlo en la tarjeta: al rasterizar
   // el <svg> a PNG, una URL relativa (./logo.png) no cargaría dentro del data: URL
   // del SVG. Lo dibujamos una vez en un canvas chico (mismo origen → sin taint) y
@@ -1496,11 +1512,31 @@ export function AnalysisView() {
   // Fuentes de mapa disponibles PARA COMPARTIR. El satélite queda diferido
   // (los tiles remotos de Esri contaminan el canvas → toBlob falla), así que
   // solo ofrecemos OSM y SVG estilizado, con fallback automático a SVG.
-  const shareMapAvail = { osm: !!gpsMap, svg: !!svgMap };
-  const shareFallback = { osm: ["osm", "svg"], svg: ["svg", "osm"] };
-  const shareMap = ((shareFallback[shareMapSource] || ["osm", "svg"]).map((k) => ({ osm: gpsMap, svg: svgMap })[k]).find(Boolean)) || null;
+  // Satélite listo para la tarjeta cuando ya se bajaron los tiles (data URLs).
+  const satReady = satShareTiles && satShareTiles.tiles ? { ...satMap, tiles: satShareTiles.tiles } : null;
+  const shareMapAvail = { osm: !!gpsMap, svg: !!svgMap, sat: !!satMap };
+  const shareSources = { osm: gpsMap, svg: svgMap, sat: satReady };
+  const shareFallback = { osm: ["osm", "svg"], svg: ["svg", "osm"], sat: ["sat", "osm", "svg"] };
+  const shareMap = ((shareFallback[shareMapSource] || ["osm", "svg"]).map((k) => shareSources[k]).find(Boolean)) || null;
   // Fuente REALMENTE usada (tras el fallback), para resaltar el botón correcto.
-  const effShareSource = shareMap && shareMap === gpsMap ? "osm" : shareMap === svgMap ? "svg" : null;
+  const effShareSource = shareMap && shareMap === satReady ? "sat" : shareMap === gpsMap ? "osm" : shareMap === svgMap ? "svg" : null;
+  const satLoading = shareMapSource === "sat" && satShareTiles === "loading";
+
+  // Bajar los tiles satelitales (como data URLs, vía main) cuando se elige
+  // satélite para compartir. Sin esto el PNG saldría en blanco (canvas contaminado).
+  useEffect(() => {
+    if (shareMapSource !== "sat" || !satMap || !shareOpen || !window.fly?.shareTiles) { setSatShareTiles(null); return; }
+    let alive = true;
+    setSatShareTiles("loading");
+    const urls = (satMap.tiles || []).map((t) => t.url);
+    window.fly.shareTiles(urls).then((dataUrls) => {
+      if (!alive) return;
+      if (!Array.isArray(dataUrls)) { setSatShareTiles("error"); return; }
+      const tiles = (satMap.tiles || []).map((t, i) => ({ ...t, dataUrl: dataUrls[i] })).filter((t) => t.dataUrl);
+      setSatShareTiles(tiles.length ? { tiles } : "error");
+    }).catch(() => { if (alive) setSatShareTiles("error"); });
+    return () => { alive = false; };
+  }, [shareMapSource, satMap, shareOpen]);
 
   // Zona del mapa de la tarjeta según formato (fuente única compartida con ShareCard).
   const shareBox = useMemo(() => {
@@ -2099,27 +2135,30 @@ export function AnalysisView() {
                 {/* Fuente del mapa */}
                 <div>
                   <div className="text-[10px] uppercase tracking-widest text-muted-foreground/70 font-bold mb-1.5">Mapa</div>
-                  {(shareMapAvail.osm || shareMapAvail.svg) ? (
+                  {(shareMapAvail.osm || shareMapAvail.svg || shareMapAvail.sat) ? (
                     <div className="flex flex-col gap-1">
                       {[
                         { v: "osm", label: "Open Street Map" },
+                        { v: "sat", label: "Satélite" },
                         { v: "svg", label: "SVG estilizado" },
                       ].filter((o) => shareMapAvail[o.v]).map((o) => (
                         <button
                           key={o.v}
                           onClick={() => setShareMapSource(o.v)}
                           className={`text-left px-2 py-1 rounded-md text-xs font-semibold border transition-colors ${
-                            effShareSource === o.v
+                            shareMapSource === o.v
                               ? "bg-sky-500/20 border-sky-500/50 text-sky-300"
                               : "bg-transparent border-border text-muted-foreground hover:bg-accent/50"
                           }`}
                         >
-                          {o.label}
+                          {o.label}{o.v === "sat" && satLoading ? " · cargando…" : ""}
                         </button>
                       ))}
-                      <div className="text-[9px] text-muted-foreground/60 leading-tight mt-0.5">
-                        Satélite no disponible al compartir (los tiles remotos impiden exportar la imagen).
-                      </div>
+                      {shareMapSource === "sat" && satShareTiles === "error" && (
+                        <div className="text-[9px] text-amber-400/80 leading-tight mt-0.5">
+                          No se pudo cargar el satélite (¿sin conexión?). Se usa OSM.
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <div className="text-[10px] text-muted-foreground/70 leading-tight">Sin mapa para esta vuelta; la tarjeta se comparte sin trazada.</div>
