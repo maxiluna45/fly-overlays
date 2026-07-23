@@ -198,6 +198,7 @@ class ConfigStore {
           driverTags: Array.isArray(parsed.driverTags) ? parsed.driverTags : [],
           recordingEnabled: parsed.recordingEnabled !== false, // default: true
           diagnosticMode: parsed.diagnosticMode === true,
+          displayName: typeof parsed.displayName === 'string' ? parsed.displayName : '',
         };
       }
     } catch (err) {
@@ -252,6 +253,13 @@ class ConfigStore {
     this._save();
     this._emit();
     return this.data.telemetryDir;
+  }
+
+  setDisplayName(name) {
+    this.data.displayName = typeof name === 'string' ? name.slice(0, 40) : '';
+    this._save();
+    this._emit();
+    return this.data.displayName;
   }
 
   setIracingAuth(auth) {

@@ -362,6 +362,7 @@ app.on('window-all-closed', () => {
 });
 
 ipcMain.handle('config:get', () => configStore.get());
+ipcMain.handle('settings:set-display-name', (_e, name) => configStore.setDisplayName(name));
 ipcMain.handle('config:toggle-overlay', (_e, id) => {
   const enabled = overlayManager.toggle(id);
   applyPreviewMode();
