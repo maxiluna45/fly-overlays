@@ -29,7 +29,9 @@ export function shareMapBox(format, chartCount = 1) {
   const c = Math.max(0, Math.min(2, chartCount | 0));
   switch (format) {
     case 'story': return { x: 64, y: 210, w: 952, h: c >= 2 ? 620 : c === 1 ? 770 : 900 };
-    case 'wide':  return { x: 56, y: 130, w: 1060, h: 820 };
+    // En 'wide' el mapa cede ANCHO (no alto) cuando hay dos gráficos: la
+    // columna de datos gana espacio y respira mejor.
+    case 'wide':  return { x: 56, y: 130, w: c >= 2 ? 960 : 1060, h: 820 };
     case 'square':
     default:      return { x: 64, y: 120, w: 952, h: c >= 1 ? 310 : 420 };
   }

@@ -271,8 +271,10 @@ export const ShareCard = forwardRef(function ShareCard({ model, mapEls, format =
   const wide = format === "wide";
   const sc = format === "story" ? 1.25 : 1;
 
+  // En 'wide' la región termina DENTRO del panel (el panel llega a h-96; la
+  // meta debe quedar adentro, no colgando fuera del borde).
   const region = wide
-    ? { x: map.x + map.w + 56, top: 150, w: w - (map.x + map.w + 56) - 64, bottom: h - 64 }
+    ? { x: map.x + map.w + 56, top: 150, w: w - (map.x + map.w + 56) - 64, bottom: h - 128 }
     : { x: 64, top: map.y + map.h + (format === "story" ? 70 : 48), w: w - 128, bottom: h - 56 };
 
   return (
