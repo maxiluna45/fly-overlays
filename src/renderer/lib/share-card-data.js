@@ -8,17 +8,30 @@ export const FORMATS = {
   wide:   { w: 1920, h: 1080, label: 'Apaisada 16:9' },
 };
 
+// Cuántos gráficos se van a renderizar REALMENTE en la tarjeta (elegidos por el
+// usuario Y con datos suficientes). Compartido entre AnalysisView (escala del
+// mapa) y ShareCard (layout) para que ambos usen la misma caja.
+export function countShareCharts(model, charts = []) {
+  let n = 0;
+  if (charts.includes('speed') && Array.isArray(model && model.spark) && model.spark.length > 3) n++;
+  const th = (model && model.sparkTh) || [], br = (model && model.sparkBr) || [];
+  if (charts.includes('pedals') && (th.length > 3 || br.length > 3)) n++;
+  return n;
+}
+
 // Caja del MAPA (héroe) de la tarjeta por formato: { x, y, w, h }. Fuente única
 // de verdad compartida entre ShareCard (que traslada el mapa a x,y) y AnalysisView
 // (que escala el subárbol del mapa a w×h). En 'wide' el mapa ocupa la izquierda y
-// los datos van en una columna a la derecha; en 'story'/'square' es apaisado
-// arriba con los datos debajo.
-export function shareMapBox(format) {
+// los datos van en columna (su alto no depende de los gráficos); en 'story' y
+// 'square' el mapa CEDE altura según cuántos gráficos haya debajo — así el
+// contenido siempre entra, sin desbordar la tarjeta.
+export function shareMapBox(format, chartCount = 1) {
+  const c = Math.max(0, Math.min(2, chartCount | 0));
   switch (format) {
-    case 'story': return { x: 64, y: 210, w: 952, h: 900 };
+    case 'story': return { x: 64, y: 210, w: 952, h: c >= 2 ? 620 : c === 1 ? 770 : 900 };
     case 'wide':  return { x: 56, y: 130, w: 1060, h: 820 };
     case 'square':
-    default:      return { x: 64, y: 120, w: 952, h: 520 };
+    default:      return { x: 64, y: 120, w: 952, h: c >= 1 ? 310 : 420 };
   }
 }
 

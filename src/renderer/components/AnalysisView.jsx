@@ -3,7 +3,7 @@ import { Trash2, Trophy, Clock, Activity, Gauge, Upload, FolderOpen, RotateCcw, 
 import { analyzeLap, bestLapOf, consistency, sectorTimes, sessionOptimal, cornerConsistency, resampleSamples, drivingMetrics } from "../lib/coach.js";
 import { buildTrackSegments, fitSimilarity, applySim, fitAffine, applyAffine, speedColor } from "../lib/track-render.js";
 import { ShareCard } from "./ShareCard.jsx";
-import { buildCardModel, FORMATS, shareMapBox, sanitizeFilename } from "../lib/share-card-data.js";
+import { buildCardModel, FORMATS, shareMapBox, countShareCharts, sanitizeFilename } from "../lib/share-card-data.js";
 import { svgToPngBlob } from "../lib/render-svg-to-png.js";
 import lovelyTracks from "../assets/lovely-tracks.json"; // curvas + sectores por pista (© Lovely Sim Racing, CC BY-NC-SA)
 
@@ -1549,11 +1549,12 @@ export function AnalysisView() {
     return () => { alive = false; };
   }, [shareMapSource, satMap, shareOpen]);
 
-  // Zona del mapa de la tarjeta según formato (fuente única compartida con ShareCard).
+  // Zona del mapa de la tarjeta según formato Y nº de gráficos (el mapa cede
+  // altura). Fuente única compartida con ShareCard (mismo countShareCharts).
   const shareBox = useMemo(() => {
-    const b = shareMapBox(shareFormat);
+    const b = shareMapBox(shareFormat, countShareCharts(cardModel, shareCharts));
     return { w: b.w, h: b.h };
-  }, [shareFormat]);
+  }, [shareFormat, cardModel, shareCharts]);
 
   // Subárbol del mapa ya ajustado a la caja de la tarjeta (trazada + contorno).
   const shareMapEls = useMemo(() => buildShareMapEls(shareMap, shareBox, shareMapMode), [shareMap, shareBox, shareMapMode]);

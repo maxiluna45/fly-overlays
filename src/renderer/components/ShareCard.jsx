@@ -1,5 +1,5 @@
 import React, { forwardRef } from "react";
-import { FORMATS, shareMapBox } from "../lib/share-card-data.js";
+import { FORMATS, shareMapBox, countShareCharts } from "../lib/share-card-data.js";
 
 // Paleta de marca iFly (misma que la app: HUD oscuro con neón azul).
 const INK = "#0b0e14";
@@ -93,7 +93,7 @@ function TracePath({ box, pts, color, sw, fill = null }) {
 // sobrante de la región lo absorben primero los gráficos (flex) y después los
 // gaps (parejos, con tope). Si aún sobra, la pila se centra. Así ningún formato
 // queda con huecos muertos ni amontonado.
-function DataBlock({ region, model, scale = 1, mapMode = "speed", charts = [] }) {
+function DataBlock({ region, model, scale = 1, mapMode = "speed", charts = [], format = "square" }) {
   const { x, top, w, bottom } = region;
   const blocks = [];
 
@@ -131,17 +131,20 @@ function DataBlock({ region, model, scale = 1, mapMode = "speed", charts = [] })
     });
   }
 
-  // 3) Gráficos elegidos por el usuario (flex: absorben el espacio sobrante).
+  // 3) Gráficos elegidos por el usuario (flex: absorben el espacio sobrante y se
+  // encogen si falta). En 'square' con dos gráficos van LADO A LADO (una sola
+  // fila) porque el alto de la tarjeta no da para apilarlos.
   const lblH = 26 * scale;
   const sw = 2.5 * scale;
+  const chartDefs = [];
   if (charts.includes("speed") && Array.isArray(model.spark) && model.spark.length > 3) {
-    blocks.push({
-      h: 130 * scale, flex: true,
-      render: (y, h) => {
-        const box = { x, y: y + lblH, w, h: h - lblH };
+    chartDefs.push({
+      key: "c-sp",
+      render: (bx, y, bw, h) => {
+        const box = { x: bx, y: y + lblH, w: bw, h: h - lblH };
         return (
           <g key="c-sp">
-            <text x={x} y={y + 15 * scale} fontFamily={SANS} fontSize={15 * scale} fontWeight="700" fill={MUTED} letterSpacing="2">VELOCIDAD</text>
+            <text x={bx} y={y + 15 * scale} fontFamily={SANS} fontSize={15 * scale} fontWeight="700" fill={MUTED} letterSpacing="2">VELOCIDAD</text>
             <rect x={box.x} y={box.y} width={box.w} height={box.h} rx={10 * scale} fill="rgba(255,255,255,0.03)" />
             <TracePath box={box} pts={model.spark} color={ACCENT_SOFT} sw={sw} fill="url(#sc-spark)" />
           </g>
@@ -150,13 +153,13 @@ function DataBlock({ region, model, scale = 1, mapMode = "speed", charts = [] })
     });
   }
   if (charts.includes("pedals") && ((model.sparkTh && model.sparkTh.length > 3) || (model.sparkBr && model.sparkBr.length > 3))) {
-    blocks.push({
-      h: 130 * scale, flex: true,
-      render: (y, h) => {
-        const box = { x, y: y + lblH, w, h: h - lblH };
+    chartDefs.push({
+      key: "c-ped",
+      render: (bx, y, bw, h) => {
+        const box = { x: bx, y: y + lblH, w: bw, h: h - lblH };
         return (
           <g key="c-ped">
-            <text x={x} y={y + 15 * scale} fontFamily={SANS} fontSize={15 * scale} fontWeight="700" letterSpacing="2">
+            <text x={bx} y={y + 15 * scale} fontFamily={SANS} fontSize={15 * scale} fontWeight="700" letterSpacing="2">
               <tspan fill={GREEN_SOFT}>ACELERADOR</tspan><tspan fill={MUTED}>  ·  </tspan><tspan fill={RED_SOFT}>FRENO</tspan>
             </text>
             <rect x={box.x} y={box.y} width={box.w} height={box.h} rx={10 * scale} fill="rgba(255,255,255,0.03)" />
@@ -166,6 +169,19 @@ function DataBlock({ region, model, scale = 1, mapMode = "speed", charts = [] })
         );
       },
     });
+  }
+  const sideBySide = format === "square" && chartDefs.length === 2;
+  if (sideBySide) {
+    const cgap = 14 * scale;
+    const cw = (w - cgap) / 2;
+    blocks.push({
+      h: 130 * scale, flex: true,
+      render: (y, h) => <g key="c-row">{chartDefs.map((c, i) => c.render(x + i * (cw + cgap), y, cw, h))}</g>,
+    });
+  } else {
+    for (const c of chartDefs) {
+      blocks.push({ h: 130 * scale, flex: true, render: (y, h) => c.render(x, y, w, h) });
+    }
   }
 
   // 4) Leyenda del color del MAPA (según el modo elegido).
@@ -205,10 +221,24 @@ function DataBlock({ region, model, scale = 1, mapMode = "speed", charts = [] })
 
   // ── Distribución del espacio ──
   const n = blocks.length;
-  const minGap = 20 * scale, maxGap = 48 * scale;
+  const minGap = 18 * scale, maxGap = 48 * scale;
+  const flex = blocks.filter((b) => b.flex);
+  const CHART_MIN = 88 * scale;
+  // Déficit: si el contenido no entra ni con gaps mínimos, los gráficos se
+  // ENCOGEN (hasta un mínimo legible) proporcionalmente a lo que pueden ceder.
+  {
+    const totalH = blocks.reduce((a, b) => a + b.h, 0);
+    let deficit = totalH + minGap * (n - 1) - (bottom - top);
+    if (deficit > 0 && flex.length) {
+      const shrinkable = flex.reduce((a, b) => a + Math.max(0, b.h - CHART_MIN), 0);
+      const take = Math.min(deficit, shrinkable);
+      if (take > 0) {
+        for (const b of flex) b.h -= take * (Math.max(0, b.h - CHART_MIN) / shrinkable);
+      }
+    }
+  }
   let totalH = blocks.reduce((a, b) => a + b.h, 0);
   let gap = n > 1 ? ((bottom - top) - totalH) / (n - 1) : 0;
-  const flex = blocks.filter((b) => b.flex);
   if (gap > maxGap && flex.length) {
     // El exceso lo absorben los gráficos (crecen), gaps quedan al tope.
     const extra = (gap - maxGap) * (n - 1);
@@ -235,7 +265,9 @@ function DataBlock({ region, model, scale = 1, mapMode = "speed", charts = [] })
 export const ShareCard = forwardRef(function ShareCard({ model, mapEls, format = "square", logoUrl = null, hasSat = false, mapMode = "speed", charts = ["speed"] }, ref) {
   const F = FORMATS[format] || FORMATS.square;
   const { w, h } = F;
-  const map = shareMapBox(format);
+  // La caja del mapa depende de cuántos gráficos van debajo (el mapa cede
+  // altura). MISMO cálculo que hace AnalysisView para escalar mapEls.
+  const map = shareMapBox(format, countShareCharts(model, charts));
   const wide = format === "wide";
   const sc = format === "story" ? 1.25 : 1;
 
@@ -292,7 +324,7 @@ export const ShareCard = forwardRef(function ShareCard({ model, mapEls, format =
       {!hasSat && <ellipse cx={map.x + map.w / 2} cy={map.y + map.h / 2} rx={map.w * 0.42} ry={map.h * 0.42} fill="url(#sc-ambient)" />}
       <g transform={`translate(${map.x},${map.y})`}>{mapEls}</g>
 
-      <DataBlock region={region} model={model} scale={sc} mapMode={mapMode} charts={charts} />
+      <DataBlock region={region} model={model} scale={sc} mapMode={mapMode} charts={charts} format={format} />
     </svg>
   );
 });
