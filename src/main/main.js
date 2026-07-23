@@ -6,6 +6,7 @@ const { ConfigStore } = require('./config-store');
 const { OverlayManager, REGISTRY } = require('./overlay-manager');
 const { SessionRecorder } = require('./session-recorder');
 const { parseIbtMeta, parseIbtSession } = require('./ibt-parser');
+const { Worker } = require('worker_threads');
 const { parseCsvMeta, parseCsvSession } = require('./csv-parser');
 const { buildIflyLap, parseIflyLapSession } = require('./ifly-lap');
 const trackmapStore = require('./trackmap-store');
@@ -600,7 +601,32 @@ ipcMain.handle('ibt:list', async () => {
   return out;
 });
 
-ipcMain.handle('ibt:get', (_e, id) => {
+// Parsea un .ibt en un worker thread (no bloquea el main). Si el worker no
+// arranca (p. ej. algún entorno donde no cargue desde asar) o falla, cae al
+// parseo síncrono → nunca es peor que antes.
+function parseIbtSessionOffThread(filePath) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const syncFallback = () => {
+      if (settled) return; settled = true;
+      try { resolve(parseIbtSession(filePath)); } catch (_) { resolve(null); }
+    };
+    let worker;
+    try {
+      worker = new Worker(path.join(__dirname, 'ibt-worker.js'), { workerData: { filePath } });
+    } catch (_) { syncFallback(); return; }
+    worker.once('message', (m) => {
+      if (settled) return; settled = true;
+      worker.terminate();
+      if (m && m.ok) resolve(m.session);
+      else { try { resolve(parseIbtSession(filePath)); } catch (_) { resolve(null); } }
+    });
+    worker.once('error', () => { try { worker.terminate(); } catch (_) {} syncFallback(); });
+    worker.once('exit', (code) => { if (code !== 0) syncFallback(); });
+  });
+}
+
+ipcMain.handle('ibt:get', async (_e, id) => {
   if (typeof id !== 'string') return null;
   let full = null;
   let kind = 'ibt';
@@ -631,9 +657,11 @@ ipcMain.handle('ibt:get', (_e, id) => {
   }
   if (!full) return null;
   try {
+    // .ibt (pesado) → worker thread; csv/ifly (una vuelta) → síncrono, es barato.
     const session = kind === 'csv' ? parseCsvSession(full)
       : kind === 'ifly' ? parseIflyLapSession(full)
-      : parseIbtSession(full);
+      : await parseIbtSessionOffThread(full);
+    if (!session) return null;
     return { id, source: kind, ...session };
   } catch (err) {
     console.error('[ibt] error parseando:', err.message);
