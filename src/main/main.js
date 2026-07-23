@@ -7,6 +7,7 @@ const { OverlayManager, REGISTRY } = require('./overlay-manager');
 const { SessionRecorder } = require('./session-recorder');
 const { parseIbtMeta, parseIbtSession } = require('./ibt-parser');
 const { parseCsvMeta, parseCsvSession } = require('./csv-parser');
+const { buildIflyLap, parseIflyLapSession } = require('./ifly-lap');
 const trackmapStore = require('./trackmap-store');
 const logger = require('./logger');
 const log = logger.createLogger('main');
@@ -522,17 +523,26 @@ ipcMain.handle('ibt:import', async () => {
   try {
     const parent = dashboardWindow && !dashboardWindow.isDestroyed() ? dashboardWindow : null;
     const res = await dialog.showOpenDialog(parent, {
-      title: 'Importar telemetría (.ibt de iRacing o .csv)',
+      title: 'Importar telemetría (.ibt de iRacing, .csv o .iflylap)',
       filters: [
-        { name: 'Telemetría (.ibt, .csv)', extensions: ['ibt', 'csv'] },
+        { name: 'Telemetría (.ibt, .csv, .iflylap)', extensions: ['ibt', 'csv', 'iflylap'] },
         { name: 'iRacing telemetry (.ibt)', extensions: ['ibt'] },
         { name: 'CSV', extensions: ['csv'] },
+        { name: 'iFly lap (.iflylap)', extensions: ['iflylap'] },
       ],
       properties: ['openFile'],
     });
     if (res.canceled || !res.filePaths[0]) return null;
     const full = res.filePaths[0];
-    if (full.toLowerCase().endsWith('.csv')) {
+    const low = full.toLowerCase();
+    if (low.endsWith('.iflylap')) {
+      try {
+        const s = parseIflyLapSession(full);
+        return { id: `iflypath:${full}`, source: 'ifly', imported: true, file: path.basename(full),
+          track: s.track, car: s.car, sessionType: s.sessionType, startedAt: s.startedAt, lapCount: 1, bestLap: s.laps[0].lapTime || null };
+      } catch (err) { console.error('[ifly] import error:', err.message); return null; }
+    }
+    if (low.endsWith('.csv')) {
       const meta = parseCsvMeta(full);
       if (!meta) return null;
       return { id: `csvpath:${full}`, source: 'csv', imported: true, file: path.basename(full), ...meta };
@@ -614,14 +624,40 @@ ipcMain.handle('ibt:get', (_e, id) => {
     if (!file.includes('/') && !file.includes('\\') && !file.includes('..')) {
       full = path.join(iracingTelemetryDir(), file);
     }
+  } else if (id.startsWith('iflypath:')) {
+    const p = id.slice(9);
+    if (p.toLowerCase().endsWith('.iflylap') && fs.existsSync(p)) { full = p; kind = 'ifly'; }
   }
   if (!full) return null;
   try {
-    const session = kind === 'csv' ? parseCsvSession(full) : parseIbtSession(full);
+    const session = kind === 'csv' ? parseCsvSession(full)
+      : kind === 'ifly' ? parseIflyLapSession(full)
+      : parseIbtSession(full);
     return { id, source: kind, ...session };
   } catch (err) {
     console.error('[ibt] error parseando:', err.message);
     return null;
+  }
+});
+
+// Exporta una vuelta de referencia a un archivo .iflylap (para compartir/import).
+ipcMain.handle('export:save-lap', async (_e, payload) => {
+  try {
+    const parent = dashboardWindow && !dashboardWindow.isDestroyed() ? dashboardWindow : null;
+    const defaultName = (payload && payload.defaultName) || 'vuelta.iflylap';
+    const res = await dialog.showSaveDialog(parent, {
+      title: 'Guardar vuelta de referencia (.iflylap)',
+      defaultPath: defaultName,
+      filters: [{ name: 'iFly lap', extensions: ['iflylap'] }],
+    });
+    if (res.canceled || !res.filePath) return { ok: false, canceled: true };
+    const { lap, session, meta } = payload.obj || {};
+    const obj = buildIflyLap(lap, session, meta);
+    fs.writeFileSync(res.filePath, JSON.stringify(obj), 'utf-8');
+    return { ok: true, path: res.filePath };
+  } catch (err) {
+    console.error('[export] save-lap error:', err.message);
+    return { ok: false, error: err.message };
   }
 });
 

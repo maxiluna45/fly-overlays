@@ -58,6 +58,7 @@ contextBridge.exposeInMainWorld('fly', {
   getIbtSession: (id) => ipcRenderer.invoke('ibt:get', id),
   deleteTelemetry: (id) => ipcRenderer.invoke('ibt:delete', id),
   importIbt: () => ipcRenderer.invoke('ibt:import'),
+  exportSaveLap: (obj, defaultName) => ipcRenderer.invoke('export:save-lap', { obj, defaultName }),
   getSessionLabels: () => ipcRenderer.invoke('sessions:labels'),
   setSessionLabel: (id, label) => ipcRenderer.invoke('sessions:set-label', { id, label }),
   // Driver tags

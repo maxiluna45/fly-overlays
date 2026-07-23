@@ -853,7 +853,7 @@ export function AnalysisView() {
 
   useEffect(() => {
     if (!selectedId) { setSession(null); return; }
-    const isFile = /^(ibt|csv)/.test(selectedId); // .ibt/.csv escaneados o importados
+    const isFile = /^(ibt|csv|ifly)/.test(selectedId); // .ibt/.csv/.iflylap escaneados o importados
     const getter = isFile ? window.fly?.getIbtSession : window.fly?.getRecording;
     if (!getter) { setSession(null); return; }
     let mounted = true;
