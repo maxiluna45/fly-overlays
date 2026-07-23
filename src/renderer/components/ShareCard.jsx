@@ -93,7 +93,7 @@ function TracePath({ box, pts, color, sw, fill = null }) {
 // sobrante de la región lo absorben primero los gráficos (flex) y después los
 // gaps (parejos, con tope). Si aún sobra, la pila se centra. Así ningún formato
 // queda con huecos muertos ni amontonado.
-function DataBlock({ region, model, scale = 1, mapMode = "speed", charts = [], format = "square" }) {
+function DataBlock({ region, model, scale = 1, charts = [], format = "square" }) {
   const { x, top, w, bottom } = region;
   const blocks = [];
 
@@ -184,27 +184,8 @@ function DataBlock({ region, model, scale = 1, mapMode = "speed", charts = [], f
     }
   }
 
-  // 4) Leyenda del color del MAPA (según el modo elegido).
-  const lg = mapMode === "throttle"
-    ? { id: "sc-legend-th", lo: "SIN GAS", hi: "A FONDO" }
-    : mapMode === "brake"
-    ? { id: "sc-legend-br", lo: "SIN FRENO", hi: "FRENO MÁX" }
-    : { id: "sc-legend", lo: "LENTO", hi: "RÁPIDO" };
-  blocks.push({
-    h: 34 * scale,
-    render: (y) => {
-      const lw = Math.min(w, 260 * scale);
-      return (
-        <g key="lg" transform={`translate(${x},${y})`}>
-          <rect x="0" y="0" width={lw} height={8 * scale} rx={4 * scale} fill={`url(#${lg.id})`} />
-          <text x="0" y={26 * scale} fontFamily={SANS} fontSize={13 * scale} fill={MUTED} letterSpacing="1">{lg.lo}</text>
-          <text x={lw} y={26 * scale} textAnchor="end" fontFamily={SANS} fontSize={13 * scale} fill={MUTED} letterSpacing="1">{lg.hi}</text>
-        </g>
-      );
-    },
-  });
-
-  // 5) Meta: pista + auto/piloto/fecha.
+  // 4) Meta: pista + auto/piloto/fecha. (La leyenda del color del mapa ya no
+  // vive acá: va pegada al mapa, que es lo que describe — ver MapLegend.)
   const trackSize = fitSize(model.track, w, 42 * scale, 0.55);
   const carSize = 26 * scale;
   const metaLine = [model.car, model.driver, model.date].filter(Boolean).join("  ·  ");
@@ -271,11 +252,19 @@ export const ShareCard = forwardRef(function ShareCard({ model, mapEls, format =
   const wide = format === "wide";
   const sc = format === "story" ? 1.25 : 1;
 
+  // Leyenda del color del mapa: pegada DEBAJO del mapa (es lo que describe) y a
+  // todo su ancho. En apilado, la región de datos arranca después de la leyenda.
+  const legendH = 14 * sc + 30 * sc; // gap sobre la barra + barra + rótulos
   // En 'wide' la región termina DENTRO del panel (el panel llega a h-96; la
   // meta debe quedar adentro, no colgando fuera del borde).
   const region = wide
     ? { x: map.x + map.w + 56, top: 150, w: w - (map.x + map.w + 56) - 64, bottom: h - 128 }
-    : { x: 64, top: map.y + map.h + (format === "story" ? 70 : 48), w: w - 128, bottom: h - 56 };
+    : { x: 64, top: map.y + map.h + legendH + (format === "story" ? 44 : 32), w: w - 128, bottom: h - 56 };
+  const lg = mapMode === "throttle"
+    ? { id: "sc-legend-th", lo: "SIN GAS", hi: "A FONDO" }
+    : mapMode === "brake"
+    ? { id: "sc-legend-br", lo: "SIN FRENO", hi: "FRENO MÁX" }
+    : { id: "sc-legend", lo: "LENTO", hi: "RÁPIDO" };
 
   return (
     <svg ref={ref} width={w} height={h} viewBox={`0 0 ${w} ${h}`} xmlns="http://www.w3.org/2000/svg" style={{ background: INK }}>
@@ -326,7 +315,14 @@ export const ShareCard = forwardRef(function ShareCard({ model, mapEls, format =
       {!hasSat && <ellipse cx={map.x + map.w / 2} cy={map.y + map.h / 2} rx={map.w * 0.42} ry={map.h * 0.42} fill="url(#sc-ambient)" />}
       <g transform={`translate(${map.x},${map.y})`}>{mapEls}</g>
 
-      <DataBlock region={region} model={model} scale={sc} mapMode={mapMode} charts={charts} format={format} />
+      {/* Leyenda del mapa: debajo del mapa, a todo su ancho. */}
+      <g transform={`translate(${map.x},${map.y + map.h + 14 * sc})`}>
+        <rect x="0" y="0" width={map.w} height={8 * sc} rx={4 * sc} fill={`url(#${lg.id})`} />
+        <text x="0" y={28 * sc} fontFamily={SANS} fontSize={13 * sc} fill={MUTED} letterSpacing="1">{lg.lo}</text>
+        <text x={map.w} y={28 * sc} textAnchor="end" fontFamily={SANS} fontSize={13 * sc} fill={MUTED} letterSpacing="1">{lg.hi}</text>
+      </g>
+
+      <DataBlock region={region} model={model} scale={sc} charts={charts} format={format} />
     </svg>
   );
 });
