@@ -6,6 +6,7 @@ const fs = require('fs');
 const IFLY_LAP_VERSION = 1;
 
 function buildIflyLap(lap, session, meta = {}) {
+  if (!lap) throw new Error('buildIflyLap: falta la vuelta');
   const s = session || {};
   return {
     format: 'iflylap',

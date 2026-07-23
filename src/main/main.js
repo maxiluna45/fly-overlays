@@ -540,7 +540,7 @@ ipcMain.handle('ibt:import', async () => {
       try {
         const s = parseIflyLapSession(full);
         return { id: `iflypath:${full}`, source: 'ifly', imported: true, file: path.basename(full),
-          track: s.track, car: s.car, sessionType: s.sessionType, startedAt: s.startedAt, lapCount: 1, bestLap: s.laps[0].lapTime || null };
+          track: s.track, car: s.car, sessionType: s.sessionType, startedAt: s.startedAt, lapCount: 1, bestLap: s.laps[0].lapTime ?? null };
       } catch (err) { console.error('[ifly] import error:', err.message); return null; }
     }
     if (low.endsWith('.csv')) {

@@ -3,7 +3,7 @@ import { Trash2, Trophy, Clock, Activity, Gauge, Upload, FolderOpen, RotateCcw, 
 import { analyzeLap, bestLapOf, consistency, sectorTimes, sessionOptimal, cornerConsistency, resampleSamples, drivingMetrics } from "../lib/coach.js";
 import { buildTrackSegments, fitSimilarity, applySim, fitAffine, applyAffine, speedColor } from "../lib/track-render.js";
 import { ShareCard } from "./ShareCard.jsx";
-import { buildCardModel, FORMATS } from "../lib/share-card-data.js";
+import { buildCardModel, FORMATS, sanitizeFilename } from "../lib/share-card-data.js";
 import { svgToPngBlob } from "../lib/render-svg-to-png.js";
 import lovelyTracks from "../assets/lovely-tracks.json"; // curvas + sectores por pista (© Lovely Sim Racing, CC BY-NC-SA)
 
@@ -1514,7 +1514,7 @@ export function AnalysisView() {
       const { w, h } = FORMATS[shareFormat] || FORMATS.square;
       const blob = await svgToPngBlob(shareSvgRef.current, w, h);
       const buf = await blob.arrayBuffer();
-      const r = await window.fly.exportSaveImage(buf, `iFly - ${session.track} - ${cardModel.time}.png`);
+      const r = await window.fly.exportSaveImage(buf, sanitizeFilename(`iFly - ${session.track} - ${cardModel.time}.png`));
       if (r && r.ok) flashShare("PNG guardado");
       else if (r && r.error) flashShare(`No se pudo guardar: ${r.error}`);
     } catch (err) { flashShare(`Error al generar la imagen: ${err.message}`); }
@@ -1524,7 +1524,7 @@ export function AnalysisView() {
     setShareBusy(true);
     try {
       const meta = { driver: displayName, exportedAt: Date.now(), appVersion: "0.7.5" };
-      const r = await window.fly.exportSaveLap({ lap, session, meta }, `${session.track} - ${session.car} - ${cardModel.time}.iflylap`);
+      const r = await window.fly.exportSaveLap({ lap, session, meta }, sanitizeFilename(`${session.track} - ${session.car} - ${cardModel.time}.iflylap`));
       if (r && r.ok) flashShare("Vuelta .iflylap exportada");
       else if (r && r.error) flashShare(`No se pudo exportar: ${r.error}`);
     } catch (err) { flashShare(`Error al exportar: ${err.message}`); }

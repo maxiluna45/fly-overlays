@@ -22,6 +22,14 @@ export function fmtSector(sec) {
   return sec.toFixed(3);
 }
 
+// Sanitiza un nombre de archivo: en Windows los caracteres \ / : * ? " < > | son
+// inválidos (p. ej. el tiempo de vuelta "1:32.345" o el nombre de pista con "/"
+// rompen el diálogo nativo de guardado). Los reemplaza por "-" y normaliza espacios.
+export function sanitizeFilename(name) {
+  const replaced = String(name ?? '').replace(/[\\/:*?"<>|]/g, '-');
+  return replaced.replace(/[\s-]{2,}/g, (m) => (m.includes('-') ? '-' : ' ')).trim();
+}
+
 // Construye el modelo de datos de la tarjeta (tiempos formateados, badges, metadatos) para renderizar.
 export function buildCardModel({ lap, session, best, displayName }) {
   const s = session || {};

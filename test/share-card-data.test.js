@@ -17,3 +17,12 @@ test('buildCardModel arma el modelo con badge PB cuando la vuelta es la mejor', 
   assert.equal(m.driver, 'Maxi');
   assert.equal(m.car, 'F296');
 });
+
+test('sanitizeFilename elimina caracteres inválidos en Windows', async () => {
+  const { sanitizeFilename } = await import('../src/renderer/lib/share-card-data.js');
+  const a = sanitizeFilename('iFly - Interlagos - 1:32.345');
+  assert.ok(!a.includes(':'));
+  const b = sanitizeFilename('A/B: c');
+  assert.ok(!b.includes('/'));
+  assert.ok(!b.includes(':'));
+});
