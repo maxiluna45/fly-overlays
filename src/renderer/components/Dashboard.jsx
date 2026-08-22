@@ -1210,7 +1210,7 @@ const SETTING_LABELS = {
     showCarNumber: "Mostrar número de auto",
     showFlag: "Mostrar bandera (país del club)",
     showBestLap: "Mostrar best lap",
-    showLastLap: "Mostrar last lap",
+    showLastLap: "Mostrar last lap (en carrera siempre se muestra)",
     showPositionChange: "Cambio de posición (vs qualy)",
     maxRows: "Máximo de filas",
     rowHeight: "Alto de fila",

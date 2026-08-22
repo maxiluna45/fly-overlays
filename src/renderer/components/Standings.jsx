@@ -153,6 +153,13 @@ export function Standings({ previewMode = false, injectedTelemetry = null, setti
   const playerIdx = relative?.playerIdx ?? -1;
   const isRace = /race/i.test(session.type || "");
 
+  // Columnas de tiempo por sesión. En quali/práctica lo único que importa es la
+  // mejor vuelta; en carrera además querés ver la última para leer el ritmo
+  // actual del rival (neumáticos, combustible, tráfico). El toggle showLastLap
+  // sigue funcionando como forzado manual para práctica/quali.
+  const showBestCol = cfg.showBestLap !== false;
+  const showLastCol = isRace || cfg.showLastLap === true;
+
   const multiClass = useMemo(
     () => new Set(drivers.map((d) => d.carClassId)).size > 1,
     [drivers]
@@ -266,6 +273,29 @@ export function Standings({ previewMode = false, injectedTelemetry = null, setti
             </span>
           </div>
 
+          {/* Rótulos de columna: sólo hacen falta cuando hay dos tiempos a la vez
+              (carrera), donde sin ellos no se distingue best de last. Replica
+              px-2/gap-1.5 y los anchos de la fila para quedar alineado. */}
+          {showBestCol && showLastCol && (
+            <div
+              className="flex items-center px-2 gap-1.5 font-mono border-b"
+              style={{
+                borderLeft: "3px solid transparent",
+                borderColor: "rgba(255,255,255,0.04)",
+                fontSize: `${Math.max(7, cfg.fontSize - 3)}px`,
+                color: "rgba(255,255,255,0.35)",
+                letterSpacing: "0.08em",
+                paddingTop: "2px",
+                paddingBottom: "2px",
+              }}
+            >
+              <div className="flex-1" />
+              <span className="flex-shrink-0 text-right" style={{ width: "58px" }}>BEST</span>
+              <span className="flex-shrink-0 text-right" style={{ width: "58px" }}>LAST</span>
+              <span className="flex-shrink-0" style={{ width: "52px" }} />
+            </div>
+          )}
+
           {/* Filas */}
           <div className="flex-1 overflow-hidden flex flex-col">
             {rows.length === 0 ? (
@@ -280,6 +310,8 @@ export function Standings({ previewMode = false, injectedTelemetry = null, setti
                   isPlayer={d.carIdx === playerIdx}
                   cfg={cfg}
                   multiClass={multiClass}
+                  showBestCol={showBestCol}
+                  showLastCol={showLastCol}
                 />
               ))
             )}
@@ -290,7 +322,7 @@ export function Standings({ previewMode = false, injectedTelemetry = null, setti
   );
 }
 
-const StandingsRow = React.memo(function StandingsRow({ driver: d, isPlayer, cfg, multiClass }) {
+const StandingsRow = React.memo(function StandingsRow({ driver: d, isPlayer, cfg, multiClass, showBestCol, showLastCol }) {
   const licLevel = resolveLicLevel(d);
   const lic = LIC_COLORS[licLevel] || { bg: "rgb(120,120,120)", fg: "white" };
   const classColor = multiClass ? classColorCss(d.carClassColor) : null;
@@ -402,14 +434,14 @@ const StandingsRow = React.memo(function StandingsRow({ driver: d, isPlayer, cfg
       )}
 
       {/* Best lap */}
-      {cfg.showBestLap && (
+      {showBestCol && (
         <span className="font-mono flex-shrink-0 text-right" style={{ width: "58px", color: "rgba(255,255,255,0.85)", fontSize: `${cfg.fontSize - 1}px` }}>
           {formatLap(d.bestLapTime)}
         </span>
       )}
 
       {/* Last lap */}
-      {cfg.showLastLap && (
+      {showLastCol && (
         <span className="font-mono flex-shrink-0 text-right" style={{ width: "58px", color: "rgba(255,255,255,0.6)", fontSize: `${cfg.fontSize - 1}px` }}>
           {formatLap(d.lastLapTime)}
         </span>
@@ -444,6 +476,8 @@ const StandingsRow = React.memo(function StandingsRow({ driver: d, isPlayer, cfg
     (a.tag?.color || "") === (b.tag?.color || "") &&
     prev.isPlayer === next.isPlayer &&
     prev.multiClass === next.multiClass &&
+    prev.showBestCol === next.showBestCol &&
+    prev.showLastCol === next.showLastCol &&
     prev.cfg === next.cfg
   );
 });
