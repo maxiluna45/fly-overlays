@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { Trash2, Trophy, Clock, Activity, Gauge, Upload, FolderOpen, RotateCcw, Pencil, Check, X, Search, ExternalLink, Maximize2, Crop } from "lucide-react";
 import { analyzeLap, bestLapOf, consistency, sectorTimes, sessionOptimal, cornerConsistency, resampleSamples, drivingMetrics } from "../lib/coach.js";
+import { isComparableReference } from "../lib/session-match.js";
 import { buildTrackSegments, fitSimilarity, applySim, fitAffine, applyAffine, speedColor } from "../lib/track-render.js";
 import { ShareCard } from "./ShareCard.jsx";
 import { buildCardModel, FORMATS, shareMapBox, countShareCharts, sanitizeFilename } from "../lib/share-card-data.js";
@@ -1273,43 +1274,13 @@ export function AnalysisView() {
     });
   }, [sessions, query, labels, srcFilter, typeFilter]);
 
-  // Opciones de referencia (ghost): mismo circuito (y auto para no-CSV). El
-  // emparejamiento de pista es tolerante porque los nombres varían mucho entre
-  // el interno de iRacing ("spa 2024 up"), el display ("Circuit de Spa-
-  // Francorchamps") y el de Garage 61 del CSV. Sin esto, un CSV del mismo
-  // circuito no aparecía como referencia de una sesión de iRacing.
-  const norm = (x) => (x || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-  const GEN_PREFIX = ["circuitde", "circuito", "circuit", "autodromonazionale", "autodromointernacional", "autodromo", "autodrome", "the"];
-  const stripGen = (s) => { s = norm(s); for (const p of GEN_PREFIX) if (s.startsWith(p)) return s.slice(p.length); return s; };
-  const like = (a, b) => {
-    a = norm(a); b = norm(b);
-    if (!a || !b) return false;
-    if (a === b || a.includes(b) || b.includes(a)) return true;
-    let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++;
-    return i >= 6;
-  };
-  // Misma pista: tras quitar prefijos genéricos, si una base (primer bloque de
-  // letras) es prefijo de la otra (≥3), o hay contención/prefijo común ≥5.
-  const sameTrack = (a, b) => {
-    a = stripGen(a); b = stripGen(b);
-    if (!a || !b) return false;
-    if (a === b || a.includes(b) || b.includes(a)) return true;
-    const base = (s) => (s.match(/^[a-z]+/) || [""])[0];
-    const ba = base(a), bb = base(b);
-    if (ba.length >= 3 && bb.length >= 3 && (ba.startsWith(bb) || bb.startsWith(ba))) return true;
-    let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++;
-    return i >= 5;
-  };
+  // Opciones de referencia (ghost): mismo circuito, y mismo auto salvo que una
+  // de las dos sea un CSV importado. La regla vive en lib/session-match.js
+  // (testeada): cada fuente nombra los circuitos distinto, así que hay que
+  // probar TODOS los nombres que trae cada sesión, no solo el primero.
   const refOptions = useMemo(() => {
     if (!session) return [];
-    return sessions.filter((s) => {
-      if (s.id === selectedId) return false;
-      if (!sameTrack(s.trackKey || s.track, session.trackKey || session.track)) return false;
-      // Los CSV importados se aceptan aunque el auto no coincida exacto (se
-      // importaron a propósito para comparar; el nombre del auto suele diferir).
-      if (s.source === "csv" || session.source === "csv") return true;
-      return like(s.car, session.car);
-    });
+    return sessions.filter((s) => s.id !== selectedId && isComparableReference(s, session));
   }, [sessions, selectedId, session, labels]);
 
   const saveTitle = async () => {
@@ -1713,7 +1684,7 @@ export function AnalysisView() {
   const doExportLap = async () => {
     setShareBusy(true);
     try {
-      const meta = { driver: displayName, exportedAt: Date.now(), appVersion: "0.7.6" };
+      const meta = { driver: displayName, exportedAt: Date.now(), appVersion: APP_VERSION };
       const r = await window.fly.exportSaveLap({ lap, session, meta }, sanitizeFilename(`${session.track} - ${session.car} - ${cardModel.time}.iflylap`));
       if (r && r.ok) flashShare("Vuelta .iflylap exportada");
       else if (r && r.error) flashShare(`No se pudo exportar: ${r.error}`);
