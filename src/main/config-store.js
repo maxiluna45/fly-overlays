@@ -61,7 +61,7 @@ const OVERLAY_DEFAULT_SETTINGS = {
     showFlag: true,          // bandera del país del club
     playerCountry: "ar",     // ISO2 de tu bandera (tu fila; el club no distingue país)
     showBestLap: true,       // columna de best lap
-    showLastLap: false,      // columna de last lap
+    showLastLap: false,      // columna de last lap (en carrera se fuerza a true)
     showPositionChange: true,// ▲/▼ posiciones ganadas vs qualy (solo carrera)
     nameFormat: "full",      // full | short | initials
     gapMode: "leader",       // 'leader' (gap al líder) | 'interval' (al de adelante)
