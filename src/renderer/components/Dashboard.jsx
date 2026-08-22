@@ -18,6 +18,7 @@ import { AnalysisView } from "./AnalysisView.jsx";
 import { ProgressView } from "./ProgressView.jsx";
 import { HotkeysView } from "./HotkeysView.jsx";
 import { LogView } from "./LogView.jsx";
+import { ChangelogView } from "./ChangelogView.jsx";
 import { DeltaBar } from "./DeltaBar.jsx";
 import { SectorTimes } from "./SectorTimes.jsx";
 import { Button } from "./ui/button.jsx";
@@ -44,7 +45,8 @@ function formatBytes(bps) {
 export function Dashboard() {
   const [config, setConfig] = useState(null);
   const [selectedId, setSelectedId] = useState("delta");
-  const [view, setView] = useState("overlays"); // 'overlays' | 'analysis'
+  // 'overlays' | 'analysis' | 'progreso' | 'hotkeys' | 'diagnostico' | 'changelog'
+  const [view, setView] = useState("overlays");
   const [preview, setPreview] = useState(false);
   const [previewShowAll, setPreviewShowAll] = useState(false);
   const [scale, setScale] = useState(1);
@@ -258,10 +260,22 @@ export function Dashboard() {
           ))}
         </div>
         <div className="flex-1" />
-        <span className="text-xs text-muted-foreground">v{APP_VERSION}</span>
+        <button
+          onClick={() => setView("changelog")}
+          title="Ver las novedades de esta versión"
+          className={`px-2 py-1 rounded-md text-xs cursor-pointer transition-colors ${
+            view === "changelog"
+              ? "bg-accent text-accent-foreground"
+              : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+          }`}
+        >
+          v{APP_VERSION}
+        </button>
       </header>
 
-      {view === "analysis" ? (
+      {view === "changelog" ? (
+        <ChangelogView onBack={() => setView("overlays")} />
+      ) : view === "analysis" ? (
         <AnalysisView />
       ) : view === "progreso" ? (
         <ProgressView />

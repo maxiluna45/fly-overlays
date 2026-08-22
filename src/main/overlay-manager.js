@@ -363,7 +363,19 @@ class OverlayManager {
       win.setResizable(true);
       win.focus();
     } else {
-      win.setIgnoreMouseEvents(true, { forward: true });
+      // Sin `{ forward: true }`: en Windows, pedir el reenvío de mouse move
+      // messages hace que Electron instale un hook global de mouse de bajo
+      // nivel en el main process. Todo evento de mouse del SISTEMA pasa a
+      // serializarse por nuestro message loop y además se despacha al renderer
+      // del overlay que esté bajo el cursor. Medido con 5 overlays: 175-278
+      // mousemove/s por overlay, 25-32% de CPU en el main (picos de 62%) sólo
+      // por mover el mouse, y los tirones del cursor (>20ms entre updates del
+      // puntero) subiendo de 0.019% a 0.135% → el mouse se ve trabado en TODO
+      // el escritorio, con la app recién abierta y sin iRacing corriendo.
+      // Ningún overlay escucha hover ni eventos de mouse, así que el
+      // forwarding se pagaba sin recibir nada a cambio. El modo edición (F7)
+      // usa setIgnoreMouseEvents(false) y no depende de esto.
+      win.setIgnoreMouseEvents(true);
       win.setResizable(false);
     }
     win.webContents.send('overlay:lock-state', { unlocked, overlayId: id });
