@@ -6,6 +6,33 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.12.3] - 2026-08-23
+
+### Corregido
+- El mapa del coach no aparecía nunca estando en pista, y se quedaba en
+  "esperando a que salgas a pista". La causa es una limitación de iRacing, no un
+  error de cuentas: **la memoria compartida en vivo no publica la posición del
+  auto**. Medido con el sim corriendo, expone 333 variables y ninguna es `Lat`,
+  `Lon` ni `Alt`; esas sólo aparecen en los archivos `.ibt`. El mapa ahora ubica
+  el auto por distancia de vuelta sobre la geometría de la referencia, así que
+  funciona con cualquier referencia que traiga posición (un CSV de Garage 61 o
+  un `.ibt`).
+- El auto se movía a saltos, unas 4 veces por segundo. Se ubicaba en uno de los
+  800 bins de la vuelta, y en una pista de 5 km eso es un salto cada 6,5 metros.
+  Ahora la posición se interpola entre bins y el movimiento es continuo.
+- Tu trazada se dibujaba exactamente encima de la referencia, dando a entender
+  que ibas calcándola. Como iRacing no da posición lateral, no hay forma de
+  saber por dónde vas dentro del asfalto: ahora tu vuelta va dibujada en una
+  banda paralela a la de la referencia, coloreada por TUS pedales, con una
+  leyenda que lo aclara. Comparar las dos bandas muestra quién frena antes y
+  quién abre el acelerador antes, que es lo que importa.
+
+### Cambiado
+- El aviso grande deja de decir "completá una vuelta" cuando ya hay avisos
+  calculados: ahora dice cuántas curvas tienen algo para corregir.
+- El pie del mapa muestra frames recibidos, cuánta pista se conoce y cuántos
+  avisos hay listos, para no tener que adivinar por qué falta algo.
+
 ## [0.12.2] - 2026-08-23
 
 ### Corregido

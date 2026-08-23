@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Upload, Volume2, VolumeX, Compass, Crosshair, MapPin } from "lucide-react";
 import { resampleSamples } from "../lib/coach.js";
-import { detectCorners, lapFacts, cornerFacts, compareCorner, bestAdvice, announcePct, isWithinLead, anchorPct } from "../lib/coach-live.js";
+import { detectCorners, lapFacts, cornerFacts, compareCorner, bestAdvice, announcePct, isWithinLead, anchorPct, fillTrackGaps, posAtPct } from "../lib/coach-live.js";
 import { findLovelyTrack, lovelyCorners, labelForRange } from "../lib/lovely-tracks.js";
 import { sameTrackAny } from "../lib/session-match.js";
 
@@ -20,6 +20,7 @@ const LEAD_SECONDS = 2.5;         // cuánto antes de la curva avisar
 const ADVICE_MIN_MS = 2600;       // un aviso no pisa a otro antes de esto
 const ADVICE_HOLD_MS = 7000;      // y se borra solo pasado esto
 const VOICE_MIN_MS = 3500;        // y no se habla encima de otro aviso
+const TRAIL_OFFSET_M = 6;         // separación de tu trazada respecto de la referencia
 const HEADING_SMOOTH = 0.15;      // suavizado del rumbo (0..1, más = más nervioso)
 const SPAN_OPTIONS = [120, 220, 400, 800]; // metros de pista visibles
 
@@ -105,6 +106,7 @@ export function CoachView() {
   const [status, setStatus] = useState({ connected: false, onTrack: false, track: null, trackKey: null, car: null });
   const [advice, setAdvice] = useState(null);      // aviso grande (anticipado)
   const [lastNote, setLastNote] = useState(null);  // qué pasó en la curva que acabás de hacer
+  const [shapeVersion, setShapeVersion] = useState(0); // crece al aprender geometría
 
   const eng = useRef({
     bins: new Array(BINS).fill(null),
@@ -122,6 +124,13 @@ export function CoachView() {
     voiceAt: 0,
     trackLengthM: 0,
     trailVersion: 0,
+    // Forma de la pista aprendida manejando: lat/lon por bin. NO se borra al
+    // cruzar meta (la trazada sí), porque es la geometría del circuito y sirve
+    // para ubicar la referencia cuando la referencia no trae GPS.
+    shape: new Array(BINS).fill(null),
+    shapeFilled: 0,
+    frames: 0,
+    framesGps: 0,
   });
 
   // ── Carga de sesiones para elegir referencia ────────────────────────────
@@ -244,11 +253,21 @@ export function CoachView() {
         e.reacted = new Set();
         e.variant++;
         e.trailVersion++;
+        setShapeVersion((v) => v + 1); // la forma de la pista ya está completa
       }
 
+      e.frames++;
+      if (f.lat != null && f.lon != null) e.framesGps++;
       if (f.onTrack && f.lapDistPct >= 0 && f.lapDistPct <= 1) {
         const b = Math.min(BINS - 1, Math.max(0, Math.floor(f.lapDistPct * BINS)));
         e.bins[b] = { th: f.throttle, br: f.brake, st: f.steer, sp: f.speed, g: f.gear, lat: f.lat, lon: f.lon };
+        if (f.lat != null && f.lon != null && e.shape[b] == null) {
+          e.shape[b] = { lat: f.lat, lon: f.lon };
+          e.shapeFilled++;
+          // Rearmamos la capa de referencia cada tanto mientras se completa la
+          // forma, no en cada bin: son 800 puntos a rearmar.
+          if (e.shapeFilled % 80 === 0) setShapeVersion((v) => v + 1);
+        }
       }
       e.pct = f.lapDistPct ?? e.pct;
       e.speed = f.speed ?? 0;
@@ -336,39 +355,92 @@ export function CoachView() {
   // ── Mapa ────────────────────────────────────────────────────────────────
   // Zoom y proyección se fijan a partir de la referencia: si dependieran de la
   // posición del auto cambiarían en cada frame y los tiles se recargarían.
+  // Geometría del circuito por bin: la de la referencia si trae GPS (un CSV de
+  // Garage 61 sí, y encima es la línea que hay que copiar), y si no la que
+  // aprendimos manejando. Tener las dos permite que el mapa funcione aunque a
+  // una de las dos fuentes le falte la posición.
+  const trackShape = useMemo(() => {
+    const fromRef = (refInfo?.samples || []).map((s) => (s && s.lat != null && s.lon != null ? { lat: s.lat, lon: s.lon } : null));
+    const refCount = fromRef.filter(Boolean).length;
+    const live = eng.current.shape;
+    const out = new Array(BINS).fill(null);
+    for (let i = 0; i < BINS; i++) out[i] = (refCount >= 20 ? fromRef[i] : null) || live[i] || null;
+    return { pts: out, count: out.filter(Boolean).length, refHasGps: refCount >= 20 };
+  }, [refInfo, shapeVersion]);
+
+  // Geometría sin huecos, para poder ubicar el auto en cualquier fracción de
+  // vuelta y no sólo en los 800 bins.
+  const smooth = useMemo(() => fillTrackGaps(trackShape.pts), [trackShape]);
+
+  // Proyección: se ancla al primer punto conocido y NO cambia con el auto, para
+  // que los tiles no se recarguen en cada frame.
   const geo = useMemo(() => {
-    const pts = (refInfo?.samples || []).filter((s) => s && s.lat != null && s.lon != null);
-    if (pts.length < 20) return null;
-    const lat0 = pts[Math.floor(pts.length / 2)].lat;
-    const z = zoomForSpan(lat0, spanM);
-    const ox = lonToX(pts[0].lon, z), oy = latToY(pts[0].lat, z);
+    const anchor = trackShape.pts.find(Boolean);
+    if (!anchor) return null;
+    const z = zoomForSpan(anchor.lat, spanM);
+    const ox = lonToX(anchor.lon, z), oy = latToY(anchor.lat, z);
     const proj = (la, lo) => ({ x: lonToX(lo, z) - ox, y: latToY(la, z) - oy });
-    return { z, ox, oy, proj, mpp: metersPerPixel(lat0, z) };
-  }, [refInfo, spanM]);
+    return { z, ox, oy, proj, mpp: metersPerPixel(anchor.lat, z) };
+  }, [trackShape, spanM]);
 
   // Trazada de la referencia en coordenadas del mapa (una vez por referencia).
   const refPath = useMemo(() => {
     if (!geo || !refInfo) return null;
-    const pts = refInfo.samples.map((s) => (s && s.lat != null && s.lon != null ? { ...geo.proj(s.lat, s.lon), br: s.br, th: s.th } : null));
+    const pts = refInfo.samples.map((s, i) => {
+      const g = (s && s.lat != null && s.lon != null) ? s : trackShape.pts[i];
+      return g ? { ...geo.proj(g.lat, g.lon), br: s ? s.br : null, th: s ? s.th : null } : null;
+    });
     return {
       line: pointsPath(pts),
       brake: maskedPath(pts, (i) => (pts[i]?.br ?? 0) > 0.15),
       throttle: maskedPath(pts, (i) => (pts[i]?.th ?? 0) > 0.95),
       pts,
     };
-  }, [geo, refInfo]);
+  }, [geo, refInfo, trackShape]);
 
   // Posición del auto y recorrido hecho (se recalculan en cada frame; el trail
   // es un solo path de ≤800 puntos, barato de rearmar).
   const e = eng.current;
-  const car = geo && e.lat != null ? geo.proj(e.lat, e.lon) : null;
-  const trail = useMemo(() => {
-    if (!geo) return "";
-    const pts = e.bins.map((s) => (s && s.lat != null && s.lon != null ? geo.proj(s.lat, s.lon) : null));
-    return pointsPath(pts.slice(0, TRAIL_KEEP));
-  }, [geo, tick]);
+  // Posición del auto. iRacing no da Lat/Lon en vivo (ver coach-live.js), así
+  // que se ubica por LapDistPct sobre la geometría de la referencia,
+  // interpolando entre bins para que se mueva parejo y no a los saltos.
+  const carGeo = e.lat != null ? { lat: e.lat, lon: e.lon } : (smooth ? posAtPct(smooth, e.pct) : null);
+  const car = geo && carGeo ? geo.proj(carGeo.lat, carGeo.lon) : null;
 
-  const headingDeg = e.heading;
+  // Tu recorrido va dibujado en paralelo a la línea de pista, corrido unos
+  // metros, y no encima: sin posición lateral real, superponerlo haría creer
+  // que estás calcando la referencia. Corrido y coloreado por TUS pedales, se
+  // puede comparar dónde frenás vos contra dónde frena la referencia.
+  const trail = useMemo(() => {
+    if (!geo || !smooth) return null;
+    const off = TRAIL_OFFSET_M / geo.mpp;
+    const n = smooth.length;
+    const pt = (i) => geo.proj(smooth[i].lat, smooth[i].lon);
+    const shifted = new Array(BINS).fill(null);
+    for (let i = 0; i < BINS; i++) {
+      if (!e.bins[i]) continue;
+      const a = pt((i - 1 + n) % n), b = pt((i + 1) % n), c = pt(i % n);
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const len = Math.hypot(dx, dy) || 1;
+      shifted[i] = { x: c.x - (dy / len) * off, y: c.y + (dx / len) * off };
+    }
+    return {
+      line: pointsPath(shifted),
+      brake: maskedPath(shifted, (i) => (e.bins[i]?.br ?? 0) > 0.15),
+      throttle: maskedPath(shifted, (i) => (e.bins[i]?.th ?? 0) > 0.95),
+    };
+  }, [geo, smooth, tick]);
+
+  // Rumbo: con GPS sale del movimiento; sin GPS, de la tangente de la pista en
+  // el punto donde estás.
+  const headingDeg = useMemo(() => {
+    if (e.lat != null) return e.heading;
+    if (!smooth) return 0;
+    const a = posAtPct(smooth, e.pct - 0.002), b = posAtPct(smooth, e.pct + 0.002);
+    if (!a || !b) return 0;
+    const dLon = (b.lon - a.lon) * Math.cos((b.lat * Math.PI) / 180);
+    return ((Math.atan2(dLon, b.lat - a.lat) * 180) / Math.PI + 360) % 360;
+  }, [smooth, tick]);
 
   // Tiles alrededor del auto: sólo los que se ven, y se agregan a medida que
   // avanzás. Bajar el mosaico entero de la pista a este zoom serían cientos.
@@ -406,6 +478,9 @@ export function CoachView() {
   // vs "Virginia International Raceway (Full Course)" vs "virginia 2022 full"),
   // y comparar los strings tal cual daba una falsa alarma.
   const wrongTrack = !!(refInfo && status.track && !sameTrackAny(refInfo, status));
+
+  // Cuántas curvas tienen algo para avisar con lo de la vuelta pasada.
+  const readyCount = e.verdicts.filter(Boolean).length;
 
   const rot = headingUp ? -headingDeg : 0;
   const k = view ? view.w / 900 : 1; // grosor de trazos ~constante en pantalla
@@ -529,6 +604,8 @@ export function CoachView() {
               ? "Elegí una referencia para empezar. Una vuelta de Garage 61 exportada en CSV sirve directo."
               : !status.connected
               ? "Esperando telemetría de iRacing…"
+              : readyCount > 0
+              ? `Listo: ${readyCount} curva${readyCount > 1 ? "s" : ""} con algo para corregir. Te aviso al llegar a cada una.`
               : "Completá una vuelta: los avisos de cada curva salen de comparar la vuelta anterior contra la referencia."}
           </div>
         )}
@@ -536,7 +613,7 @@ export function CoachView() {
 
       {/* Mapa */}
       <div className="flex-1 min-h-0 rounded-lg border border-border overflow-hidden relative bg-black">
-        {view && refPath ? (
+        {view ? (
           <svg viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`} preserveAspectRatio="xMidYMid slice" className="w-full h-full block">
             <g transform={`rotate(${rot} ${car.x} ${car.y})`}>
               {tiles.map((t) => (
@@ -546,24 +623,49 @@ export function CoachView() {
 
               {/* Referencia: línea base + zonas de freno (rojo) y de acelerador
                   a fondo (verde), que es lo que hay que copiar. */}
+              {refPath && <>
               <path d={refPath.line} fill="none" stroke="rgba(255,255,255,0.65)" strokeWidth={2.4 * k} strokeLinecap="round" strokeDasharray={`${7 * k} ${5 * k}`} />
               <path d={refPath.brake} fill="none" stroke="rgb(239,68,68)" strokeWidth={5 * k} strokeLinecap="round" opacity="0.9" />
               <path d={refPath.throttle} fill="none" stroke="rgb(52,211,153)" strokeWidth={5 * k} strokeLinecap="round" opacity="0.9" />
+              </>}
 
-              {/* Tu recorrido de esta vuelta, atrás del auto. */}
-              <path d={trail} fill="none" stroke="rgb(234,179,8)" strokeWidth={3.2 * k} strokeLinecap="round" strokeLinejoin="round" />
+              {/* Tu vuelta, en paralelo: amarillo de base, rojo donde frenás
+                  vos y verde donde vas a fondo. Comparar tu banda contra la de
+                  la referencia muestra quién frena antes y quién abre antes. */}
+              {trail && <>
+                <path d={trail.line} fill="none" stroke="rgba(234,179,8,0.75)" strokeWidth={2.6 * k} strokeLinecap="round" strokeLinejoin="round" />
+                <path d={trail.brake} fill="none" stroke="rgb(239,68,68)" strokeWidth={4.4 * k} strokeLinecap="round" />
+                <path d={trail.throttle} fill="none" stroke="rgb(52,211,153)" strokeWidth={4.4 * k} strokeLinecap="round" />
+              </>}
 
               {/* El auto */}
               <circle cx={car.x} cy={car.y} r={5 * k} fill="rgb(234,179,8)" stroke="black" strokeWidth={1.5 * k} />
             </g>
           </svg>
         ) : (
-          <div className="w-full h-full flex items-center justify-center text-sm text-muted-foreground">
-            {loadingRef ? "Cargando referencia…" : !refInfo ? "Sin referencia cargada" : waiting ? "Esperando a que salgas a pista…" : "Sin posición GPS"}
+          <div className="w-full h-full flex items-center justify-center text-sm text-muted-foreground text-center px-6">
+            {loadingRef
+              ? "Cargando referencia…"
+              : !refInfo
+              ? "Sin referencia cargada"
+              : e.frames === 0
+              ? "No llegan datos de iRacing. Entrá a pista con la sesión abierta."
+              : "La referencia no trae posición, así que no hay geometría para dibujar el mapa. Con un CSV de Garage 61 o un .ibt sí la hay. Los avisos por curva funcionan igual."}
           </div>
         )}
 
         {/* Última curva + estado, sobre el mapa */}
+        {/* Leyenda: sin esto las dos bandas paralelas no se entienden. */}
+        <div className="absolute left-3 top-3 flex items-center gap-3 text-[10px] bg-black/60 rounded-md px-2.5 py-1.5 backdrop-blur-sm">
+          <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-0.5 bg-white/70" />Referencia</span>
+          <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-0.5" style={{ background: "rgb(234,179,8)" }} />Vos</span>
+          <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-0.5" style={{ background: "rgb(239,68,68)" }} />Freno</span>
+          <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-0.5" style={{ background: "rgb(52,211,153)" }} />A fondo</span>
+          <span className="text-white/40" title="iRacing no publica la posición del auto en vivo, sólo la distancia recorrida. Tu línea va en paralelo a la de la referencia, no en su lugar real.">
+            posición por distancia de vuelta
+          </span>
+        </div>
+
         <div className="absolute left-3 bottom-3 flex items-center gap-3 text-[11px] bg-black/60 rounded-md px-2.5 py-1.5 backdrop-blur-sm">
           <span className="text-muted-foreground">Última curva:</span>
           {lastNote ? (
@@ -574,7 +676,14 @@ export function CoachView() {
             <span className="text-muted-foreground/60">—</span>
           )}
         </div>
-        <div className="absolute right-3 bottom-3 text-[9px] text-white/50">Imágenes: Esri, Maxar, Earthstar Geographics</div>
+        <div className="absolute right-3 bottom-3 flex items-center gap-3 text-[9px] text-white/50">
+          {/* Diagnóstico chico pero visible: si algo no aparece, acá se ve por qué. */}
+          <span className="font-mono">
+            {e.frames > 0 ? `${e.frames} frames · pista ${Math.round((trackShape.count / BINS) * 100)}%` : "sin frames"}
+            {plan && ` · ${readyCount} avisos listos`}
+          </span>
+          <span>Imágenes: Esri, Maxar, Earthstar Geographics</span>
+        </div>
       </div>
     </div>
   );

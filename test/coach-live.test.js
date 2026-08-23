@@ -149,3 +149,28 @@ test('anchorPct ancla el aviso al punto de frenada de la referencia', async () =
   assert.equal(anchorPct(c, { brakePct: null }), c.pctStart);
   assert.equal(anchorPct(c, null), c.pctStart);
 });
+
+test('fillTrackGaps interpola los huecos y cierra la vuelta', async () => {
+  const { fillTrackGaps } = await load();
+  const pts = new Array(8).fill(null);
+  pts[0] = { lat: 0, lon: 0 };
+  pts[4] = { lat: 4, lon: 0 };
+  const out = fillTrackGaps(pts);
+  assert.equal(out, null); // menos de 8 puntos conocidos: no alcanza
+
+  const p2 = new Array(8).fill(null).map((_, i) => (i % 1 === 0 ? { lat: i, lon: 0 } : null));
+  const o2 = fillTrackGaps(p2);
+  assert.equal(o2.length, 8);
+  assert.equal(o2[3].lat, 3);
+});
+
+test('posAtPct interpola entre bins en vez de saltar', async () => {
+  const { posAtPct } = await load();
+  const pts = new Array(4).fill(null).map((_, i) => ({ lat: i, lon: 0 }));
+  assert.equal(posAtPct(pts, 0).lat, 0);
+  assert.equal(posAtPct(pts, 0.125).lat, 0.5);   // medio bin
+  assert.equal(posAtPct(pts, 0.25).lat, 1);
+  // Wrap por meta: del último bin vuelve al primero.
+  assert.equal(posAtPct(pts, 0.875).lat, 1.5);
+  assert.equal(posAtPct(pts, 1).lat, 0);
+});

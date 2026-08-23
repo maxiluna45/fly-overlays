@@ -292,3 +292,47 @@ export function isWithinLead(pct, triggerPct, cornerPctStart) {
   if (triggerPct <= cornerPctStart) return pct >= triggerPct && pct < cornerPctStart;
   return pct >= triggerPct || pct < cornerPctStart; // el tramo cruza la meta
 }
+
+// ── Geometría de pista ───────────────────────────────────────────────────
+// iRacing NO publica Lat/Lon en la memoria compartida en vivo (verificado con
+// el SDK conectado: 333 variables y ninguna de posición; sólo aparecen en los
+// .ibt). Así que en vivo la única forma de ubicar el auto en el mapa es
+// LapDistPct sobre una geometría conocida — la de la referencia.
+//
+// Estas dos funciones convierten esa geometría binada en algo continuo: sin
+// esto el auto salta de bin en bin (a 800 bins en una pista de 5 km, un salto
+// cada 6,5 m: se ve a tirones, ~4 veces por segundo).
+
+// Rellena los huecos de un array de puntos {lat,lon} interpolando entre los
+// vecinos conocidos, con wrap por meta. Devuelve null si no hay suficientes.
+export function fillTrackGaps(pts) {
+  const n = Array.isArray(pts) ? pts.length : 0;
+  const known = [];
+  for (let i = 0; i < n; i++) if (pts[i]) known.push(i);
+  if (known.length < 8) return null;
+  const out = new Array(n);
+  for (let k = 0; k < known.length; k++) {
+    const i0 = known[k], i1 = known[(k + 1) % known.length];
+    const a = pts[i0], b = pts[i1];
+    const span = (i1 - i0 + n) % n || n;
+    for (let d = 0; d < span; d++) {
+      const t = d / span;
+      out[(i0 + d) % n] = { lat: a.lat + (b.lat - a.lat) * t, lon: a.lon + (b.lon - a.lon) * t };
+    }
+  }
+  return out;
+}
+
+// Punto de la pista en una fracción de vuelta cualquiera, interpolando entre
+// bins. `pts` tiene que venir de fillTrackGaps (sin huecos).
+export function posAtPct(pts, pct) {
+  const n = Array.isArray(pts) ? pts.length : 0;
+  if (!n) return null;
+  const x = (((pct % 1) + 1) % 1) * n;
+  const i0 = Math.floor(x) % n;
+  const i1 = (i0 + 1) % n;
+  const t = x - Math.floor(x);
+  const a = pts[i0], b = pts[i1];
+  if (!a || !b) return a || b || null;
+  return { lat: a.lat + (b.lat - a.lat) * t, lon: a.lon + (b.lon - a.lon) * t };
+}
