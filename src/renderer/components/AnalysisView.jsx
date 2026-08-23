@@ -7,7 +7,7 @@ import { hasChassisData, chassisSeries, chassisSummary, WHEEL_LABEL } from "../l
 import { ShareCard } from "./ShareCard.jsx";
 import { buildCardModel, FORMATS, shareMapBox, countShareCharts, sanitizeFilename } from "../lib/share-card-data.js";
 import { svgToPngBlob } from "../lib/render-svg-to-png.js";
-import lovelyTracks from "../assets/lovely-tracks.json"; // curvas + sectores por pista (© Lovely Sim Racing, CC BY-NC-SA)
+import { findLovelyTrack } from "../lib/lovely-tracks.js"; // curvas + sectores por pista (© Lovely Sim Racing, CC BY-NC-SA)
 
 // Ancho de asfalto (metros) para engrosar el eje de OSM y dibujar ambos bordes.
 // OSM no guarda el ancho de pista; ~14 m es un valor típico de circuito de GP y
@@ -1103,44 +1103,7 @@ export function AnalysisView() {
   // Datos de pista de Lovely (curvas + sectores reales) por nombre de circuito.
   const trackData = useMemo(() => {
     if (!session) return null;
-    const nrm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-    // Quita prefijos genéricos ("circuit de", "autódromo", etc.) que hacen que
-    // nombres distintos colisionen (ej. "Circuit de Spa" vs "Circuit de
-    // Barcelona" comparten "circuitde" → matcheaba mal). Solo prefijo, seguro.
-    const GEN = ["circuitde", "circuito", "circuit", "autodromonazionale", "autodromointernacional", "autodromo", "autodrome", "the"];
-    const strip = (s) => { for (const p of GEN) if (s.startsWith(p)) return s.slice(p.length); return s; };
-    // Usamos el nombre interno con config (trackKey) si está; si no, el display.
-    const target = strip(nrm(session.trackKey || session.track));
-    if (!target) return null;
-    const tracks = lovelyTracks.tracks;
-    if (tracks[target]) return tracks[target];
-    // Match tolerante. Las claves de Lovely varían el orden ("snetterton circuit
-    // 300" vs "snetterton 300 circuit"), así que combinamos: prefijo común ×3
-    // (prioriza la base distintiva, ej "snetterton") + subsecuencia común (LCS,
-    // desambigua la config: "2000 full" vs "2000 moto") + bonus por config igual.
-    const cp = (a, b) => { let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++; return i; };
-    const lcs = (a, b) => {
-      const nA = a.length, nB = b.length;
-      let prev = new Array(nB + 1).fill(0);
-      for (let i = 1; i <= nA; i++) {
-        const cur = new Array(nB + 1).fill(0);
-        for (let j = 1; j <= nB; j++) cur[j] = a[i - 1] === b[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], cur[j - 1]);
-        prev = cur;
-      }
-      return prev[nB];
-    };
-    const digits = (s) => (s.match(/\d+/g) || []);
-    const dt = digits(target);
-    let best = null, bestScore = 0;
-    for (const kRaw in tracks) {
-      const k = strip(kRaw);
-      let score = cp(k, target) * 3 + lcs(k, target);
-      if (k.includes(target) || target.includes(k)) score += Math.min(k.length, target.length);
-      const dk = digits(k);
-      if (dt.length && dk.length && dt.some((d) => dk.includes(d))) score += 50;
-      if (score > bestScore) { bestScore = score; best = tracks[kRaw]; }
-    }
-    return bestScore >= 12 ? best : null;
+    return findLovelyTrack(session.trackKey, session.track);
   }, [session]);
   // Límites de sector reales (de Lovely) o el fallback de la sesión.
   const realSectorPcts = useMemo(() => {

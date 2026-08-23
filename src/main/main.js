@@ -239,7 +239,15 @@ app.whenReady().then(() => {
   // Se puede desactivar (config.recordingEnabled) para no duplicar sesiones si
   // el usuario ya loguea la telemetría desde iRacing (.ibt).
   recorder = new SessionRecorder(path.join(app.getPath('userData'), 'recordings'));
-  irsdk.setFrameSink((frame) => { if (configStore.isRecordingEnabled()) recorder.handleFrame(frame); });
+  // El mismo frame que alimenta al grabador alimenta al coach en vivo, pero
+  // sólo cuando la vista está abierta y a ~30 Hz: el coach necesita canales que
+  // NO viajan en el payload de 60 Hz de los overlays (pedales, marcha, volante,
+  // lat/lon), y mandárselos a todas las ventanas todo el tiempo sería pagar IPC
+  // que nadie mira. Se suscribe al abrir la vista y se corta al cerrarla.
+  irsdk.setFrameSink((frame) => {
+    if (configStore.isRecordingEnabled()) recorder.handleFrame(frame);
+    if (coachSubscribed) sendCoachFrame(frame);
+  });
   recorder.onChange(() => {
     if (dashboardWindow && !dashboardWindow.isDestroyed()) {
       dashboardWindow.webContents.send('recordings:changed');
@@ -519,6 +527,28 @@ ipcMain.handle('ibt:pick-folder', async () => {
 ipcMain.handle('ibt:reset-folder', () => {
   configStore.setTelemetryDir(null);
   return { dir: iracingTelemetryDir(), custom: false, default: defaultTelemetryDir() };
+});
+
+// ── Coach en vivo ────────────────────────────────────────────────────────
+// Suscripción explícita desde la vista del panel. `coachSubscribed` arranca en
+// false, así que sin la vista abierta el costo es una comparación por frame.
+let coachSubscribed = false;
+let _coachLastSent = 0;
+const COACH_MIN_MS = 33; // ~30 Hz: alcanza para el mapa y las reglas
+
+function sendCoachFrame(frame) {
+  const now = Date.now();
+  // El cruce de meta no se puede perder por el throttle: reinicia la vuelta.
+  if (!frame.completedLap && now - _coachLastSent < COACH_MIN_MS) return;
+  _coachLastSent = now;
+  if (!dashboardWindow || dashboardWindow.isDestroyed()) return;
+  if (!dashboardWindow.isVisible()) return;
+  dashboardWindow.webContents.send('coach:frame', frame);
+}
+
+ipcMain.handle('coach:subscribe', (_e, on) => {
+  coachSubscribed = !!on;
+  return coachSubscribed;
 });
 
 ipcMain.handle('ibt:import', async () => {

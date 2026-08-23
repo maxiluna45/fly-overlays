@@ -6,6 +6,41 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.12.0] - 2026-08-22
+
+### Agregado
+- **Coach en vivo**: pestaña nueva en el panel, pensada para segunda pantalla,
+  que te va corrigiendo durante una práctica contra una vuelta de referencia
+  (por ejemplo un CSV de Garage 61 importado, que la app ya sabía leer).
+  - **Mapa que te sigue**, estilo Google Maps: se ve sólo el pedazo de pista
+    donde vas, sobre la foto satelital encendida por defecto, girando con el
+    auto (o con el norte arriba, es un botón). Se elige cuánta pista mostrar:
+    120, 220, 400 u 800 metros.
+  - **La referencia dibujada adelante**, con las zonas de freno en rojo y las
+    de acelerador a fondo en verde, para ver dónde tenés que frenar y dónde
+    abrir, no sólo que te lo digan.
+  - **Tu recorrido pintándose atrás** en amarillo, que se borra al cruzar meta.
+  - **Avisos curva por curva** con lo que hiciste distinto: punto de frenada,
+    marcha, velocidad de ápice y punto de aceleración. El aviso llega ~2,5
+    segundos ANTES del punto de frenada de esa curva, que es lo único que lo
+    hace útil; medido sobre vueltas reales en Snetterton, eso da entre 100 y
+    150 metros de anticipación.
+  - **Voz opcional** (apagada por defecto): lee el aviso con el sintetizador de
+    Windows. No hay ningún modelo de IA ni conexión a un servicio: las reglas
+    son umbrales sobre la telemetría y las frases están escritas a mano, con
+    varias por regla para que no repita siempre lo mismo.
+  - **Alcance elegible**: pista completa, un sector o una curva puntual.
+  - Las curvas salen del volante de la propia referencia, así que agrupan los
+    complejos (una chicana es una sola curva) y no coinciden necesariamente con
+    la numeración oficial del circuito. Cuando la pista está en la base de
+    Lovely, el aviso usa el nombre real de la curva.
+  - Si la referencia es de otra pista, la vista lo avisa en vez de dar consejos
+    que no aplican.
+
+### Cambiado
+- El emparejado de pistas con la base de curvas de Lovely pasó a un módulo
+  compartido, así el análisis y el coach usan exactamente el mismo criterio.
+
 ## [0.11.0] - 2026-08-22
 
 ### Agregado

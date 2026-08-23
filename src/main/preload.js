@@ -93,6 +93,15 @@ contextBridge.exposeInMainWorld('fly', {
     ipcRenderer.on('updater:' + channel, listener);
     return () => ipcRenderer.removeListener('updater:' + channel, listener);
   },
+  // Coach en vivo (vista del panel): stream de frames a ~30 Hz mientras está
+  // suscripto. Hay que desuscribirse al cerrar la vista.
+  subscribeCoach: (on) => ipcRenderer.invoke('coach:subscribe', !!on),
+  onCoachFrame: (callback) => {
+    const listener = (_event, frame) => callback(frame);
+    ipcRenderer.on('coach:frame', listener);
+    return () => ipcRenderer.removeListener('coach:frame', listener);
+  },
+
   // Logs / diagnóstico
   log: (entry) => ipcRenderer.invoke('log:write', entry),
   getLogs: (opts) => ipcRenderer.invoke('log:tail', opts),
