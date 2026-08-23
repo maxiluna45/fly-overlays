@@ -6,6 +6,12 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.13.2] - 2026-08-23
+
+### Cambiado
+- Nota interna: la regla de tags del proyecto decía un formato que no era el que
+  usa el repo. Sin efecto en la app.
+
 ## [0.13.1] - 2026-08-23
 
 ### Corregido
