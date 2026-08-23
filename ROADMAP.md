@@ -16,26 +16,6 @@ Estado de cada ítem:
 
 ---
 
-## [ ] Incidentes de los rivales en el Relative
-
-**Problema.** En carrera no sabés con quién conviene no pelear una curva.
-
-**Qué mostrar.** Un tag tipo semáforo por piloto en el Relative: verde / amarillo
-/ rojo según los incidentes acumulados. No un número suelto — un color que se
-lee de reojo a 200 km/h.
-
-**Datos.** Verificado: `CurDriverIncidentCount` viene por piloto en el YAML de
-sesión, que la app ya parsea.
-
-Datos: `Drivers[].CurDriverIncidentCount` · `TeamIncidentCount` · `CarIsAI` ·
-`DivisionName`.
-
-**Notas.** Falta definir los cortes del semáforo — probablemente relativos a la
-vuelta/tiempo de sesión, no absolutos (5 incidentes en la vuelta 2 no es lo
-mismo que 5 en la vuelta 40). Es una columna más sobre datos que ya se leen.
-
----
-
 ## [ ] Orientar el mapa solo
 
 **Problema.** Hoy la rotación del mapa se ajusta a mano por circuito y se guarda

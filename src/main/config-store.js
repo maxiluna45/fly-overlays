@@ -39,6 +39,7 @@ const OVERLAY_DEFAULT_SETTINGS = {
     showLicense: true,       // mostrar el badge de licencia (LicLevel)
     showCarNumber: true,     // mostrar número del auto
     showFlag: true,          // mostrar bandera del país del club
+    showIncidents: true,     // semáforo de incidentes del rival en esta sesión
     playerCountry: "ar",     // ISO2 de tu bandera (tu fila; el club no distingue país)
     showLaps: true,          // mostrar la caja de last lap
     nameFormat: "full",      // full | short | initials

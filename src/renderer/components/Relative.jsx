@@ -2,6 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { EditCorners } from "./ui/edit-corners.jsx";
 import { Flag } from "./ui/flag.jsx";
+// `incidentColor` local (más abajo) es el del contador PROPIO en el header;
+// éste es el del semáforo de cada rival.
+import { incidentColor as rivalIncidentColor, incidentTitle } from "../lib/incidents.js";
 
 // Colores oficiales de licencia iRacing (1-8).
 // 1=Rookie · 2=D · 3=C · 4=B · 5=A · 6=P · 7=W · 8=NE
@@ -163,6 +166,7 @@ export function Relative({ previewMode = false, injectedTelemetry = null, settin
     showLicense: true,
     showCarNumber: true,
     showFlag: true,
+    showIncidents: true,
     playerCountry: "ar",
     fontSize: 11,
     rowHeight: 26,
@@ -245,6 +249,8 @@ export function Relative({ previewMode = false, injectedTelemetry = null, settin
   const drivers = relative?.drivers || [];
   const session = relative?.session || { type: "Practice", time: 0, timeRemain: 0, lapCurrent: 0, lapsTotal: 0 };
   const playerIdx = relative?.playerIdx ?? -1;
+  // Límite de incidentes de la sesión: escala el semáforo de cada rival.
+  const incidentLimit = relative?.incidentLimit || session.maxIncidents || 0;
 
   // Layout: el player va SIEMPRE en el centro. La cantidad de rivales arriba /
   // abajo es configurable. A diferencia de la versión vieja, NO filtramos por
@@ -429,6 +435,7 @@ export function Relative({ previewMode = false, injectedTelemetry = null, settin
                   isPlayer={d.carIdx === playerIdx}
                   cfg={cfg}
                   multiClass={multiClass}
+                  incidentLimit={incidentLimit}
                 />
               ) : (
                 <EmptyRow key={`e-${i}`} cfg={cfg} />
@@ -504,7 +511,7 @@ const EmptyRow = React.memo(function EmptyRow({ cfg }) {
   );
 });
 
-const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg, multiClass = false }) {
+const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg, multiClass = false, incidentLimit = 0 }) {
   const d = driver;
   const isLeader = d.classPosition === 1;
   const lapAhead = !isPlayer && (d.lapDelta || 0) > 0;
@@ -516,6 +523,9 @@ const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg, multiCl
 
   // Color de clase (solo relevante en multiclase).
   const classColor = multiClass ? classColorCss(d.carClassColor) : null;
+
+  // Semáforo de incidentes del rival en esta sesión (null si iRacing no lo da).
+  const incColor = rivalIncidentColor(d.incidents, { limit: incidentLimit });
 
   // Background: player con gradient ámbar (Racelabs), líder con tinte cian,
   // resto alterna muy sutil.
@@ -646,6 +656,19 @@ const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg, multiCl
             title={`Etiqueta: ${d.tag.label}`}
           >
             {d.tag.label}
+          </span>
+        )}
+        {cfg.showIncidents !== false && incColor && (
+          <span
+            className="font-mono font-bold px-1 rounded-sm flex-shrink-0"
+            style={{
+              fontSize: `${cfg.fontSize - 2}px`, height: "13px", display: "inline-flex", alignItems: "center", gap: "2px",
+              background: `${incColor}26`, color: incColor, border: `1px solid ${incColor}59`,
+            }}
+            title={incidentTitle(d.name, d.incidents, { limit: incidentLimit })}
+          >
+            <span style={{ width: "5px", height: "5px", borderRadius: "50%", background: incColor }} />
+            {d.incidents}x
           </span>
         )}
         {d.out && (
@@ -784,6 +807,8 @@ const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg, multiCl
     prev.driver.carClassColor === next.driver.carClassColor &&
     (prev.driver.tag?.label || "") === (next.driver.tag?.label || "") &&
     (prev.driver.tag?.color || "") === (next.driver.tag?.color || "") &&
+    prev.driver.incidents === next.driver.incidents &&
+    prev.incidentLimit === next.incidentLimit &&
     prev.isPlayer === next.isPlayer &&
     prev.multiClass === next.multiClass &&
     prev.cfg === next.cfg

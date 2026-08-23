@@ -385,6 +385,9 @@ class IrsdkClient {
         bestLapNum: 1,
         isFastest: i === 0,
         sessionFlags: 0,
+        isAi: false,
+        // Incidentes variados para que el semáforo se vea en preview.
+        incidents: [0, 2, 0, 5, 1, 8, 1, 0, 3, 12][i],
       };
     });
     return {
@@ -393,6 +396,7 @@ class IrsdkClient {
       totalInClass: drivers.length,
       totalOverall: drivers.length,
       trackLength: 5000, // para el radar (gap longitudinal)
+      incidentLimit: 17,
       drivers,
       session: {
         type: "Practice",
@@ -1582,6 +1586,9 @@ class IrsdkClient {
               isFastest: bestLapTime[i] > 0 && bestLapByClass[d.CarClassID] != null &&
                 Math.abs(bestLapTime[i] - bestLapByClass[d.CarClassID]) < 0.001,
               sessionFlags: sessionFlagsArr[i] || 0,
+              isAi: d.CarIsAI === 1,
+              // Incidentes de ESTE piloto en ESTA sesión (ver _incidentsByCarIdx).
+              incidents: null,
               tag: this._tagForName(uname),
             });
           }
@@ -1599,10 +1606,16 @@ class IrsdkClient {
           // Se extrae ANTES de resolver classPosition para poder usar la grilla
           // como fuente cuando el SDK aún no publica posición (grilla/práctica).
           let official = false;
+          let incidentLimit = 0;
           const qualPosByCarIdx = {};
+          let incByCarIdx = {};
           try {
             const sd = this._getSession();
             official = !!(sd && sd.WeekendInfo && sd.WeekendInfo.Official);
+            incByCarIdx = this._incidentsByCarIdx(sd, this._read(telemetry, 'SessionNum'), driverInfo);
+            const wo = sd && sd.WeekendInfo && sd.WeekendInfo.WeekendOptions;
+            const lim = parseInt((wo && (wo.IncidentLimit ?? wo.MaxIncidents)) ?? '', 10);
+            if (isFinite(lim) && lim > 0) incidentLimit = lim;
             const qr = sd && sd.QualifyResultsInfo && sd.QualifyResultsInfo.Results;
             if (Array.isArray(qr)) {
               for (const r of qr) {
@@ -1616,6 +1629,8 @@ class IrsdkClient {
           for (const dr of drivers) {
             const qp = qualPosByCarIdx[dr.carIdx];
             if (qp != null && qp > 0) dr.qualClassPos = qp;
+            const inc = incByCarIdx[dr.carIdx];
+            if (inc != null && inc >= 0) dr.incidents = inc;
           }
 
           // ── Resolver classPosition por clase. iRacing no siempre la publica
@@ -1705,6 +1720,7 @@ class IrsdkClient {
             totalInClass,
             totalOverall,
             trackLength: trackLengthM,
+            incidentLimit,
             drivers,
             session,
           };
@@ -1758,6 +1774,38 @@ class IrsdkClient {
       if (sessions[sessionNum]) return sessions[sessionNum];
     }
     return sessions[sessions.length - 1];
+  }
+
+  // Incidentes por auto EN LA SESIÓN EN CURSO, indexados por CarIdx.
+  //
+  // iRacing no publica el contador de incidentes de los rivales: en
+  // DriverInfo.Drivers[], CurDriverIncidentCount y TeamIncidentCount vienen en
+  // -1 para todos menos para vos (verificado en 25 .ibt propios: el único
+  // valor real es el del player). La tabla de resultados de la sesión sí trae
+  // el número por auto y se actualiza durante la carrera, así que ésa es la
+  // fuente. Si además el YAML trae el contador propio, lo usamos para tu fila.
+  _incidentsByCarIdx(sd, sessionNum, driverInfo) {
+    const out = {};
+    try {
+      const cur = this._currentSession(sd, sessionNum);
+      const rows = cur && cur.ResultsPositions;
+      if (Array.isArray(rows)) {
+        for (const r of rows) {
+          if (!r || r.CarIdx == null) continue;
+          const inc = parseInt(r.Incidents, 10);
+          if (isFinite(inc) && inc >= 0) out[r.CarIdx] = inc;
+        }
+      }
+      const list = driverInfo && driverInfo.Drivers;
+      if (Array.isArray(list)) {
+        for (const d of list) {
+          if (!d || d.CarIdx == null) continue;
+          const own = parseInt(d.CurDriverIncidentCount, 10);
+          if (isFinite(own) && own >= 0) out[d.CarIdx] = own;
+        }
+      }
+    } catch (_) {}
+    return out;
   }
 
   _resolveSessionType(session, sessionNum) {

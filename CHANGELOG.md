@@ -6,6 +6,19 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.10.0] - 2026-08-22
+
+### Agregado
+- Semáforo de incidentes en el Relative. Al lado del nombre de cada rival
+  aparece un chip con los incidentes que lleva en esta sesión: verde hasta 1,
+  amarillo desde 2 y rojo desde 4 (o antes, si la sesión tiene un límite bajo y
+  ya se comió la mitad). Sirve para saber de un vistazo con quién no conviene
+  pelear una curva. Se puede apagar desde la configuración del overlay.
+- El número es el de ESTA sesión, no el historial del piloto: iRacing no
+  publica el contador de los rivales. `CurDriverIncidentCount` viene en -1 para
+  todos menos para vos (verificado en 25 sesiones propias), así que el dato sale
+  de la tabla de resultados de la sesión, que sí trae el número por auto.
+
 ## [0.9.0] - 2026-08-22
 
 ### Agregado
