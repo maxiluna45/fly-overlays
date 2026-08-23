@@ -54,5 +54,5 @@ header), así que se escriben para él, no para el equipo:
 ### Tags de git
 
 **No crear tags por commit.** El tag de release lo decide el usuario cuando
-agrupa varios commits para publicar. Formato sin prefijo (`0.8.0`), siguiendo
-el tag más reciente del repo.
+agrupa varios commits para publicar. Formato **con prefijo `v`** (`v0.13.1`),
+que es el que usan todos los tags del repo.

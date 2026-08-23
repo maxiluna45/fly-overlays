@@ -94,3 +94,18 @@ export function applyAffine(T, x, y) {
   const sx = x - T.mx, sy = y - T.my;
   return { x: T.a * sx + T.b * sy + T.mu, y: T.c * sx + T.d * sy + T.mv };
 }
+
+// Rotación por defecto del mapa a partir de `WeekendInfo.TrackNorthOffset`.
+//
+// El mapa se dibuja desde lat/lon, o sea que sin rotar sale con el NORTE
+// ARRIBA. TrackNorthOffset es la orientación del circuito respecto del norte,
+// así que girando el contenido en sentido contrario el mapa queda como iRacing
+// dibuja esa pista, que es la orientación que uno tiene en la cabeza.
+//
+// Devuelve grados 0..359, o null si el YAML no trae el dato (ahí el mapa se
+// queda con norte arriba, como venía).
+export function autoMapRotation(northOffsetRad) {
+  if (northOffsetRad == null || !isFinite(northOffsetRad)) return null;
+  const deg = (northOffsetRad * 180) / Math.PI;
+  return ((Math.round(360 - deg) % 360) + 360) % 360;
+}

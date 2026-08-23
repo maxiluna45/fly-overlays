@@ -86,14 +86,25 @@ function getSectorPoints(parsed) {
   return [1/3, 2/3]; // fallback
 }
 
+// "1.6113 rad" → 1.6113. Devuelve null si no viene o no es un número.
+function parseNorthOffset(raw) {
+  if (raw == null) return null;
+  const v = parseFloat(String(raw));
+  return isFinite(v) ? v : null;
+}
+
 /**
  * Devuelve metadata útil del circuito/sesión para los overlays.
  */
 function getTrackInfo(parsed) {
-  if (!parsed) return { name: 'Unknown', length: 0, sectorCount: 2 };
+  if (!parsed) return { name: 'Unknown', length: 0, sectorCount: 2, northOffset: null };
   return {
     name: parsed?.WeekendInfo?.TrackDisplayName || parsed?.WeekendInfo?.TrackName || 'Unknown',
     length: parseFloat(parsed?.WeekendInfo?.TrackLength) || 0,
+    // Orientación del circuito respecto del norte, en radianes ("1.6113 rad").
+    // Con esto el mapa puede nacer con la orientación en la que iRacing dibuja
+    // esa pista, en vez de norte arriba y torcido.
+    northOffset: parseNorthOffset(parsed?.WeekendInfo?.TrackNorthOffset),
     configName: parsed?.WeekendInfo?.TrackConfigName || '',
     sectorPoints: getSectorPoints(parsed),
     sectorCount: getSectorPoints(parsed).length + 1, // N splits → N+1 sectores
@@ -104,4 +115,5 @@ module.exports = {
   parseSessionInfo,
   getSectorPoints,
   getTrackInfo,
+  parseNorthOffset,
 };

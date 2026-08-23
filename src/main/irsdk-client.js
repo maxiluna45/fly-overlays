@@ -53,6 +53,22 @@ function predictIratingChanges(entries) {
   return out;
 }
 
+// Un paso de navegación a estima: velocidad en el marco del auto (vx adelante,
+// vy lateral) + rumbo respecto del norte → desplazamiento en metros (norte,
+// este). La convención de signos está verificada contra el Lat/Lon real de los
+// .ibt; ver _deadReckon.
+function worldVelocity(vx, vy, yawNorth) {
+  return {
+    n: vx * Math.cos(yawNorth) + vy * Math.sin(yawNorth),
+    e: vx * Math.sin(yawNorth) - vy * Math.cos(yawNorth),
+  };
+}
+
+function deadReckonDelta(vx, vy, yawNorth, dt) {
+  const v = worldVelocity(vx, vy, yawNorth);
+  return { n: v.n * dt, e: v.e * dt };
+}
+
 class IrsdkClient {
   constructor() {
     this.sdk = null;
@@ -139,6 +155,8 @@ class IrsdkClient {
     this._onTrackLatchUntil = 0; // ms hasta cuándo mantener visibles los overlays
     this._sectorPcts = null;   // límites de sectores reales (SplitTimeInfo)
     this._trackLength = null;  // largo de pista en km
+    this._trackNorthOffset = null; // orientación del circuito (rad, del YAML)
+    this._drE = 0; this._drN = 0; this._drTime = null; this._drVel = null; // navegación a estima
   }
 
   // Registra un consumidor de frames crudos (el SessionRecorder). Se llama con
@@ -385,6 +403,9 @@ class IrsdkClient {
         bestLapNum: 1,
         isFastest: i === 0,
         sessionFlags: 0,
+        isAi: false,
+        // Incidentes variados para que el semáforo se vea en preview.
+        incidents: [0, 2, 0, 5, 1, 8, 1, 0, 3, 12][i],
       };
     });
     return {
@@ -393,6 +414,7 @@ class IrsdkClient {
       totalInClass: drivers.length,
       totalOverall: drivers.length,
       trackLength: 5000, // para el radar (gap longitudinal)
+      incidentLimit: 17,
       drivers,
       session: {
         type: "Practice",
@@ -567,6 +589,8 @@ class IrsdkClient {
     if (this._refStore) this._refStore.reset();
     this._sectorPcts = null;
     this._trackLength = null;
+    this._trackNorthOffset = null;
+    this._drE = 0; this._drN = 0; this._drTime = null; this._drVel = null;
     // Ancla del reloj de carrera: la próxima conexión (posiblemente otro
     // weekend con el mismo SessionNum) tiene que re-anclarse.
     this._raceClockAnchor = null;
@@ -685,6 +709,7 @@ class IrsdkClient {
     const gLat = this._read(telemetry, 'LatAccel') || 0;
     const gLon = this._read(telemetry, 'LongAccel') || 0;
     const yaw = this._read(telemetry, 'YawRate') || 0;
+    const pos = this._deadReckon(telemetry, sessionTime);
     const lat = this._read(telemetry, 'Lat');
     const lon = this._read(telemetry, 'Lon');
 
@@ -877,6 +902,7 @@ class IrsdkClient {
           if (Array.isArray(pts) && pts.length > 0) this._sectorPcts = pts;
           const ti = getTrackInfo(session);
           if (ti && ti.length > 0) this._trackLength = ti.length; // km
+          if (ti && ti.northOffset != null) this._trackNorthOffset = ti.northOffset; // rad
         } catch (_) {}
       }
       if (!this._carName) {
@@ -931,6 +957,10 @@ class IrsdkClient {
         car: this._carName,
         sectorPcts: this._sectorPcts || null,
         trackLength: this._trackLength || null,
+        trackNorthOffset: this._trackNorthOffset ?? null,
+        // Posición estimada en metros (este, norte) — ver _deadReckon.
+        posE: pos ? pos.e : null,
+        posN: pos ? pos.n : null,
         completedLap,
       });
     }
@@ -1582,6 +1612,9 @@ class IrsdkClient {
               isFastest: bestLapTime[i] > 0 && bestLapByClass[d.CarClassID] != null &&
                 Math.abs(bestLapTime[i] - bestLapByClass[d.CarClassID]) < 0.001,
               sessionFlags: sessionFlagsArr[i] || 0,
+              isAi: d.CarIsAI === 1,
+              // Incidentes de ESTE piloto en ESTA sesión (ver _incidentsByCarIdx).
+              incidents: null,
               tag: this._tagForName(uname),
             });
           }
@@ -1599,10 +1632,16 @@ class IrsdkClient {
           // Se extrae ANTES de resolver classPosition para poder usar la grilla
           // como fuente cuando el SDK aún no publica posición (grilla/práctica).
           let official = false;
+          let incidentLimit = 0;
           const qualPosByCarIdx = {};
+          let incByCarIdx = {};
           try {
             const sd = this._getSession();
             official = !!(sd && sd.WeekendInfo && sd.WeekendInfo.Official);
+            incByCarIdx = this._incidentsByCarIdx(sd, this._read(telemetry, 'SessionNum'), driverInfo);
+            const wo = sd && sd.WeekendInfo && sd.WeekendInfo.WeekendOptions;
+            const lim = parseInt((wo && (wo.IncidentLimit ?? wo.MaxIncidents)) ?? '', 10);
+            if (isFinite(lim) && lim > 0) incidentLimit = lim;
             const qr = sd && sd.QualifyResultsInfo && sd.QualifyResultsInfo.Results;
             if (Array.isArray(qr)) {
               for (const r of qr) {
@@ -1616,6 +1655,8 @@ class IrsdkClient {
           for (const dr of drivers) {
             const qp = qualPosByCarIdx[dr.carIdx];
             if (qp != null && qp > 0) dr.qualClassPos = qp;
+            const inc = incByCarIdx[dr.carIdx];
+            if (inc != null && inc >= 0) dr.incidents = inc;
           }
 
           // ── Resolver classPosition por clase. iRacing no siempre la publica
@@ -1705,6 +1746,7 @@ class IrsdkClient {
             totalInClass,
             totalOverall,
             trackLength: trackLengthM,
+            incidentLimit,
             drivers,
             session,
           };
@@ -1719,6 +1761,48 @@ class IrsdkClient {
       }
     }
     return empty();
+  }
+
+  // Posición del auto por navegación a estima (dead reckoning).
+  //
+  // iRacing NO publica Lat/Lon en la memoria compartida en vivo: hay 333
+  // variables y ninguna es de posición (sí están en los .ibt). Pero sí publica
+  // la velocidad en el marco del auto (VelocityX adelante, VelocityY lateral) y
+  // el rumbo respecto del norte (YawNorth), y con eso la trazada se reconstruye
+  // integrando: norte += (Vx·cos a + Vy·sen a)·dt, este += (Vx·sen a − Vy·cos a)·dt.
+  //
+  // Verificado contra el Lat/Lon real de .ibt propios, sobre vueltas enteras de
+  // entre 110 y 192 s: error medio 0,01 m en el F4 de Snetterton, 0,25 m en el
+  // M2 de Spa, 0,37 m en el GR86 de Spa y 0,68 m en el MX-5 de Oschersleben,
+  // con máximos de 1,5 m. Integrar a 60 Hz importa: a 30 Hz el error medio del
+  // MX-5 sube a 0,97 m y el máximo a 2,5 m, por eso se integra acá (en el tick
+  // del SDK) y no en el renderer, que recibe a 30 Hz.
+  //
+  // El origen es arbitrario (donde arrancó la integración); el consumidor lo
+  // ancla a una geometría conocida. El marco sí es absoluto en orientación:
+  // +n = norte, +e = este.
+  _deadReckon(telemetry, sessionTime) {
+    const vx = this._read(telemetry, 'VelocityX');
+    const vy = this._read(telemetry, 'VelocityY');
+    const a = this._read(telemetry, 'YawNorth');
+    if (vx == null || vy == null || a == null) return null;
+    const prev = this._drTime;
+    const prevV = this._drVel;
+    this._drTime = sessionTime;
+    this._drVel = worldVelocity(vx, vy, a);
+    if (prev == null) { this._drE = 0; this._drN = 0; return { e: 0, n: 0 }; }
+    const dt = sessionTime - prev;
+    // Saltos de tiempo (pausa, reset, cambio de sesión) no se integran: meterían
+    // un salto enorme en la trazada.
+    if (!(dt > 0) || dt > 0.5) return { e: this._drE, n: this._drN };
+    // Regla del trapecio (promedio de la velocidad entre las dos muestras) en
+    // vez de rectángulo. A 60 Hz la diferencia es chica, pero cuando se pierde
+    // un frame el intervalo se agranda y ahí el rectángulo se equivoca: medido
+    // sobre .ibt reales, a 30 Hz el error medio del F4 baja de 1,35 a 0,85 m.
+    const v = this._drVel;
+    this._drN += ((prevV ? (prevV.n + v.n) / 2 : v.n)) * dt;
+    this._drE += ((prevV ? (prevV.e + v.e) / 2 : v.e)) * dt;
+    return { e: this._drE, n: this._drN };
   }
 
   // Normaliza una variable CarIdx* a un array de tamaño n.
@@ -1758,6 +1842,38 @@ class IrsdkClient {
       if (sessions[sessionNum]) return sessions[sessionNum];
     }
     return sessions[sessions.length - 1];
+  }
+
+  // Incidentes por auto EN LA SESIÓN EN CURSO, indexados por CarIdx.
+  //
+  // iRacing no publica el contador de incidentes de los rivales: en
+  // DriverInfo.Drivers[], CurDriverIncidentCount y TeamIncidentCount vienen en
+  // -1 para todos menos para vos (verificado en 25 .ibt propios: el único
+  // valor real es el del player). La tabla de resultados de la sesión sí trae
+  // el número por auto y se actualiza durante la carrera, así que ésa es la
+  // fuente. Si además el YAML trae el contador propio, lo usamos para tu fila.
+  _incidentsByCarIdx(sd, sessionNum, driverInfo) {
+    const out = {};
+    try {
+      const cur = this._currentSession(sd, sessionNum);
+      const rows = cur && cur.ResultsPositions;
+      if (Array.isArray(rows)) {
+        for (const r of rows) {
+          if (!r || r.CarIdx == null) continue;
+          const inc = parseInt(r.Incidents, 10);
+          if (isFinite(inc) && inc >= 0) out[r.CarIdx] = inc;
+        }
+      }
+      const list = driverInfo && driverInfo.Drivers;
+      if (Array.isArray(list)) {
+        for (const d of list) {
+          if (!d || d.CarIdx == null) continue;
+          const own = parseInt(d.CurDriverIncidentCount, 10);
+          if (isFinite(own) && own >= 0) out[d.CarIdx] = own;
+        }
+      }
+    } catch (_) {}
+    return out;
   }
 
   _resolveSessionType(session, sessionNum) {
@@ -1955,4 +2071,4 @@ class IrsdkClient {
   }
 }
 
-module.exports = { IrsdkClient };
+module.exports = { IrsdkClient, deadReckonDelta, worldVelocity };

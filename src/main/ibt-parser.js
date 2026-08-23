@@ -11,6 +11,12 @@ const { parseSessionInfo, getSectorPoints, getTrackInfo } = require('./session-p
 // estructura que produce SessionRecorder, para reusar el análisis y el coach.
 
 const BUCKETS = 800; // resolución de la trazada por distancia (mejor detalle en curvas cerradas)
+
+// Detección de bloqueo de rueda (ver el bloque de chasis en parseIbtSession).
+const LOCK_MIN_SPEED = 10;    // m/s — abajo de eso el patinaje no significa nada
+const LOCK_MIN_BRAKE = 0.15;  // sin freno apretado no es un bloqueo
+const LOCK_MIN_SLIP = 0.12;   // 12% de patinaje
+const LOCK_MIN_SAMPLES = 3;   // sostenido ~50 ms a 60 Hz
 const MAX_LAPS = 300;
 const MAX_FILE_BYTES = 300 * 1024 * 1024; // 300 MB — más que eso lo salteamos
 
@@ -67,7 +73,7 @@ function round6(v) { return v == null || !isFinite(v) ? null : Math.round(v * 1e
 
 // Extrae track / car / tipo de sesión + sectores + largo del YAML (o del nombre).
 function metaFromSessionInfo(yamlStr, fileName, sessionNum) {
-  const meta = { track: null, trackKey: null, car: null, sessionType: null, sectorPcts: null, trackLength: null, bestLap: null, trackIdIr: null, carIdIr: null };
+  const meta = { track: null, trackKey: null, car: null, sessionType: null, sectorPcts: null, trackLength: null, bestLap: null, trackIdIr: null, carIdIr: null, trackNorthOffset: null };
   const parsed = parseSessionInfo(yamlStr);
   if (parsed) {
     meta.track = parsed?.WeekendInfo?.TrackDisplayName || parsed?.WeekendInfo?.TrackName || null;
@@ -101,6 +107,7 @@ function metaFromSessionInfo(yamlStr, fileName, sessionNum) {
       if (Array.isArray(pts) && pts.length > 0) meta.sectorPcts = pts;
       const ti = getTrackInfo(parsed);
       if (ti && ti.length > 0) meta.trackLength = ti.length;
+      if (ti && ti.northOffset != null) meta.trackNorthOffset = ti.northOffset;
     } catch (_) {}
   }
   // Fallbacks desde el nombre de archivo (ej: "car_track 2024-01-01 20h00m00s.ibt").
@@ -230,7 +237,23 @@ function parseIbtSession(filePath) {
     lon: vars['Lon'],
     onTrack: vars['IsOnTrack'],
     sessNum: vars['SessionNum'],
+    pitch: vars['Pitch'],
+    roll: vars['Roll'],
   };
+
+  // Chasis: recorrido/velocidad de amortiguador, presión de línea de freno y
+  // velocidad de cada rueda. Verificado en .ibt de MX-5, F4 y Audi RS3: existen
+  // y varían. Orden LF, RF, LR, RR (el mismo que usa `chassis.js` en el
+  // renderer). Si al auto le falta alguno, `hasChassis` queda en false y el
+  // análisis de suspensión/frenos simplemente no se muestra.
+  const WHEELS = ['LF', 'RF', 'LR', 'RR'];
+  const VW = WHEELS.map((w) => ({
+    defl: vars[`${w}shockDefl`],
+    vel: vars[`${w}shockVel`],
+    press: vars[`${w}brakeLinePress`],
+    wspeed: vars[`${w}speed`],
+  }));
+  const hasChassis = VW.every((v) => v.defl && v.vel && v.press && v.wspeed);
 
   if (h.bufLen <= 0 || h.bufOffset <= 0) throw new Error('Header .ibt inválido');
   const numSamples = Math.floor((buf.length - h.bufOffset) / h.bufLen);
@@ -241,6 +264,10 @@ function parseIbtSession(filePath) {
   let maxT = 0;
   let prevLap = null;
   let sessionNumSeen = null;
+  // Bloqueo de rueda: un pico de un par de muestras es ruido (o un pianito).
+  // Sólo lo damos por bueno cuando se sostiene LOCK_MIN_SAMPLES muestras
+  // seguidas a 60 Hz (~50 ms), y recién ahí lo escribimos en el bin.
+  let lockRun = 0;
 
   const finalize = (lapNum, lapLast) => {
     const coverage = bucketCount / BUCKETS;
@@ -280,7 +307,8 @@ function parseIbtSession(filePath) {
       const t = readVar(buf, base, V.curT);
       if (t != null && t > maxT) maxT = t;
       const b = Math.min(BUCKETS - 1, Math.max(0, Math.floor(pct * BUCKETS)));
-      if (buckets[b] == null) bucketCount++;
+      const prev = buckets[b];
+      if (prev == null) bucketCount++;
       buckets[b] = {
         th: round3(readVar(buf, base, V.th)),
         br: round3(readVar(buf, base, V.br)),
@@ -295,6 +323,54 @@ function parseIbtSession(filePath) {
         lat: round6(readVar(buf, base, V.lat)),
         lon: round6(readVar(buf, base, V.lon)),
       };
+
+      // Canales de chasis. A diferencia del resto (donde el bin se queda con la
+      // última muestra), acá guardamos el PICO dentro del bin: un bloqueo o un
+      // golpe de piano duran menos que un bin (~4 m) y con la última muestra se
+      // perderían.
+      if (hasChassis) {
+        const sp = readVar(buf, base, V.sp);
+        const br = readVar(buf, base, V.br);
+        const defl = VW.map((v) => readVar(buf, base, v.defl));
+        const press = VW.map((v) => readVar(buf, base, v.press));
+
+        // Bloqueo: patinaje de la rueda más trabada contra la velocidad del auto.
+        // Sólo tiene sentido frenando y con el auto en movimiento.
+        let slip = null, slipW = null;
+        if (sp != null && sp > LOCK_MIN_SPEED && br != null && br > LOCK_MIN_BRAKE) {
+          for (let w = 0; w < 4; w++) {
+            const ws = readVar(buf, base, VW[w].wspeed);
+            if (ws == null) continue;
+            const sl = 1 - ws / sp;
+            if (slip == null || sl > slip) { slip = sl; slipW = w; }
+          }
+        }
+        if (slip != null && slip > LOCK_MIN_SLIP) lockRun++; else lockRun = 0;
+        const locked = lockRun >= LOCK_MIN_SAMPLES;
+
+        // Golpe: la mayor velocidad de amortiguador del instante (piano, badén).
+        let sv = 0, svW = null;
+        for (let w = 0; w < 4; w++) {
+          const v = readVar(buf, base, VW[w].vel);
+          if (v == null) continue;
+          const a = Math.abs(v);
+          if (a > sv) { sv = a; svW = w; }
+        }
+
+        const nb = buckets[b];
+        nb.def = defl.map(round3);
+        nb.bpF = round2(Math.max(press[0] ?? 0, press[1] ?? 0));
+        nb.bpR = round2(Math.max(press[2] ?? 0, press[3] ?? 0));
+        nb.pit = round3(readVar(buf, base, V.pitch));
+        nb.rol = round3(readVar(buf, base, V.roll));
+        // Picos: se arrastran del valor previo del mismo bin.
+        const pSl = prev && prev.sl != null ? prev.sl : null;
+        if (locked && (pSl == null || slip > pSl)) { nb.sl = round3(slip); nb.slW = slipW; }
+        else if (pSl != null) { nb.sl = pSl; nb.slW = prev.slW; }
+        const pSv = prev && prev.sv != null ? prev.sv : -1;
+        if (sv > pSv) { nb.sv = round3(sv); nb.svW = svW; }
+        else { nb.sv = prev.sv; nb.svW = prev.svW; }
+      }
     }
   }
 
@@ -308,6 +384,7 @@ function parseIbtSession(filePath) {
     sessionType: meta.sessionType,
     sectorPcts: meta.sectorPcts,
     trackLength: meta.trackLength,
+    trackNorthOffset: meta.trackNorthOffset,
     trackIdIr: meta.trackIdIr,
     carIdIr: meta.carIdIr,
     startedAt: Math.floor(stat.mtimeMs),

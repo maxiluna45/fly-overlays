@@ -84,4 +84,4 @@ function formatReleaseDate(date) {
   return `${m[3]}/${m[2]}/${m[1]}`;
 }
 
-module.exports = { parseChangelog, formatReleaseDate };
+export { parseChangelog, formatReleaseDate };

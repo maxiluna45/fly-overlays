@@ -19,3 +19,14 @@ test('speedColor mapea min→azul y max→rojo', async () => {
   assert.match(speedColor(0, 0, 100), /^hsl\(/);
   assert.notEqual(speedColor(0, 0, 100), speedColor(100, 0, 100));
 });
+
+test('autoMapRotation convierte TrackNorthOffset en grados de rotación del mapa', async () => {
+  const { autoMapRotation } = await import('../src/renderer/lib/track-render.js');
+  // Valores reales del YAML de sesiones propias.
+  assert.equal(autoMapRotation(1.6113), 268);  // Spa
+  assert.equal(autoMapRotation(1.8851), 252);  // Oschersleben
+  assert.equal(autoMapRotation(0.4107), 336);  // Lime Rock
+  assert.equal(autoMapRotation(0), 0);         // ya alineado al norte
+  assert.equal(autoMapRotation(null), null);   // sin dato: el mapa queda norte arriba
+  assert.equal(autoMapRotation(NaN), null);
+});

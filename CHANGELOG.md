@@ -6,6 +6,194 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.13.2] - 2026-08-23
+
+### Cambiado
+- Nota interna: la regla de tags del proyecto decía un formato que no era el que
+  usa el repo. Sin efecto en la app.
+
+## [0.13.1] - 2026-08-23
+
+### Corregido
+- La trazada del coach se iba corriendo hacia el final de la vuelta. Medí de
+  dónde venía el error y no era lo que parecía: la integración en sí acumula
+  muy poco (entre 0,2 y 1,6 metros en una vuelta entera). El grueso venía de
+  cómo se ancla esa trazada a la referencia.
+  - Antes se anclaba en **un solo punto**, el del cruce de meta. La geometría de
+    la referencia está guardada en 800 tramos, que en Spa son unos 9 metros cada
+    uno, así que ese punto puede estar varios metros corrido y desplazaba la
+    vuelta entera.
+  - Ahora se ajusta con **toda la vuelta**: se promedia el desfase sobre los ~800
+    tramos, con lo que el error de un tramo suelto se cancela. Contra el GPS
+    real de archivos propios, el error medio pasó de 4,8-8,7 m a 0,9-1,4 m, y en
+    el último tramo de la vuelta —justo donde se notaba— de 5,3-8,6 m a
+    0,5-1,6 m.
+- La integración pasó de regla del rectángulo a la del trapecio. A 60 Hz apenas
+  cambia, pero cuando se pierde algún frame el intervalo se agranda y ahí el
+  rectángulo se equivoca: a 30 Hz el error medio del F4 baja de 1,35 a 0,85 m.
+
+## [0.13.0] - 2026-08-23
+
+### Agregado
+- El coach ahora dibuja **tu trazada real**, no una línea paralela de adorno. Se
+  ve por dónde pasás de verdad: si te abrís de más en la entrada, si cortás el
+  vértice, si salís más ancho que la referencia.
+  - iRacing no publica la posición del auto en vivo, pero sí la velocidad
+    (adelante y lateral) y el rumbo respecto del norte. Integrando eso 60 veces
+    por segundo la trazada se reconstruye sola.
+  - Contrastado contra el GPS real de archivos `.ibt` propios, sobre vueltas
+    enteras de entre 110 y 192 segundos: el error medio fue de 0,01 m en el F4
+    de Snetterton, 0,25 m en el M2 de Spa, 0,37 m en el GR86 de Spa y 0,68 m en
+    el MX-5 de Oschersleben, con un máximo de 1,5 m. Para referencia, un
+    circuito de GP tiene unos 12 m de ancho.
+  - La posición se re-ancla a la referencia en cada cruce de meta, así el error
+    no se arrastra de una vuelta a la siguiente.
+  - El rumbo del mapa también sale de ahí, así que la vista gira con el auto sin
+    depender de ningún canal nuevo.
+
+## [0.12.3] - 2026-08-23
+
+### Corregido
+- El mapa del coach no aparecía nunca estando en pista, y se quedaba en
+  "esperando a que salgas a pista". La causa es una limitación de iRacing, no un
+  error de cuentas: **la memoria compartida en vivo no publica la posición del
+  auto**. Medido con el sim corriendo, expone 333 variables y ninguna es `Lat`,
+  `Lon` ni `Alt`; esas sólo aparecen en los archivos `.ibt`. El mapa ahora ubica
+  el auto por distancia de vuelta sobre la geometría de la referencia, así que
+  funciona con cualquier referencia que traiga posición (un CSV de Garage 61 o
+  un `.ibt`).
+- El auto se movía a saltos, unas 4 veces por segundo. Se ubicaba en uno de los
+  800 bins de la vuelta, y en una pista de 5 km eso es un salto cada 6,5 metros.
+  Ahora la posición se interpola entre bins y el movimiento es continuo.
+- Tu trazada se dibujaba exactamente encima de la referencia, dando a entender
+  que ibas calcándola. Como iRacing no da posición lateral, no hay forma de
+  saber por dónde vas dentro del asfalto: ahora tu vuelta va dibujada en una
+  banda paralela a la de la referencia, coloreada por TUS pedales, con una
+  leyenda que lo aclara. Comparar las dos bandas muestra quién frena antes y
+  quién abre el acelerador antes, que es lo que importa.
+
+### Cambiado
+- El aviso grande deja de decir "completá una vuelta" cuando ya hay avisos
+  calculados: ahora dice cuántas curvas tienen algo para corregir.
+- El pie del mapa muestra frames recibidos, cuánta pista se conoce y cuántos
+  avisos hay listos, para no tener que adivinar por qué falta algo.
+
+## [0.12.2] - 2026-08-23
+
+### Corregido
+- El coach avisaba "la referencia es de otra pista" estando en la pista
+  correcta. Comparaba los nombres tal cual, y el mismo circuito llega escrito de
+  varias formas: la vuelta de Garage 61 decía "Virginia International Raceway
+  (Full Course)" y la sesión en vivo "Virginia International Raceway". Ahora usa
+  la misma regla tolerante con la que el Análisis decide si una vuelta sirve de
+  referencia.
+- El coach detectaba muy pocas curvas en los circuitos con eses. Un tramo se
+  cortaba sólo cuando soltabas el volante, así que una ese entera contaba como
+  una sola curva: en Virginia salían 5 curvas y la primera medía 1100 metros,
+  imposible de usar para anclar un consejo. Ahora el tramo también se corta
+  cuando el volante cambia de lado. Virginia pasa de 5 a 14 curvas (17 reales),
+  Oschersleben de 8 a 12 (14 reales) y Snetterton de 10 a 12, que son las 12 que
+  tiene.
+
+## [0.12.1] - 2026-08-23
+
+### Corregido
+- El panel se abría completamente en negro al correr la app desde el código con
+  `npm run dev`. Dos módulos del renderer (`session-match.js` y `changelog.js`)
+  seguían escritos en CommonJS y el navegador no puede importar nombres sueltos
+  de un módulo así: el import fallaba antes de montar nada y se llevaba puesta
+  toda la ventana. En la app instalada no se notaba porque el empaquetado sí los
+  convierte. Ahora son módulos ESM como el resto.
+
+## [0.12.0] - 2026-08-22
+
+### Agregado
+- **Coach en vivo**: pestaña nueva en el panel, pensada para segunda pantalla,
+  que te va corrigiendo durante una práctica contra una vuelta de referencia
+  (por ejemplo un CSV de Garage 61 importado, que la app ya sabía leer).
+  - **Mapa que te sigue**, estilo Google Maps: se ve sólo el pedazo de pista
+    donde vas, sobre la foto satelital encendida por defecto, girando con el
+    auto (o con el norte arriba, es un botón). Se elige cuánta pista mostrar:
+    120, 220, 400 u 800 metros.
+  - **La referencia dibujada adelante**, con las zonas de freno en rojo y las
+    de acelerador a fondo en verde, para ver dónde tenés que frenar y dónde
+    abrir, no sólo que te lo digan.
+  - **Tu recorrido pintándose atrás** en amarillo, que se borra al cruzar meta.
+  - **Avisos curva por curva** con lo que hiciste distinto: punto de frenada,
+    marcha, velocidad de ápice y punto de aceleración. El aviso llega ~2,5
+    segundos ANTES del punto de frenada de esa curva, que es lo único que lo
+    hace útil; medido sobre vueltas reales en Snetterton, eso da entre 100 y
+    150 metros de anticipación.
+  - **Voz opcional** (apagada por defecto): lee el aviso con el sintetizador de
+    Windows. No hay ningún modelo de IA ni conexión a un servicio: las reglas
+    son umbrales sobre la telemetría y las frases están escritas a mano, con
+    varias por regla para que no repita siempre lo mismo.
+  - **Alcance elegible**: pista completa, un sector o una curva puntual.
+  - Las curvas salen del volante de la propia referencia, así que agrupan los
+    complejos (una chicana es una sola curva) y no coinciden necesariamente con
+    la numeración oficial del circuito. Cuando la pista está en la base de
+    Lovely, el aviso usa el nombre real de la curva.
+  - Si la referencia es de otra pista, la vista lo avisa en vez de dar consejos
+    que no aplican.
+
+### Cambiado
+- El emparejado de pistas con la base de curvas de Lovely pasó a un módulo
+  compartido, así el análisis y el coach usan exactamente el mismo criterio.
+
+## [0.11.0] - 2026-08-22
+
+### Agregado
+- El mapa del análisis nace con la orientación real del circuito. iRacing
+  informa en cada sesión hacia dónde está girada la pista respecto del norte
+  (`TrackNorthOffset`), y ahora el mapa usa ese dato en vez de arrancar siempre
+  con el norte arriba: Spa nace a 268°, Oschersleben a 252° y Lime Rock a 336°.
+  Las pistas nuevas ya no aparecen torcidas.
+- Botón "Restablecer original" al lado del control de rotación: borra tu ajuste
+  manual de ese circuito y vuelve a la orientación que informa iRacing.
+
+### Cambiado
+- La rotación que ajustás a mano sigue mandando sobre la automática y se sigue
+  guardando por circuito, así que los mapas que ya tenías derechos no se mueven.
+  La automática se aplica sólo donde nunca tocaste la rotación. Internamente ya
+  se distingue "sin configurar" de "configurado en 0", que es lo que le permite
+  al botón de restablecer saber a qué volver.
+
+## [0.10.0] - 2026-08-22
+
+### Agregado
+- Semáforo de incidentes en el Relative. Al lado del nombre de cada rival
+  aparece un chip con los incidentes que lleva en esta sesión: verde hasta 1,
+  amarillo desde 2 y rojo desde 4 (o antes, si la sesión tiene un límite bajo y
+  ya se comió la mitad). Sirve para saber de un vistazo con quién no conviene
+  pelear una curva. Se puede apagar desde la configuración del overlay.
+- El número es el de ESTA sesión, no el historial del piloto: iRacing no
+  publica el contador de los rivales. `CurDriverIncidentCount` viene en -1 para
+  todos menos para vos (verificado en 25 sesiones propias), así que el dato sale
+  de la tabla de resultados de la sesión, que sí trae el número por auto.
+
+## [0.9.0] - 2026-08-22
+
+### Agregado
+- Suspensión y frenos en el análisis. En las sesiones abiertas desde un `.ibt`
+  aparecen tres gráficos nuevos y una tarjeta de resumen que muestran lo que la
+  velocidad y los pedales no dejan ver: en qué curva bloqueaste una rueda y
+  cuál, dónde te comiste un piano o tocaste el fondo, y con qué reparto real
+  entre eje delantero y trasero estás frenando.
+  - El bloqueo se mide comparando la velocidad de cada rueda contra la del auto,
+    y sólo cuenta cuando se sostiene ~50 ms: un pico suelto es ruido. Medido en
+    sesiones propias, el MX-5 (con ABS) marca 2 bloqueos por vuelta en
+    Oschersleben y el F4 (sin ABS) marca 6 en Snetterton, todos en las mismas
+    curvas vuelta a vuelta.
+  - Los golpes salen de la velocidad del amortiguador, que es la que delata el
+    impacto: en Oschersleben el más fuerte fue de 1,40 m/s en la rueda trasera
+    derecha, siempre en el mismo punto de pista.
+  - El reparto de frenada es el medido en la línea, no el del setup: 64%
+    delantero en el MX-5, 57% en el F4. Los autos que informan la misma presión
+    en los dos ejes (verificado en el BMW M2 G87) lo dicen en vez de mostrar un
+    50% inventado.
+  - Las sesiones grabadas en vivo por la app todavía no guardan estos canales,
+    así que el panel aparece sólo al abrir un `.ibt`.
+
 ## [0.8.0] - 2026-08-22
 
 ### Agregado

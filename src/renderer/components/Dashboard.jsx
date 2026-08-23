@@ -19,6 +19,7 @@ import { ProgressView } from "./ProgressView.jsx";
 import { HotkeysView } from "./HotkeysView.jsx";
 import { LogView } from "./LogView.jsx";
 import { ChangelogView } from "./ChangelogView.jsx";
+import { CoachView } from "./CoachView.jsx";
 import { DeltaBar } from "./DeltaBar.jsx";
 import { SectorTimes } from "./SectorTimes.jsx";
 import { Button } from "./ui/button.jsx";
@@ -247,7 +248,7 @@ export function Dashboard() {
           <span className="font-bold tracking-tight text-sm">iFly</span>
         </div>
         <div className="flex items-center gap-1 ml-3">
-          {[["overlays", "Overlays"], ["analysis", "Análisis"], ["progreso", "Progreso"], ["hotkeys", "Hotkeys"], ["diagnostico", "Diagnóstico"]].map(([v, label]) => (
+          {[["overlays", "Overlays"], ["analysis", "Análisis"], ["coach", "Coach"], ["progreso", "Progreso"], ["hotkeys", "Hotkeys"], ["diagnostico", "Diagnóstico"]].map(([v, label]) => (
             <button
               key={v}
               onClick={() => setView(v)}
@@ -277,6 +278,8 @@ export function Dashboard() {
         <ChangelogView onBack={() => setView("overlays")} />
       ) : view === "analysis" ? (
         <AnalysisView />
+      ) : view === "coach" ? (
+        <CoachView />
       ) : view === "progreso" ? (
         <ProgressView />
       ) : view === "hotkeys" ? (
@@ -1236,6 +1239,7 @@ const SETTING_LABELS = {
     showIRating: "Mostrar iRating",
     showCarNumber: "Mostrar número de auto",
     showFlag: "Mostrar bandera (país del club)",
+    showIncidents: "Semáforo de incidentes del rival",
     showLaps: "Mostrar last lap",
     rowsAbove: "Rivales arriba",
     rowsBelow: "Rivales abajo",
@@ -1513,6 +1517,7 @@ function AppearanceSettings({ overlayId, overlayKey, settings = {}, onChange }) 
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showIRating" value={settings.showIRating} onChange={onChange} />
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showCarNumber" value={settings.showCarNumber} onChange={onChange} />
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showFlag" value={settings.showFlag} onChange={onChange} />
+          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showIncidents" value={settings.showIncidents} onChange={onChange} />
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showLaps" value={settings.showLaps} onChange={onChange} />
           {settings.showFlag !== false && (
             <CountryField overlayId={overlayId} value={settings.playerCountry} onChange={onChange} />

@@ -2,11 +2,12 @@ import React, { useEffect, useMemo, useState, useCallback, useRef } from "react"
 import { Trash2, Trophy, Clock, Activity, Gauge, Upload, FolderOpen, RotateCcw, Pencil, Check, X, Search, ExternalLink, Maximize2, Crop } from "lucide-react";
 import { analyzeLap, bestLapOf, consistency, sectorTimes, sessionOptimal, cornerConsistency, resampleSamples, drivingMetrics } from "../lib/coach.js";
 import { isComparableReference } from "../lib/session-match.js";
-import { buildTrackSegments, fitSimilarity, applySim, fitAffine, applyAffine, speedColor } from "../lib/track-render.js";
+import { buildTrackSegments, fitSimilarity, applySim, fitAffine, applyAffine, speedColor, autoMapRotation } from "../lib/track-render.js";
+import { hasChassisData, chassisSeries, chassisSummary, WHEEL_LABEL } from "../lib/chassis.js";
 import { ShareCard } from "./ShareCard.jsx";
 import { buildCardModel, FORMATS, shareMapBox, countShareCharts, sanitizeFilename } from "../lib/share-card-data.js";
 import { svgToPngBlob } from "../lib/render-svg-to-png.js";
-import lovelyTracks from "../assets/lovely-tracks.json"; // curvas + sectores por pista (© Lovely Sim Racing, CC BY-NC-SA)
+import { findLovelyTrack } from "../lib/lovely-tracks.js"; // curvas + sectores por pista (© Lovely Sim Racing, CC BY-NC-SA)
 
 // Ancho de asfalto (metros) para engrosar el eje de OSM y dibujar ambos bordes.
 // OSM no guarda el ancho de pista; ~14 m es un valor típico de circuito de GP y
@@ -45,6 +46,12 @@ const tKmh = (v) => (v != null ? `${Math.round(v)}` : "—");
 const tDeg = (v) => (v != null ? `${Math.round((v * 180) / Math.PI)}°` : "—");
 const tRpm = (v) => (v != null ? `${Math.round(v)}` : "—");
 const tSec = (v) => (v != null ? `${v >= 0 ? "+" : ""}${v.toFixed(2)}` : "—");
+// Colores de las 4 ruedas en el gráfico de suspensión (orden LF, RF, LR, RR).
+const SUSP_COLORS = ["rgb(125,211,252)", "rgb(52,211,153)", "rgb(234,179,8)", "rgb(244,114,182)"];
+const tBar = (v) => (v != null ? `${Math.round(v)}` : "—");
+const tMm = (v) => (v != null ? `${Math.round(v * 1000)}` : "—");
+const tVel = (v) => (v != null ? v.toFixed(2) : "—");
+const pctLabel = (f) => `${Math.round(f * 100)}%`;
 
 // Tag corto de tipo de sesión: Q (qualy), R (race), P (practice/test).
 function stTag(sessionType) {
@@ -388,7 +395,7 @@ const TrackLayer = React.memo(function TrackLayer({ segs, segsRef = [], refD, sh
 
 // Mapa interactivo: zoom (rueda / +−), pan (arrastrar), toggle de trazadas y
 // marcador del instante bajo el cursor (vinculado a los gráficos de telemetría).
-function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, outlineD, corners, fill = false, highlightRange = null, roadWidth = 0, outlineMode = null, tiles = null, attribution = null, scrim = false, gripLap = null, gripRef = null, rot = 0, onRotChange = null }) {
+function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, outlineD, corners, fill = false, highlightRange = null, roadWidth = 0, outlineMode = null, tiles = null, attribution = null, scrim = false, gripLap = null, gripRef = null, rot = 0, onRotChange = null, onRotReset = null }) {
   const BV = baseView || { x: 0, y: 0, w: 1000, h: 380 };
   const W = BV.w, H = BV.h, X0 = BV.x, Y0 = BV.y;
   const [showLap, setShowLap] = useState(true);
@@ -590,6 +597,15 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
                 className="w-20 accent-sky-400"
               />
               <span className="text-[10px] font-mono tabular-nums w-7 text-right text-muted-foreground">{rot}°</span>
+              {onRotReset && (
+                <button
+                  onClick={onRotReset}
+                  className="px-1.5 py-0.5 rounded-md text-[10px] font-semibold hover:bg-white/10 text-muted-foreground"
+                  title="Volver a la orientación original del circuito (la que informa iRacing)"
+                >
+                  Restablecer original
+                </button>
+              )}
             </div>
           )}
           <button onClick={() => zoomAt(0.5, 0.5, 0.7)} className="px-2 py-0.5 rounded-md text-xs font-bold hover:bg-white/10">+</button>
@@ -788,13 +804,25 @@ function DrivingMetricsCard({ m, hasRef }) {
 // Rotación preferida del mapa POR CIRCUITO, persistida en localStorage: girás
 // una vez y ese circuito queda siempre con esa orientación (análisis y tarjeta).
 const ROT_STORE_KEY = "ifly.trackRotation";
+// Devuelve null cuando el circuito NO tiene rotación manual guardada. Es
+// distinto de 0: 0 es "el usuario eligió norte arriba" y null es "que decida el
+// automático". Sin esa distinción el botón de restablecer no tendría a qué
+// volver.
 function loadTrackRot(trackKey) {
-  if (!trackKey) return 0;
+  if (!trackKey) return null;
   try {
     const m = JSON.parse(localStorage.getItem(ROT_STORE_KEY) || "{}");
     const v = m[trackKey];
-    return isFinite(v) ? ((Math.round(v) % 360) + 360) % 360 : 0;
-  } catch (_) { return 0; }
+    return isFinite(v) ? ((Math.round(v) % 360) + 360) % 360 : null;
+  } catch (_) { return null; }
+}
+function clearTrackRot(trackKey) {
+  if (!trackKey) return;
+  try {
+    const m = JSON.parse(localStorage.getItem(ROT_STORE_KEY) || "{}");
+    delete m[trackKey];
+    localStorage.setItem(ROT_STORE_KEY, JSON.stringify(m));
+  } catch (_) {}
 }
 function saveTrackRot(trackKey, deg) {
   if (!trackKey) return;
@@ -942,14 +970,23 @@ export function AnalysisView() {
   const [shareCharts, setShareCharts] = useState(["speed"]); // gráficos elegidos: speed | pedals
   // Rotación del mapa (grados 0..359): UN estado por circuito, compartido por el
   // mapa del análisis y la tarjeta, y persistido por trackKey.
-  const [trackRot, setTrackRotState] = useState(0);
+  // `null` = sin ajuste manual → manda la orientación automática del YAML.
+  const [trackRotManual, setTrackRotManual] = useState(null);
   const rotKey = session ? (session.trackKey || session.track || null) : null;
-  useEffect(() => { setTrackRotState(loadTrackRot(rotKey)); }, [rotKey]);
+  useEffect(() => { setTrackRotManual(loadTrackRot(rotKey)); }, [rotKey]);
+  const autoRot = useMemo(() => autoMapRotation(session?.trackNorthOffset), [session]);
+  const trackRot = trackRotManual != null ? trackRotManual : (autoRot ?? 0);
   const setTrackRot = (d) => {
     const v = ((Math.round(d) % 360) + 360) % 360;
-    setTrackRotState(v);
+    setTrackRotManual(v);
     saveTrackRot(rotKey, v);
   };
+  const resetTrackRot = useCallback(() => {
+    setTrackRotManual(null);
+    clearTrackRot(rotKey);
+  }, [rotKey]);
+  // Sólo hay algo que restablecer si el usuario tocó la rotación de esta pista.
+  const rotIsManual = trackRotManual != null;
   const [displayName, setDisplayName] = useState("");
   const [shareMsg, setShareMsg] = useState(null); // feedback efímero de acciones
   const [shareBusy, setShareBusy] = useState(false);
@@ -1066,44 +1103,7 @@ export function AnalysisView() {
   // Datos de pista de Lovely (curvas + sectores reales) por nombre de circuito.
   const trackData = useMemo(() => {
     if (!session) return null;
-    const nrm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-    // Quita prefijos genéricos ("circuit de", "autódromo", etc.) que hacen que
-    // nombres distintos colisionen (ej. "Circuit de Spa" vs "Circuit de
-    // Barcelona" comparten "circuitde" → matcheaba mal). Solo prefijo, seguro.
-    const GEN = ["circuitde", "circuito", "circuit", "autodromonazionale", "autodromointernacional", "autodromo", "autodrome", "the"];
-    const strip = (s) => { for (const p of GEN) if (s.startsWith(p)) return s.slice(p.length); return s; };
-    // Usamos el nombre interno con config (trackKey) si está; si no, el display.
-    const target = strip(nrm(session.trackKey || session.track));
-    if (!target) return null;
-    const tracks = lovelyTracks.tracks;
-    if (tracks[target]) return tracks[target];
-    // Match tolerante. Las claves de Lovely varían el orden ("snetterton circuit
-    // 300" vs "snetterton 300 circuit"), así que combinamos: prefijo común ×3
-    // (prioriza la base distintiva, ej "snetterton") + subsecuencia común (LCS,
-    // desambigua la config: "2000 full" vs "2000 moto") + bonus por config igual.
-    const cp = (a, b) => { let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++; return i; };
-    const lcs = (a, b) => {
-      const nA = a.length, nB = b.length;
-      let prev = new Array(nB + 1).fill(0);
-      for (let i = 1; i <= nA; i++) {
-        const cur = new Array(nB + 1).fill(0);
-        for (let j = 1; j <= nB; j++) cur[j] = a[i - 1] === b[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], cur[j - 1]);
-        prev = cur;
-      }
-      return prev[nB];
-    };
-    const digits = (s) => (s.match(/\d+/g) || []);
-    const dt = digits(target);
-    let best = null, bestScore = 0;
-    for (const kRaw in tracks) {
-      const k = strip(kRaw);
-      let score = cp(k, target) * 3 + lcs(k, target);
-      if (k.includes(target) || target.includes(k)) score += Math.min(k.length, target.length);
-      const dk = digits(k);
-      if (dt.length && dk.length && dt.some((d) => dk.includes(d))) score += 50;
-      if (score > bestScore) { bestScore = score; best = tracks[kRaw]; }
-    }
-    return bestScore >= 12 ? best : null;
+    return findLovelyTrack(session.trackKey, session.track);
   }, [session]);
   // Límites de sector reales (de Lovely) o el fallback de la sesión.
   const realSectorPcts = useMemo(() => {
@@ -1365,7 +1365,25 @@ export function AnalysisView() {
     // Se indexa por bucket igual que los mapPath, así el mapa lo pinta directo.
     const grip = buildGripPct(lap.samples, best && best !== lap ? best.samples : null);
 
-    return { n, speedLap, speedBest, throttle, brake, steer, rpm, delta, throttleRef, brakeRef, steerRef, rpmRef, hasRef, spMin, spMax, dMax, stMax, rpmMax, mapPath, mapPathRef, gPts, hasG, gMax, hasMap: mapPath != null, gripLap: grip.lap, gripRef: grip.ref };
+    // Suspensión y frenos (sólo en vueltas que traen los canales de chasis:
+    // hoy las abiertas desde un .ibt). Series por bin + resumen de eventos.
+    let chassis = null;
+    if (hasChassisData(lap.samples)) {
+      const cs = chassisSeries(lap.samples);
+      const summary = chassisSummary(lap.samples);
+      const pressVals = [...cs.pressF, ...cs.pressR].filter((v) => v != null && isFinite(v));
+      const deflVals = cs.defl.flat().filter((v) => v != null && isFinite(v));
+      chassis = {
+        ...cs,
+        summary,
+        pressMax: pressVals.length ? Math.max(...pressVals) : 1,
+        deflMin: deflVals.length ? Math.min(...deflVals) : 0,
+        deflMax: deflVals.length ? Math.max(...deflVals) : 1,
+        slipMax: Math.max(0.3, ...cs.slip.filter((v) => v != null)),
+      };
+    }
+
+    return { n, speedLap, speedBest, throttle, brake, steer, rpm, delta, throttleRef, brakeRef, steerRef, rpmRef, hasRef, spMin, spMax, dMax, stMax, rpmMax, mapPath, mapPathRef, gPts, hasG, gMax, hasMap: mapPath != null, gripLap: grip.lap, gripRef: grip.ref, chassis };
   }, [lap, best, analysis]);
 
   // Mapa con la FORMA REAL del circuito (SVG de iRacing): sampleamos el path por
@@ -2139,6 +2157,7 @@ export function AnalysisView() {
                       setShowRefLine={setShowRefLine}
                       mapRot={trackRot}
                       onMapRotChange={setTrackRot}
+                      onMapRotReset={rotIsManual ? resetTrackRot : null}
                     />
                   </>
                 )}
@@ -2201,6 +2220,7 @@ export function AnalysisView() {
               onSelectRange={(r) => { setZoomRange(r); setRangeTool(false); }}
               mapRot={trackRot}
               onMapRotChange={setTrackRot}
+              onMapRotReset={rotIsManual ? resetTrackRot : null}
             />
           </div>
         </div>
@@ -2407,7 +2427,100 @@ export function AnalysisView() {
 // Mapa + gráficos de telemetría (con hover vinculado). `split` = layout a dos
 // mitades (mapa izq / gráficos der) para la vista de análisis detallado; si no,
 // apilado (mapa arriba, gráficos abajo) para la vista normal.
-function AnalysisDetail({ charts, svgMap, corners, hoverIdx, setHoverIdx, showLapLine, setShowLapLine, showRefLine, setShowRefLine, split = false, range = null, selecting = false, onSelectRange, mapRot = 0, onMapRotChange = null }) {
+// Resumen de suspensión y frenos de la vuelta: bloqueos, golpes, reparto de
+// frenada medido y cuánto recorrido usó cada amortiguador.
+function ChassisCard({ summary }) {
+  if (!summary) return null;
+  const { lockups, impacts, balance, travel } = summary;
+  const maxRange = Math.max(0.001, ...travel.map((t) => t.range));
+  return (
+    <div className="rounded-lg border border-border bg-card/40 p-3 space-y-3">
+      <div className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Suspensión y frenos</div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <div className="text-[10px] uppercase tracking-widest text-muted-foreground/70">Bloqueos de rueda</div>
+          {lockups.length === 0 ? (
+            <div className="text-sm text-muted-foreground/60">Ninguno</div>
+          ) : (
+            <div className="space-y-0.5 mt-0.5">
+              {lockups.slice(0, 3).map((l, i) => (
+                <div key={i} className="flex items-baseline gap-1.5 text-[11px]">
+                  <span className="font-mono font-semibold tabular-nums" style={{ color: l.peak > 0.4 ? "rgb(239,68,68)" : "rgb(234,179,8)" }}>
+                    {Math.round(l.peak * 100)}%
+                  </span>
+                  <span className="text-muted-foreground">{WHEEL_LABEL[l.wheel] || "?"}</span>
+                  <span className="ml-auto font-mono text-muted-foreground/60 tabular-nums">{pctLabel(l.pct)} de vuelta</span>
+                </div>
+              ))}
+              {lockups.length > 3 && <div className="text-[10px] text-muted-foreground/50">+{lockups.length - 3} más</div>}
+            </div>
+          )}
+        </div>
+
+        <div>
+          <div className="text-[10px] uppercase tracking-widest text-muted-foreground/70">Golpes más fuertes</div>
+          {impacts.length === 0 ? (
+            <div className="text-sm text-muted-foreground/60">Vuelta limpia</div>
+          ) : (
+            <div className="space-y-0.5 mt-0.5">
+              {impacts.slice(0, 3).map((g, i) => (
+                <div key={i} className="flex items-baseline gap-1.5 text-[11px]">
+                  <span className="font-mono font-semibold tabular-nums text-sky-300">{tVel(g.vel)} m/s</span>
+                  <span className="text-muted-foreground">{WHEEL_LABEL[g.wheel] || "?"}</span>
+                  <span className="ml-auto font-mono text-muted-foreground/60 tabular-nums">{pctLabel(g.pct)} de vuelta</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div>
+        <div className="text-[10px] uppercase tracking-widest text-muted-foreground/70 mb-1">Reparto de frenada medido</div>
+        {!balance ? (
+          <div className="text-sm text-muted-foreground/60">Sin frenadas fuertes en esta vuelta</div>
+        ) : balance.flat ? (
+          <div className="text-[11px] text-muted-foreground/70">
+            Este auto informa la misma presión de línea adelante y atrás ({tBar(balance.peakFront)} bar de pico), así que el reparto real no se puede medir.
+          </div>
+        ) : (
+          <>
+            <div className="flex h-3 rounded overflow-hidden border border-border/60">
+              <div style={{ width: `${balance.front * 100}%`, background: "rgb(125,211,252)" }} />
+              <div style={{ width: `${(1 - balance.front) * 100}%`, background: "rgb(168,85,247)" }} />
+            </div>
+            <div className="flex justify-between text-[10px] mt-0.5">
+              <span className="text-sky-300 font-mono">{Math.round(balance.front * 100)}% delantero · pico {tBar(balance.peakFront)} bar</span>
+              <span className="text-purple-300 font-mono">{Math.round((1 - balance.front) * 100)}% trasero · pico {tBar(balance.peakRear)} bar</span>
+            </div>
+          </>
+        )}
+      </div>
+
+      <div>
+        <div className="text-[10px] uppercase tracking-widest text-muted-foreground/70 mb-1">Recorrido usado por amortiguador</div>
+        <div className="space-y-1">
+          {travel.map((t, w) => (
+            <div key={w} className="flex items-center gap-2">
+              <span className="text-[10px] text-muted-foreground w-16 shrink-0">{WHEEL_LABEL[w]}</span>
+              <div className="flex-1 h-2 rounded bg-white/5 overflow-hidden">
+                <div className="h-full rounded" style={{ width: `${(t.range / maxRange) * 100}%`, background: "rgb(52,211,153)" }} />
+              </div>
+              <span className="text-[10px] font-mono tabular-nums text-muted-foreground w-12 text-right">{tMm(t.range)} mm</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="text-[9px] text-muted-foreground/50">
+        Más recorrido = más compresión. Los golpes son la velocidad del amortiguador: pianos, baches y tocar el fondo.
+      </div>
+    </div>
+  );
+}
+
+function AnalysisDetail({ charts, svgMap, corners, hoverIdx, setHoverIdx, showLapLine, setShowLapLine, showRefLine, setShowRefLine, split = false, range = null, selecting = false, onSelectRange, mapRot = 0, onMapRotChange = null, onMapRotReset = null }) {
   // Path strings de las series MEMOIZADOS: son O(800) de armado de string y NO
   // dependen de `hoverIdx`. Sin este memo se reconstruían las ~11 series en CADA
   // mousemove (setHoverIdx re-renderiza AnalysisView entero) → stutter. Con deps
@@ -2427,6 +2540,12 @@ function AnalysisDetail({ charts, svgMap, corners, hoverIdx, setHoverIdx, showLa
       steer: sp(charts.steer, -charts.stMax, charts.stMax),
       rpmRef: sp(charts.rpmRef, 0, charts.rpmMax),
       rpm: sp(charts.rpm, 0, charts.rpmMax),
+      ...(charts.chassis ? {
+        slip: sp(charts.chassis.slip, 0, charts.chassis.slipMax),
+        pressF: sp(charts.chassis.pressF, 0, charts.chassis.pressMax),
+        pressR: sp(charts.chassis.pressR, 0, charts.chassis.pressMax),
+        defl: charts.chassis.defl.map((d) => sp(d, charts.chassis.deflMin, charts.chassis.deflMax)),
+      } : {}),
     };
   }, [charts, range]);
   if (!charts) return null;
@@ -2452,6 +2571,7 @@ function AnalysisDetail({ charts, svgMap, corners, hoverIdx, setHoverIdx, showLa
       highlightRange={range}
       rot={mapRot}
       onRotChange={onMapRotChange}
+      onRotReset={onMapRotReset}
     />
   ) : null;
 
@@ -2503,6 +2623,31 @@ function AnalysisDetail({ charts, svgMap, corners, hoverIdx, setHoverIdx, showLa
         {showRefLine && charts.hasRef && <path d={P.rpmRef} fill="none" stroke="rgba(129,140,248,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
         {showLapLine && <path d={P.rpm} fill="none" stroke="rgb(129,140,248)" strokeWidth="2" />}
       </Chart>
+
+      {charts.chassis && (
+        <>
+          <Chart title="Bloqueo de rueda (% de patinaje frenando)" {...cp}
+            tooltip={[{ label: "Patinaje", value: tPct(atv(charts.chassis.slip, hoverIdx)), color: "rgb(239,68,68)" }]}>
+            <path d={P.slip} fill="none" stroke="rgb(239,68,68)" strokeWidth="2" />
+          </Chart>
+
+          <Chart title="Presión de freno (bar) — delantero vs trasero" {...cp}
+            tooltip={[
+              { label: "Delantero", value: tBar(atv(charts.chassis.pressF, hoverIdx)), color: "rgb(125,211,252)" },
+              { label: "Trasero", value: tBar(atv(charts.chassis.pressR, hoverIdx)), color: "rgb(168,85,247)" },
+            ]}>
+            <path d={P.pressF} fill="none" stroke="rgb(125,211,252)" strokeWidth="2" />
+            <path d={P.pressR} fill="none" stroke="rgb(168,85,247)" strokeWidth="1.7" />
+          </Chart>
+
+          <Chart title="Suspensión — recorrido por rueda (mm)" {...cp}
+            tooltip={charts.chassis.defl.map((d, w) => ({ label: WHEEL_LABEL[w], value: tMm(atv(d, hoverIdx)), color: SUSP_COLORS[w] }))}>
+            {P.defl.map((d, w) => <path key={w} d={d} fill="none" stroke={SUSP_COLORS[w]} strokeWidth="1.6" />)}
+          </Chart>
+
+          <ChassisCard summary={charts.chassis.summary} />
+        </>
+      )}
 
       <div className="text-[10px] text-muted-foreground/60">
         Eje X = distancia de la vuelta (inicio → meta). Línea punteada = referencia. Pasá el mouse por un gráfico para ver el punto en el mapa.
