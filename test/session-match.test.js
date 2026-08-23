@@ -77,3 +77,14 @@ test('sameTrack sigue tolerando prefijos genéricos y variantes de escritura', a
   assert.equal(sameTrack('Autodromo Nazionale Monza', 'monza full'), true);
   assert.equal(sameTrack('monza full', 'Silverstone Circuit'), false);
 });
+
+// Regresión: el coach avisaba "la referencia es de otra pista" comparando los
+// nombres tal cual. iRacing nombra el mismo circuito de varias formas y el CSV
+// de Garage 61 le agrega la config entre paréntesis.
+test('sameTrackAny une los nombres del mismo circuito con y sin config', async () => {
+  const { sameTrackAny } = await load();
+  const g61 = { track: 'Virginia International Raceway (Full Course)' };
+  const vivo = { track: 'Virginia International Raceway', trackKey: 'virginia 2022 full' };
+  assert.equal(sameTrackAny(g61, vivo), true);
+  assert.equal(sameTrackAny(g61, { track: 'Circuit de Spa-Francorchamps' }), false);
+});

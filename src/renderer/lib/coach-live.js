@@ -51,29 +51,39 @@ export function detectCorners(samples, opts = {}) {
   const minBins = opts.minBins ?? CORNER_MIN_BINS;
   const mergeBins = opts.mergeBins ?? CORNER_MERGE_BINS;
 
-  const steer = new Array(n).fill(null);
+  const steer = new Array(n).fill(null);  // con signo
   const vals = [];
   for (let i = 0; i < n; i++) {
     const s = samples[i];
-    if (s && s.st != null && isFinite(s.st)) { steer[i] = Math.abs(s.st); vals.push(steer[i]); }
+    if (s && s.st != null && isFinite(s.st)) { steer[i] = s.st; vals.push(Math.abs(s.st)); }
   }
   if (vals.length < 20) return [];
   const ref = percentile(vals, 0.9);
   const thr = Math.max(STEER_MIN_RAD, ref * (opts.frac ?? STEER_FRAC));
 
+  // Un tramo se corta por dos motivos: porque el volante se soltó lo suficiente
+  // (hueco > mergeBins) o porque CAMBIÓ DE LADO. Lo segundo es lo que separa
+  // una ese en sus curvas: sin eso, en Virginia toda la zona de eses salía como
+  // una sola "curva" de 1100 m y el consejo no se podía anclar a nada.
   const runs = [];
-  let start = null, gap = 0;
+  let start = null, gap = 0, sign = 0, last = null;
+  const close = (end) => { if (start != null && end >= start) runs.push([start, end]); start = null; gap = 0; sign = 0; };
   for (let i = 0; i < n; i++) {
-    const on = steer[i] != null && steer[i] >= thr;
+    const v = steer[i];
+    const on = v != null && Math.abs(v) >= thr;
     if (on) {
+      const sg = v > 0 ? 1 : -1;
+      if (start != null && sign !== 0 && sg !== sign) close(last != null ? last : i - 1);
       if (start == null) start = i;
+      sign = sg;
+      last = i;
       gap = 0;
     } else if (start != null) {
       gap++;
-      if (gap > mergeBins) { runs.push([start, i - gap]); start = null; gap = 0; }
+      if (gap > mergeBins) close(last != null ? last : i - gap);
     }
   }
-  if (start != null) runs.push([start, n - 1]);
+  if (start != null) close(last != null ? last : n - 1);
 
   return runs
     .filter(([a, b]) => b - a + 1 >= minBins)

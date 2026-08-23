@@ -41,6 +41,18 @@ test('detectCorners ignora correcciones cortas y une tramos vecinos', async () =
   assert.equal(detectCorners(t).length, 1);
 });
 
+test('detectCorners parte una ese en sus curvas al cambiar de lado el volante', async () => {
+  const { detectCorners } = await load();
+  const s = synthLap();
+  // Izquierda 60-80, derecha 81-100, sin soltar el volante en el medio.
+  for (let i = 60; i <= 80; i++) s[i].st = 0.5;
+  for (let i = 81; i <= 100; i++) s[i].st = -0.5;
+  const c = detectCorners(s);
+  assert.equal(c.length, 2);
+  assert.equal(c[0].i1, 80);
+  assert.equal(c[1].i0, 81);
+});
+
 test('detectCorners no inventa curvas en una vuelta sin datos de volante', async () => {
   const { detectCorners } = await load();
   assert.deepEqual(detectCorners([]), []);

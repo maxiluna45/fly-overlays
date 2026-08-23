@@ -6,6 +6,23 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.12.2] - 2026-08-23
+
+### Corregido
+- El coach avisaba "la referencia es de otra pista" estando en la pista
+  correcta. Comparaba los nombres tal cual, y el mismo circuito llega escrito de
+  varias formas: la vuelta de Garage 61 decía "Virginia International Raceway
+  (Full Course)" y la sesión en vivo "Virginia International Raceway". Ahora usa
+  la misma regla tolerante con la que el Análisis decide si una vuelta sirve de
+  referencia.
+- El coach detectaba muy pocas curvas en los circuitos con eses. Un tramo se
+  cortaba sólo cuando soltabas el volante, así que una ese entera contaba como
+  una sola curva: en Virginia salían 5 curvas y la primera medía 1100 metros,
+  imposible de usar para anclar un consejo. Ahora el tramo también se corta
+  cuando el volante cambia de lado. Virginia pasa de 5 a 14 curvas (17 reales),
+  Oschersleben de 8 a 12 (14 reales) y Snetterton de 10 a 12, que son las 12 que
+  tiene.
+
 ## [0.12.1] - 2026-08-23
 
 ### Corregido

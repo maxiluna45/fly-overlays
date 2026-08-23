@@ -3,6 +3,7 @@ import { Upload, Volume2, VolumeX, Compass, Crosshair, MapPin } from "lucide-rea
 import { resampleSamples } from "../lib/coach.js";
 import { detectCorners, lapFacts, cornerFacts, compareCorner, bestAdvice, announcePct, isWithinLead, anchorPct } from "../lib/coach-live.js";
 import { findLovelyTrack, lovelyCorners, labelForRange } from "../lib/lovely-tracks.js";
+import { sameTrackAny } from "../lib/session-match.js";
 
 // Coach en vivo: mapa que sigue al auto (estilo Google Maps) sobre la foto
 // satelital, con la referencia dibujada adelante y tu recorrido pintándose
@@ -101,7 +102,7 @@ export function CoachView() {
 
   // ── Estado en vivo (se re-renderiza a ~30 Hz) ───────────────────────────
   const [tick, setTick] = useState(0);
-  const [status, setStatus] = useState({ connected: false, onTrack: false, track: null, car: null });
+  const [status, setStatus] = useState({ connected: false, onTrack: false, track: null, trackKey: null, car: null });
   const [advice, setAdvice] = useState(null);      // aviso grande (anticipado)
   const [lastNote, setLastNote] = useState(null);  // qué pasó en la curva que acabás de hacer
 
@@ -321,7 +322,7 @@ export function CoachView() {
       setStatus((prev) => (
         prev.connected === true && prev.onTrack === !!f.onTrack && prev.track === f.track
           ? prev
-          : { connected: true, onTrack: !!f.onTrack, track: f.track, car: f.car }
+          : { connected: true, onTrack: !!f.onTrack, track: f.track, trackKey: f.trackKey, car: f.car }
       ));
       setTick((t) => (t + 1) % 1e6);
     });
@@ -398,6 +399,13 @@ export function CoachView() {
     const h = w * 0.62;
     return { x: car.x - w / 2, y: car.y - h / 2, w, h };
   }, [geo, car?.x, car?.y, spanM]);
+
+  // ¿La referencia es de otra pista? Se compara con la misma regla tolerante
+  // que usa el Análisis para decidir si una vuelta sirve de referencia: iRacing
+  // nombra el mismo circuito de varias formas ("Virginia International Raceway"
+  // vs "Virginia International Raceway (Full Course)" vs "virginia 2022 full"),
+  // y comparar los strings tal cual daba una falsa alarma.
+  const wrongTrack = !!(refInfo && status.track && !sameTrackAny(refInfo, status));
 
   const rot = headingUp ? -headingDeg : 0;
   const k = view ? view.w / 900 : 1; // grosor de trazos ~constante en pantalla
@@ -499,7 +507,7 @@ export function CoachView() {
         </div>
       )}
 
-      {refInfo && status.track && refInfo.track && refInfo.track !== status.track && (
+      {wrongTrack && (
         <div className="shrink-0 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
           La referencia es de <b>{refInfo.track}</b> y estás en <b>{status.track}</b>. Los avisos no van a tener sentido hasta que elijas una referencia de esta pista.
         </div>
