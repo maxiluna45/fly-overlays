@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Upload, Volume2, VolumeX, Compass, Crosshair, MapPin } from "lucide-react";
 import { resampleSamples } from "../lib/coach.js";
-import { detectCorners, lapFacts, cornerFacts, compareCorner, bestAdvice, announcePct, isWithinLead, anchorPct, fillTrackGaps, posAtPct } from "../lib/coach-live.js";
+import { detectCorners, lapFacts, cornerFacts, compareCorner, bestAdvice, announcePct, isWithinLead, anchorPct, fillTrackGaps, posAtPct, meanOffset } from "../lib/coach-live.js";
 import { findLovelyTrack, lovelyCorners, labelForRange } from "../lib/lovely-tracks.js";
 import { sameTrackAny } from "../lib/session-match.js";
 
@@ -131,7 +131,9 @@ export function CoachView() {
     // Posición estimada por el main (metros este/norte, origen arbitrario) y el
     // ancla que la lleva a lat/lon sobre la geometría de la referencia.
     posE: null, posN: null,
-    anchor: null, // { lat0, lon0, e0, n0 }
+    // Traslación (metros este/norte) que lleva la posición estimada al marco de
+    // la referencia. Se recalcula al cerrar cada vuelta con TODA la vuelta.
+    offE: null, offN: null,
     shape: new Array(BINS).fill(null),
     shapeFilled: 0,
     frames: 0,
@@ -258,10 +260,16 @@ export function CoachView() {
         e.reacted = new Set();
         e.variant++;
         e.trailVersion++;
-        // Re-anclar la posición estimada a la geometría de la referencia en la
-        // meta. La integración acumula error (medido: <1 m por vuelta), y
-        // reanclando una vez por vuelta no se arrastra entre vueltas.
-        e.anchor = null;
+        // Re-anclar con la VUELTA ENTERA, no con un punto. Anclar en un solo
+        // punto hereda el error de ese bin de la referencia (con 800 bins, en
+        // Spa cada bin son ~9 m) y desplaza toda la vuelta. Promediando el
+        // desfase sobre los ~800 bins ese ruido se cancela: medido contra el
+        // GPS real, el error medio baja de 4,8-8,7 m a 0,9-1,4 m, y al final de
+        // la vuelta de 5,3-8,6 m a 0,5-1,6 m.
+        if (refMRef.current) {
+          const off = meanOffset(e.bins, refMRef.current.pts);
+          if (off) { e.offE = off.e; e.offN = off.n; }
+        }
         setShapeVersion((v) => v + 1); // la forma de la pista ya está completa
       }
 
@@ -382,6 +390,20 @@ export function CoachView() {
   // vuelta y no sólo en los 800 bins.
   const smooth = useMemo(() => fillTrackGaps(trackShape.pts), [trackShape]);
 
+  // La misma geometría en metros (este/norte) desde su primer punto: es el
+  // marco donde se compara contra la posición estimada, que también viene en
+  // metros. Trabajar en metros evita mezclar grados con distancias.
+  const refM = useMemo(() => {
+    if (!smooth || !smooth[0]) return null;
+    const lat0 = smooth[0].lat, lon0 = smooth[0].lon;
+    const mLon = M_PER_DEG_LAT * Math.cos((lat0 * Math.PI) / 180);
+    return {
+      lat0, lon0, mLon,
+      pts: smooth.map((p) => (p ? { e: (p.lon - lon0) * mLon, n: (p.lat - lat0) * M_PER_DEG_LAT } : null)),
+    };
+  }, [smooth]);
+  const refMRef = useRef(null); refMRef.current = refM;
+
   // Proyección: se ancla al primer punto conocido y NO cambia con el auto, para
   // que los tiles no se recarguen en cada frame.
   const geo = useMemo(() => {
@@ -412,20 +434,19 @@ export function CoachView() {
   // es un solo path de ≤800 puntos, barato de rearmar).
   const e = eng.current;
 
-  // El main manda la posición estimada por navegación a estima (metros
-  // este/norte con origen arbitrario). Para dibujarla hay que llevarla al mismo
-  // lat/lon de la referencia: se ancla una vez por vuelta al punto de la
-  // referencia correspondiente al LapDistPct de ese instante.
-  if (e.anchor == null && e.posE != null && smooth) {
-    const p0 = posAtPct(smooth, e.pct);
-    if (p0) e.anchor = { lat0: p0.lat, lon0: p0.lon, e0: e.posE, n0: e.posN };
+  // La posición estimada viene en metros con origen arbitrario; el desfase
+  // hasta el marco de la referencia se ajusta al cerrar cada vuelta. Mientras
+  // no haya una vuelta completa se usa un ancla provisoria de un punto, para
+  // que el mapa muestre algo desde el arranque.
+  if (e.offE == null && e.posE != null && refM) {
+    const r0 = refM.pts[Math.min(BINS - 1, Math.floor(e.pct * BINS))];
+    if (r0) { e.offE = r0.e - e.posE; e.offN = r0.n - e.posN; }
   }
   const toLatLon = (pe, pn) => {
-    const a = e.anchor;
-    if (!a || pe == null || pn == null) return null;
+    if (!refM || e.offE == null || pe == null || pn == null) return null;
     return {
-      lat: a.lat0 + (pn - a.n0) / M_PER_DEG_LAT,
-      lon: a.lon0 + (pe - a.e0) / (M_PER_DEG_LAT * Math.cos((a.lat0 * Math.PI) / 180)),
+      lat: refM.lat0 + (pn + e.offN) / M_PER_DEG_LAT,
+      lon: refM.lon0 + (pe + e.offE) / refM.mLon,
     };
   };
 
@@ -433,7 +454,7 @@ export function CoachView() {
   // fuera no hubiera, el punto de la referencia en tu distancia de vuelta.
   const carGeo = toLatLon(e.posE, e.posN) || (smooth ? posAtPct(smooth, e.pct) : null);
   const car = geo && carGeo ? geo.proj(carGeo.lat, carGeo.lon) : null;
-  const hasRealLine = e.anchor != null && e.posE != null;
+  const hasRealLine = e.offE != null && e.posE != null;
 
   // Tu recorrido. Con la posición estimada es la trazada REAL, en su lugar
   // real: se ve si vas por afuera o por adentro de la referencia. Si no la

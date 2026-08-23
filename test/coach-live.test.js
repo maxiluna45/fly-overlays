@@ -174,3 +174,29 @@ test('posAtPct interpola entre bins en vez de saltar', async () => {
   assert.equal(posAtPct(pts, 0.875).lat, 1.5);
   assert.equal(posAtPct(pts, 1).lat, 0);
 });
+
+test('meanOffset promedia el desfase de toda la vuelta y cancela el ruido de un bin', async () => {
+  const { meanOffset } = await load();
+  const n = 100;
+  const ref = new Array(n).fill(null).map((_, i) => ({ e: i, n: 0 }));
+  // La estima está 10 m corrida al este y 5 al norte...
+  const bins = new Array(n).fill(null).map((_, i) => ({ pe: i - 10, pn: -5 }));
+  // ...y un bin de la referencia está mal por 40 m (ruido de bineado).
+  ref[7] = { e: 47, n: 0 };
+  const off = meanOffset(bins, ref);
+  // Un solo bin malo mueve el promedio 0,4 m sobre 100; anclar EN ese bin
+  // habría movido la vuelta entera 40 m.
+  assert.equal(Math.round(off.e * 10) / 10, 10.4);
+  assert.equal(off.n, 5);
+  assert.equal(off.samples, 100);
+});
+
+test('meanOffset no devuelve nada con media vuelta sin datos', async () => {
+  const { meanOffset } = await load();
+  const n = 100;
+  const ref = new Array(n).fill(null).map((_, i) => ({ e: i, n: 0 }));
+  const bins = new Array(n).fill(null);
+  for (let i = 0; i < 40; i++) bins[i] = { pe: i, pn: 0 };
+  assert.equal(meanOffset(bins, ref), null);
+  assert.equal(meanOffset(null, ref), null);
+});

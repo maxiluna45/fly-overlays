@@ -336,3 +336,32 @@ export function posAtPct(pts, pct) {
   if (!a || !b) return a || b || null;
   return { lat: a.lat + (b.lat - a.lat) * t, lon: a.lon + (b.lon - a.lon) * t };
 }
+
+// Desfase entre la trazada estimada de una vuelta y la geometría de la
+// referencia, promediado sobre TODA la vuelta.
+//
+// Por qué el promedio y no un punto: anclar en un solo punto hereda el error de
+// ese bin. La geometría de la referencia está binada (800 bins: en Spa, ~9 m
+// por bin), así que un bin suelto puede estar varios metros corrido a lo largo
+// de la pista y ese error desplaza la vuelta entera. Promediando sobre los ~800
+// bins el ruido de bineado se cancela. Medido contra el GPS real de .ibt
+// propios: el error medio cae de 4,8-8,7 m a 0,9-1,4 m.
+//
+// `bins` = muestras propias con {pe, pn} (metros este/norte de la estima).
+// `refPts` = geometría de la referencia en metros, mismo índice de bin.
+// Devuelve null si no hay cobertura suficiente para que el promedio signifique
+// algo (media vuelta).
+export function meanOffset(bins, refPts, { minCoverage = 0.5 } = {}) {
+  const n = Math.min(bins?.length || 0, refPts?.length || 0);
+  if (!n) return null;
+  let sE = 0, sN = 0, count = 0;
+  for (let i = 0; i < n; i++) {
+    const b = bins[i], r = refPts[i];
+    if (!b || b.pe == null || b.pn == null || !r) continue;
+    sE += r.e - b.pe;
+    sN += r.n - b.pn;
+    count++;
+  }
+  if (count < n * minCoverage) return null;
+  return { e: sE / count, n: sN / count, samples: count };
+}

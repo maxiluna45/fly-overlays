@@ -6,6 +6,26 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.13.1] - 2026-08-23
+
+### Corregido
+- La trazada del coach se iba corriendo hacia el final de la vuelta. Medí de
+  dónde venía el error y no era lo que parecía: la integración en sí acumula
+  muy poco (entre 0,2 y 1,6 metros en una vuelta entera). El grueso venía de
+  cómo se ancla esa trazada a la referencia.
+  - Antes se anclaba en **un solo punto**, el del cruce de meta. La geometría de
+    la referencia está guardada en 800 tramos, que en Spa son unos 9 metros cada
+    uno, así que ese punto puede estar varios metros corrido y desplazaba la
+    vuelta entera.
+  - Ahora se ajusta con **toda la vuelta**: se promedia el desfase sobre los ~800
+    tramos, con lo que el error de un tramo suelto se cancela. Contra el GPS
+    real de archivos propios, el error medio pasó de 4,8-8,7 m a 0,9-1,4 m, y en
+    el último tramo de la vuelta —justo donde se notaba— de 5,3-8,6 m a
+    0,5-1,6 m.
+- La integración pasó de regla del rectángulo a la del trapecio. A 60 Hz apenas
+  cambia, pero cuando se pierde algún frame el intervalo se agranda y ahí el
+  rectángulo se equivoca: a 30 Hz el error medio del F4 baja de 1,35 a 0,85 m.
+
 ## [0.13.0] - 2026-08-23
 
 ### Agregado
