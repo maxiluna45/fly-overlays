@@ -6,6 +6,16 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.12.1] - 2026-08-23
+
+### Corregido
+- El panel se abría completamente en negro al correr la app desde el código con
+  `npm run dev`. Dos módulos del renderer (`session-match.js` y `changelog.js`)
+  seguían escritos en CommonJS y el navegador no puede importar nombres sueltos
+  de un módulo así: el import fallaba antes de montar nada y se llevaba puesta
+  toda la ventana. En la app instalada no se notaba porque el empaquetado sí los
+  convierte. Ahora son módulos ESM como el resto.
+
 ## [0.12.0] - 2026-08-22
 
 ### Agregado

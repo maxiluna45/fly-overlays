@@ -79,4 +79,4 @@ function isComparableReference(candidate, current) {
   return sameCar(candidate.car, current.car);
 }
 
-module.exports = { norm, sameCar, sameTrack, sameTrackAny, trackNames, isComparableReference };
+export { norm, sameCar, sameTrack, sameTrackAny, trackNames, isComparableReference };
