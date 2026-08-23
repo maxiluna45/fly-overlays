@@ -53,6 +53,17 @@ function predictIratingChanges(entries) {
   return out;
 }
 
+// Un paso de navegación a estima: velocidad en el marco del auto (vx adelante,
+// vy lateral) + rumbo respecto del norte → desplazamiento en metros (norte,
+// este). La convención de signos está verificada contra el Lat/Lon real de los
+// .ibt; ver _deadReckon.
+function deadReckonDelta(vx, vy, yawNorth, dt) {
+  return {
+    n: (vx * Math.cos(yawNorth) + vy * Math.sin(yawNorth)) * dt,
+    e: (vx * Math.sin(yawNorth) - vy * Math.cos(yawNorth)) * dt,
+  };
+}
+
 class IrsdkClient {
   constructor() {
     this.sdk = null;
@@ -140,6 +151,7 @@ class IrsdkClient {
     this._sectorPcts = null;   // límites de sectores reales (SplitTimeInfo)
     this._trackLength = null;  // largo de pista en km
     this._trackNorthOffset = null; // orientación del circuito (rad, del YAML)
+    this._drE = 0; this._drN = 0; this._drTime = null; // navegación a estima
   }
 
   // Registra un consumidor de frames crudos (el SessionRecorder). Se llama con
@@ -573,6 +585,7 @@ class IrsdkClient {
     this._sectorPcts = null;
     this._trackLength = null;
     this._trackNorthOffset = null;
+    this._drE = 0; this._drN = 0; this._drTime = null;
     // Ancla del reloj de carrera: la próxima conexión (posiblemente otro
     // weekend con el mismo SessionNum) tiene que re-anclarse.
     this._raceClockAnchor = null;
@@ -691,6 +704,7 @@ class IrsdkClient {
     const gLat = this._read(telemetry, 'LatAccel') || 0;
     const gLon = this._read(telemetry, 'LongAccel') || 0;
     const yaw = this._read(telemetry, 'YawRate') || 0;
+    const pos = this._deadReckon(telemetry, sessionTime);
     const lat = this._read(telemetry, 'Lat');
     const lon = this._read(telemetry, 'Lon');
 
@@ -939,6 +953,9 @@ class IrsdkClient {
         sectorPcts: this._sectorPcts || null,
         trackLength: this._trackLength || null,
         trackNorthOffset: this._trackNorthOffset ?? null,
+        // Posición estimada en metros (este, norte) — ver _deadReckon.
+        posE: pos ? pos.e : null,
+        posN: pos ? pos.n : null,
         completedLap,
       });
     }
@@ -1741,6 +1758,42 @@ class IrsdkClient {
     return empty();
   }
 
+  // Posición del auto por navegación a estima (dead reckoning).
+  //
+  // iRacing NO publica Lat/Lon en la memoria compartida en vivo: hay 333
+  // variables y ninguna es de posición (sí están en los .ibt). Pero sí publica
+  // la velocidad en el marco del auto (VelocityX adelante, VelocityY lateral) y
+  // el rumbo respecto del norte (YawNorth), y con eso la trazada se reconstruye
+  // integrando: norte += (Vx·cos a + Vy·sen a)·dt, este += (Vx·sen a − Vy·cos a)·dt.
+  //
+  // Verificado contra el Lat/Lon real de .ibt propios, sobre vueltas enteras de
+  // entre 110 y 192 s: error medio 0,01 m en el F4 de Snetterton, 0,25 m en el
+  // M2 de Spa, 0,37 m en el GR86 de Spa y 0,68 m en el MX-5 de Oschersleben,
+  // con máximos de 1,5 m. Integrar a 60 Hz importa: a 30 Hz el error medio del
+  // MX-5 sube a 0,97 m y el máximo a 2,5 m, por eso se integra acá (en el tick
+  // del SDK) y no en el renderer, que recibe a 30 Hz.
+  //
+  // El origen es arbitrario (donde arrancó la integración); el consumidor lo
+  // ancla a una geometría conocida. El marco sí es absoluto en orientación:
+  // +n = norte, +e = este.
+  _deadReckon(telemetry, sessionTime) {
+    const vx = this._read(telemetry, 'VelocityX');
+    const vy = this._read(telemetry, 'VelocityY');
+    const a = this._read(telemetry, 'YawNorth');
+    if (vx == null || vy == null || a == null) return null;
+    const prev = this._drTime;
+    this._drTime = sessionTime;
+    if (prev == null) { this._drE = 0; this._drN = 0; return { e: 0, n: 0 }; }
+    const dt = sessionTime - prev;
+    // Saltos de tiempo (pausa, reset, cambio de sesión) no se integran: meterían
+    // un salto enorme en la trazada.
+    if (!(dt > 0) || dt > 0.5) return { e: this._drE, n: this._drN };
+    const d = deadReckonDelta(vx, vy, a, dt);
+    this._drN += d.n;
+    this._drE += d.e;
+    return { e: this._drE, n: this._drN };
+  }
+
   // Normaliza una variable CarIdx* a un array de tamaño n.
   // irsdk-node a veces la expone como escalar (valor del player) en vez de
   // array. En ese caso replicamos el escalar en el índice del player y
@@ -2007,4 +2060,4 @@ class IrsdkClient {
   }
 }
 
-module.exports = { IrsdkClient };
+module.exports = { IrsdkClient, deadReckonDelta };

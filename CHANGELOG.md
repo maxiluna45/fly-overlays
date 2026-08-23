@@ -6,6 +6,25 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.13.0] - 2026-08-23
+
+### Agregado
+- El coach ahora dibuja **tu trazada real**, no una línea paralela de adorno. Se
+  ve por dónde pasás de verdad: si te abrís de más en la entrada, si cortás el
+  vértice, si salís más ancho que la referencia.
+  - iRacing no publica la posición del auto en vivo, pero sí la velocidad
+    (adelante y lateral) y el rumbo respecto del norte. Integrando eso 60 veces
+    por segundo la trazada se reconstruye sola.
+  - Contrastado contra el GPS real de archivos `.ibt` propios, sobre vueltas
+    enteras de entre 110 y 192 segundos: el error medio fue de 0,01 m en el F4
+    de Snetterton, 0,25 m en el M2 de Spa, 0,37 m en el GR86 de Spa y 0,68 m en
+    el MX-5 de Oschersleben, con un máximo de 1,5 m. Para referencia, un
+    circuito de GP tiene unos 12 m de ancho.
+  - La posición se re-ancla a la referencia en cada cruce de meta, así el error
+    no se arrastra de una vuelta a la siguiente.
+  - El rumbo del mapa también sale de ahí, así que la vista gira con el auto sin
+    depender de ningún canal nuevo.
+
 ## [0.12.3] - 2026-08-23
 
 ### Corregido

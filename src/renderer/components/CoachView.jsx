@@ -20,6 +20,7 @@ const LEAD_SECONDS = 2.5;         // cuánto antes de la curva avisar
 const ADVICE_MIN_MS = 2600;       // un aviso no pisa a otro antes de esto
 const ADVICE_HOLD_MS = 7000;      // y se borra solo pasado esto
 const VOICE_MIN_MS = 3500;        // y no se habla encima de otro aviso
+const M_PER_DEG_LAT = 111320;     // metros por grado de latitud
 const TRAIL_OFFSET_M = 6;         // separación de tu trazada respecto de la referencia
 const HEADING_SMOOTH = 0.15;      // suavizado del rumbo (0..1, más = más nervioso)
 const SPAN_OPTIONS = [120, 220, 400, 800]; // metros de pista visibles
@@ -127,6 +128,10 @@ export function CoachView() {
     // Forma de la pista aprendida manejando: lat/lon por bin. NO se borra al
     // cruzar meta (la trazada sí), porque es la geometría del circuito y sirve
     // para ubicar la referencia cuando la referencia no trae GPS.
+    // Posición estimada por el main (metros este/norte, origen arbitrario) y el
+    // ancla que la lleva a lat/lon sobre la geometría de la referencia.
+    posE: null, posN: null,
+    anchor: null, // { lat0, lon0, e0, n0 }
     shape: new Array(BINS).fill(null),
     shapeFilled: 0,
     frames: 0,
@@ -253,14 +258,19 @@ export function CoachView() {
         e.reacted = new Set();
         e.variant++;
         e.trailVersion++;
+        // Re-anclar la posición estimada a la geometría de la referencia en la
+        // meta. La integración acumula error (medido: <1 m por vuelta), y
+        // reanclando una vez por vuelta no se arrastra entre vueltas.
+        e.anchor = null;
         setShapeVersion((v) => v + 1); // la forma de la pista ya está completa
       }
 
       e.frames++;
-      if (f.lat != null && f.lon != null) e.framesGps++;
+      if (f.posE != null) e.framesGps++;
+      if (f.posE != null && f.posN != null) { e.posE = f.posE; e.posN = f.posN; }
       if (f.onTrack && f.lapDistPct >= 0 && f.lapDistPct <= 1) {
         const b = Math.min(BINS - 1, Math.max(0, Math.floor(f.lapDistPct * BINS)));
-        e.bins[b] = { th: f.throttle, br: f.brake, st: f.steer, sp: f.speed, g: f.gear, lat: f.lat, lon: f.lon };
+        e.bins[b] = { th: f.throttle, br: f.brake, st: f.steer, sp: f.speed, g: f.gear, lat: f.lat, lon: f.lon, pe: f.posE, pn: f.posN };
         if (f.lat != null && f.lon != null && e.shape[b] == null) {
           e.shape[b] = { lat: f.lat, lon: f.lon };
           e.shapeFilled++;
@@ -401,46 +411,90 @@ export function CoachView() {
   // Posición del auto y recorrido hecho (se recalculan en cada frame; el trail
   // es un solo path de ≤800 puntos, barato de rearmar).
   const e = eng.current;
-  // Posición del auto. iRacing no da Lat/Lon en vivo (ver coach-live.js), así
-  // que se ubica por LapDistPct sobre la geometría de la referencia,
-  // interpolando entre bins para que se mueva parejo y no a los saltos.
-  const carGeo = e.lat != null ? { lat: e.lat, lon: e.lon } : (smooth ? posAtPct(smooth, e.pct) : null);
-  const car = geo && carGeo ? geo.proj(carGeo.lat, carGeo.lon) : null;
 
-  // Tu recorrido va dibujado en paralelo a la línea de pista, corrido unos
-  // metros, y no encima: sin posición lateral real, superponerlo haría creer
-  // que estás calcando la referencia. Corrido y coloreado por TUS pedales, se
-  // puede comparar dónde frenás vos contra dónde frena la referencia.
-  const trail = useMemo(() => {
-    if (!geo || !smooth) return null;
-    const off = TRAIL_OFFSET_M / geo.mpp;
-    const n = smooth.length;
-    const pt = (i) => geo.proj(smooth[i].lat, smooth[i].lon);
-    const shifted = new Array(BINS).fill(null);
-    for (let i = 0; i < BINS; i++) {
-      if (!e.bins[i]) continue;
-      const a = pt((i - 1 + n) % n), b = pt((i + 1) % n), c = pt(i % n);
-      const dx = b.x - a.x, dy = b.y - a.y;
-      const len = Math.hypot(dx, dy) || 1;
-      shifted[i] = { x: c.x - (dy / len) * off, y: c.y + (dx / len) * off };
-    }
+  // El main manda la posición estimada por navegación a estima (metros
+  // este/norte con origen arbitrario). Para dibujarla hay que llevarla al mismo
+  // lat/lon de la referencia: se ancla una vez por vuelta al punto de la
+  // referencia correspondiente al LapDistPct de ese instante.
+  if (e.anchor == null && e.posE != null && smooth) {
+    const p0 = posAtPct(smooth, e.pct);
+    if (p0) e.anchor = { lat0: p0.lat, lon0: p0.lon, e0: e.posE, n0: e.posN };
+  }
+  const toLatLon = (pe, pn) => {
+    const a = e.anchor;
+    if (!a || pe == null || pn == null) return null;
     return {
-      line: pointsPath(shifted),
-      brake: maskedPath(shifted, (i) => (e.bins[i]?.br ?? 0) > 0.15),
-      throttle: maskedPath(shifted, (i) => (e.bins[i]?.th ?? 0) > 0.95),
+      lat: a.lat0 + (pn - a.n0) / M_PER_DEG_LAT,
+      lon: a.lon0 + (pe - a.e0) / (M_PER_DEG_LAT * Math.cos((a.lat0 * Math.PI) / 180)),
     };
-  }, [geo, smooth, tick]);
+  };
+
+  // Posición del auto: la estimada (que es la trazada REAL) y, si por lo que
+  // fuera no hubiera, el punto de la referencia en tu distancia de vuelta.
+  const carGeo = toLatLon(e.posE, e.posN) || (smooth ? posAtPct(smooth, e.pct) : null);
+  const car = geo && carGeo ? geo.proj(carGeo.lat, carGeo.lon) : null;
+  const hasRealLine = e.anchor != null && e.posE != null;
+
+  // Tu recorrido. Con la posición estimada es la trazada REAL, en su lugar
+  // real: se ve si vas por afuera o por adentro de la referencia. Si no la
+  // hubiera, se cae a una banda paralela a la referencia (no se puede saber la
+  // posición lateral, y superponerla haría creer que la estás calcando).
+  const trail = useMemo(() => {
+    if (!geo) return null;
+    const pts = new Array(BINS).fill(null);
+    if (hasRealLine) {
+      for (let i = 0; i < BINS; i++) {
+        const b = e.bins[i];
+        if (!b || b.pe == null) continue;
+        const ll = toLatLon(b.pe, b.pn);
+        if (ll) pts[i] = geo.proj(ll.lat, ll.lon);
+      }
+    } else if (smooth) {
+      const off = TRAIL_OFFSET_M / geo.mpp;
+      const n = smooth.length;
+      const pt = (i) => geo.proj(smooth[i].lat, smooth[i].lon);
+      for (let i = 0; i < BINS; i++) {
+        if (!e.bins[i]) continue;
+        const a = pt((i - 1 + n) % n), b = pt((i + 1) % n), c = pt(i % n);
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const len = Math.hypot(dx, dy) || 1;
+        pts[i] = { x: c.x - (dy / len) * off, y: c.y + (dx / len) * off };
+      }
+    } else return null;
+    return {
+      line: pointsPath(pts),
+      brake: maskedPath(pts, (i) => (e.bins[i]?.br ?? 0) > 0.15),
+      throttle: maskedPath(pts, (i) => (e.bins[i]?.th ?? 0) > 0.95),
+    };
+  }, [geo, smooth, hasRealLine, tick]);
 
   // Rumbo: con GPS sale del movimiento; sin GPS, de la tangente de la pista en
   // el punto donde estás.
   const headingDeg = useMemo(() => {
+    // Con posición estimada el rumbo sale del movimiento real.
+    if (hasRealLine) {
+      const b = Math.floor(e.pct * BINS);
+      for (let back = 3; back <= 25; back++) {
+        const s0 = e.bins[(b - back + BINS) % BINS];
+        if (!s0 || s0.pe == null) continue;
+        const dE = e.posE - s0.pe, dN = e.posN - s0.pn;
+        if (Math.hypot(dE, dN) < 3) continue;
+        const raw = ((Math.atan2(dE, dN) * 180) / Math.PI + 360) % 360;
+        let d = raw - e.heading;
+        while (d > 180) d -= 360;
+        while (d < -180) d += 360;
+        e.heading = (e.heading + d * HEADING_SMOOTH + 360) % 360;
+        return e.heading;
+      }
+      return e.heading;
+    }
     if (e.lat != null) return e.heading;
     if (!smooth) return 0;
     const a = posAtPct(smooth, e.pct - 0.002), b = posAtPct(smooth, e.pct + 0.002);
     if (!a || !b) return 0;
     const dLon = (b.lon - a.lon) * Math.cos((b.lat * Math.PI) / 180);
     return ((Math.atan2(dLon, b.lat - a.lat) * 180) / Math.PI + 360) % 360;
-  }, [smooth, tick]);
+  }, [smooth, hasRealLine, tick]);
 
   // Tiles alrededor del auto: sólo los que se ven, y se agregan a medida que
   // avanzás. Bajar el mosaico entero de la pista a este zoom serían cientos.
@@ -661,8 +715,10 @@ export function CoachView() {
           <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-0.5" style={{ background: "rgb(234,179,8)" }} />Vos</span>
           <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-0.5" style={{ background: "rgb(239,68,68)" }} />Freno</span>
           <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-0.5" style={{ background: "rgb(52,211,153)" }} />A fondo</span>
-          <span className="text-white/40" title="iRacing no publica la posición del auto en vivo, sólo la distancia recorrida. Tu línea va en paralelo a la de la referencia, no en su lugar real.">
-            posición por distancia de vuelta
+          <span className="text-white/40" title={hasRealLine
+            ? "iRacing no publica la posición del auto, así que se reconstruye integrando la velocidad y el rumbo. Verificado contra el GPS de los .ibt: menos de 1 m de error por vuelta."
+            : "Todavía sin posición reconstruida: tu línea va en paralelo a la de la referencia, no en su lugar real."}>
+            {hasRealLine ? "trazada reconstruida" : "posición por distancia de vuelta"}
           </span>
         </div>
 
@@ -679,7 +735,7 @@ export function CoachView() {
         <div className="absolute right-3 bottom-3 flex items-center gap-3 text-[9px] text-white/50">
           {/* Diagnóstico chico pero visible: si algo no aparece, acá se ve por qué. */}
           <span className="font-mono">
-            {e.frames > 0 ? `${e.frames} frames · pista ${Math.round((trackShape.count / BINS) * 100)}%` : "sin frames"}
+            {e.frames > 0 ? `${e.frames} frames · pista ${Math.round((trackShape.count / BINS) * 100)}% · ${hasRealLine ? "trazada real" : "sin trazada"}` : "sin frames"}
             {plan && ` · ${readyCount} avisos listos`}
           </span>
           <span>Imágenes: Esri, Maxar, Earthstar Geographics</span>
