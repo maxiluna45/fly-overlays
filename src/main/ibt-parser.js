@@ -73,7 +73,7 @@ function round6(v) { return v == null || !isFinite(v) ? null : Math.round(v * 1e
 
 // Extrae track / car / tipo de sesión + sectores + largo del YAML (o del nombre).
 function metaFromSessionInfo(yamlStr, fileName, sessionNum) {
-  const meta = { track: null, trackKey: null, car: null, sessionType: null, sectorPcts: null, trackLength: null, bestLap: null, trackIdIr: null, carIdIr: null };
+  const meta = { track: null, trackKey: null, car: null, sessionType: null, sectorPcts: null, trackLength: null, bestLap: null, trackIdIr: null, carIdIr: null, trackNorthOffset: null };
   const parsed = parseSessionInfo(yamlStr);
   if (parsed) {
     meta.track = parsed?.WeekendInfo?.TrackDisplayName || parsed?.WeekendInfo?.TrackName || null;
@@ -107,6 +107,7 @@ function metaFromSessionInfo(yamlStr, fileName, sessionNum) {
       if (Array.isArray(pts) && pts.length > 0) meta.sectorPcts = pts;
       const ti = getTrackInfo(parsed);
       if (ti && ti.length > 0) meta.trackLength = ti.length;
+      if (ti && ti.northOffset != null) meta.trackNorthOffset = ti.northOffset;
     } catch (_) {}
   }
   // Fallbacks desde el nombre de archivo (ej: "car_track 2024-01-01 20h00m00s.ibt").
@@ -383,6 +384,7 @@ function parseIbtSession(filePath) {
     sessionType: meta.sessionType,
     sectorPcts: meta.sectorPcts,
     trackLength: meta.trackLength,
+    trackNorthOffset: meta.trackNorthOffset,
     trackIdIr: meta.trackIdIr,
     carIdIr: meta.carIdIr,
     startedAt: Math.floor(stat.mtimeMs),

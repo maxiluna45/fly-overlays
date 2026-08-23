@@ -33,3 +33,14 @@ test('parseSessionInfo parsea YAML bien formado sin tocarlo', () => {
   const parsed = parseSessionInfo('WeekendInfo:\n TrackLength: 7.004 km\n TrackID: 219\n');
   assert.equal(parsed.WeekendInfo.TrackID, 219);
 });
+
+test('getTrackInfo lee TrackNorthOffset del YAML', () => {
+  const { getTrackInfo, parseNorthOffset } = require('../src/main/session-parser.js');
+  assert.equal(parseNorthOffset('1.6113 rad'), 1.6113);
+  assert.equal(parseNorthOffset(0.4107), 0.4107);
+  assert.equal(parseNorthOffset(null), null);
+  assert.equal(parseNorthOffset('unlimited'), null);
+  const ti = getTrackInfo({ WeekendInfo: { TrackDisplayName: 'Spa', TrackLength: '7.00 km', TrackNorthOffset: '1.6113 rad' } });
+  assert.equal(ti.northOffset, 1.6113);
+  assert.equal(getTrackInfo(null).northOffset, null);
+});

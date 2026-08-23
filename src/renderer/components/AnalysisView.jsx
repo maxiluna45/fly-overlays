@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState, useCallback, useRef } from "react"
 import { Trash2, Trophy, Clock, Activity, Gauge, Upload, FolderOpen, RotateCcw, Pencil, Check, X, Search, ExternalLink, Maximize2, Crop } from "lucide-react";
 import { analyzeLap, bestLapOf, consistency, sectorTimes, sessionOptimal, cornerConsistency, resampleSamples, drivingMetrics } from "../lib/coach.js";
 import { isComparableReference } from "../lib/session-match.js";
-import { buildTrackSegments, fitSimilarity, applySim, fitAffine, applyAffine, speedColor } from "../lib/track-render.js";
+import { buildTrackSegments, fitSimilarity, applySim, fitAffine, applyAffine, speedColor, autoMapRotation } from "../lib/track-render.js";
 import { hasChassisData, chassisSeries, chassisSummary, WHEEL_LABEL } from "../lib/chassis.js";
 import { ShareCard } from "./ShareCard.jsx";
 import { buildCardModel, FORMATS, shareMapBox, countShareCharts, sanitizeFilename } from "../lib/share-card-data.js";
@@ -395,7 +395,7 @@ const TrackLayer = React.memo(function TrackLayer({ segs, segsRef = [], refD, sh
 
 // Mapa interactivo: zoom (rueda / +−), pan (arrastrar), toggle de trazadas y
 // marcador del instante bajo el cursor (vinculado a los gráficos de telemetría).
-function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, outlineD, corners, fill = false, highlightRange = null, roadWidth = 0, outlineMode = null, tiles = null, attribution = null, scrim = false, gripLap = null, gripRef = null, rot = 0, onRotChange = null }) {
+function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, outlineD, corners, fill = false, highlightRange = null, roadWidth = 0, outlineMode = null, tiles = null, attribution = null, scrim = false, gripLap = null, gripRef = null, rot = 0, onRotChange = null, onRotReset = null }) {
   const BV = baseView || { x: 0, y: 0, w: 1000, h: 380 };
   const W = BV.w, H = BV.h, X0 = BV.x, Y0 = BV.y;
   const [showLap, setShowLap] = useState(true);
@@ -597,6 +597,15 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
                 className="w-20 accent-sky-400"
               />
               <span className="text-[10px] font-mono tabular-nums w-7 text-right text-muted-foreground">{rot}°</span>
+              {onRotReset && (
+                <button
+                  onClick={onRotReset}
+                  className="px-1.5 py-0.5 rounded-md text-[10px] font-semibold hover:bg-white/10 text-muted-foreground"
+                  title="Volver a la orientación original del circuito (la que informa iRacing)"
+                >
+                  Restablecer original
+                </button>
+              )}
             </div>
           )}
           <button onClick={() => zoomAt(0.5, 0.5, 0.7)} className="px-2 py-0.5 rounded-md text-xs font-bold hover:bg-white/10">+</button>
@@ -795,13 +804,25 @@ function DrivingMetricsCard({ m, hasRef }) {
 // Rotación preferida del mapa POR CIRCUITO, persistida en localStorage: girás
 // una vez y ese circuito queda siempre con esa orientación (análisis y tarjeta).
 const ROT_STORE_KEY = "ifly.trackRotation";
+// Devuelve null cuando el circuito NO tiene rotación manual guardada. Es
+// distinto de 0: 0 es "el usuario eligió norte arriba" y null es "que decida el
+// automático". Sin esa distinción el botón de restablecer no tendría a qué
+// volver.
 function loadTrackRot(trackKey) {
-  if (!trackKey) return 0;
+  if (!trackKey) return null;
   try {
     const m = JSON.parse(localStorage.getItem(ROT_STORE_KEY) || "{}");
     const v = m[trackKey];
-    return isFinite(v) ? ((Math.round(v) % 360) + 360) % 360 : 0;
-  } catch (_) { return 0; }
+    return isFinite(v) ? ((Math.round(v) % 360) + 360) % 360 : null;
+  } catch (_) { return null; }
+}
+function clearTrackRot(trackKey) {
+  if (!trackKey) return;
+  try {
+    const m = JSON.parse(localStorage.getItem(ROT_STORE_KEY) || "{}");
+    delete m[trackKey];
+    localStorage.setItem(ROT_STORE_KEY, JSON.stringify(m));
+  } catch (_) {}
 }
 function saveTrackRot(trackKey, deg) {
   if (!trackKey) return;
@@ -949,14 +970,23 @@ export function AnalysisView() {
   const [shareCharts, setShareCharts] = useState(["speed"]); // gráficos elegidos: speed | pedals
   // Rotación del mapa (grados 0..359): UN estado por circuito, compartido por el
   // mapa del análisis y la tarjeta, y persistido por trackKey.
-  const [trackRot, setTrackRotState] = useState(0);
+  // `null` = sin ajuste manual → manda la orientación automática del YAML.
+  const [trackRotManual, setTrackRotManual] = useState(null);
   const rotKey = session ? (session.trackKey || session.track || null) : null;
-  useEffect(() => { setTrackRotState(loadTrackRot(rotKey)); }, [rotKey]);
+  useEffect(() => { setTrackRotManual(loadTrackRot(rotKey)); }, [rotKey]);
+  const autoRot = useMemo(() => autoMapRotation(session?.trackNorthOffset), [session]);
+  const trackRot = trackRotManual != null ? trackRotManual : (autoRot ?? 0);
   const setTrackRot = (d) => {
     const v = ((Math.round(d) % 360) + 360) % 360;
-    setTrackRotState(v);
+    setTrackRotManual(v);
     saveTrackRot(rotKey, v);
   };
+  const resetTrackRot = useCallback(() => {
+    setTrackRotManual(null);
+    clearTrackRot(rotKey);
+  }, [rotKey]);
+  // Sólo hay algo que restablecer si el usuario tocó la rotación de esta pista.
+  const rotIsManual = trackRotManual != null;
   const [displayName, setDisplayName] = useState("");
   const [shareMsg, setShareMsg] = useState(null); // feedback efímero de acciones
   const [shareBusy, setShareBusy] = useState(false);
@@ -2164,6 +2194,7 @@ export function AnalysisView() {
                       setShowRefLine={setShowRefLine}
                       mapRot={trackRot}
                       onMapRotChange={setTrackRot}
+                      onMapRotReset={rotIsManual ? resetTrackRot : null}
                     />
                   </>
                 )}
@@ -2226,6 +2257,7 @@ export function AnalysisView() {
               onSelectRange={(r) => { setZoomRange(r); setRangeTool(false); }}
               mapRot={trackRot}
               onMapRotChange={setTrackRot}
+              onMapRotReset={rotIsManual ? resetTrackRot : null}
             />
           </div>
         </div>
@@ -2525,7 +2557,7 @@ function ChassisCard({ summary }) {
   );
 }
 
-function AnalysisDetail({ charts, svgMap, corners, hoverIdx, setHoverIdx, showLapLine, setShowLapLine, showRefLine, setShowRefLine, split = false, range = null, selecting = false, onSelectRange, mapRot = 0, onMapRotChange = null }) {
+function AnalysisDetail({ charts, svgMap, corners, hoverIdx, setHoverIdx, showLapLine, setShowLapLine, showRefLine, setShowRefLine, split = false, range = null, selecting = false, onSelectRange, mapRot = 0, onMapRotChange = null, onMapRotReset = null }) {
   // Path strings de las series MEMOIZADOS: son O(800) de armado de string y NO
   // dependen de `hoverIdx`. Sin este memo se reconstruían las ~11 series en CADA
   // mousemove (setHoverIdx re-renderiza AnalysisView entero) → stutter. Con deps
@@ -2576,6 +2608,7 @@ function AnalysisDetail({ charts, svgMap, corners, hoverIdx, setHoverIdx, showLa
       highlightRange={range}
       rot={mapRot}
       onRotChange={onMapRotChange}
+      onRotReset={onMapRotReset}
     />
   ) : null;
 

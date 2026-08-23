@@ -16,38 +16,6 @@ Estado de cada ítem:
 
 ---
 
-## [ ] Orientar el mapa solo
-
-**Problema.** Hoy la rotación del mapa se ajusta a mano por circuito y se guarda
-(`saveTrackRot` en `AnalysisView.jsx`). Cada pista nueva arranca torcida.
-
-**Qué cambia.** El mapa nace derecho y el ajuste manual queda como corrección
-opcional encima.
-
-**Datos.** Verificado: el YAML trae la orientación real. `TrackNorthOffset` dio
-1,8851 rad en Oschersleben y 0,4107 en Lime Rock.
-
-Datos: `WeekendInfo.TrackNorthOffset` · `TrackNumTurns` · `TrackLatitude` /
-`TrackLongitude`.
-
-**Cómo se comporta.** El `TrackNorthOffset` es el valor por defecto: el mapa
-nace derecho sin tocar nada. Si el usuario mueve la rotación a mano, ese valor
-manual pisa al automático y se sigue guardando por circuito como hoy. Se agrega
-un botón **"Restablecer original"** que borra el valor manual y vuelve al
-offset del YAML.
-
-**Notas.** Con esa regla no hace falta migrar nada: las rotaciones que ya
-tenés guardadas siguen siendo overrides manuales y ningún mapa que hoy está
-derecho se mueve solo. El automático aplica sólo donde no hay valor guardado,
-o sea en las pistas nuevas. No rompe nada → PATCH o MINOR, no MAJOR.
-
-Falta definir un detalle: hoy `saveTrackRot` guarda un número y "sin rotación"
-es 0, que es indistinguible de "el usuario eligió 0". Hay que poder distinguir
-*no configurado* de *configurado en 0* (guardar `null` / borrar la clave), o el
-botón de restablecer no tiene cómo volver atrás.
-
----
-
 ## [?] Coach en vivo contra una referencia de Garage 61
 
 Ventana dentro de la app (no overlay), pensada para segunda pantalla, que

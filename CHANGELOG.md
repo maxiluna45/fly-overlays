@@ -6,6 +6,24 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.11.0] - 2026-08-22
+
+### Agregado
+- El mapa del análisis nace con la orientación real del circuito. iRacing
+  informa en cada sesión hacia dónde está girada la pista respecto del norte
+  (`TrackNorthOffset`), y ahora el mapa usa ese dato en vez de arrancar siempre
+  con el norte arriba: Spa nace a 268°, Oschersleben a 252° y Lime Rock a 336°.
+  Las pistas nuevas ya no aparecen torcidas.
+- Botón "Restablecer original" al lado del control de rotación: borra tu ajuste
+  manual de ese circuito y vuelve a la orientación que informa iRacing.
+
+### Cambiado
+- La rotación que ajustás a mano sigue mandando sobre la automática y se sigue
+  guardando por circuito, así que los mapas que ya tenías derechos no se mueven.
+  La automática se aplica sólo donde nunca tocaste la rotación. Internamente ya
+  se distingue "sin configurar" de "configurado en 0", que es lo que le permite
+  al botón de restablecer saber a qué volver.
+
 ## [0.10.0] - 2026-08-22
 
 ### Agregado

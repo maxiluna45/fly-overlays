@@ -139,6 +139,7 @@ class IrsdkClient {
     this._onTrackLatchUntil = 0; // ms hasta cuándo mantener visibles los overlays
     this._sectorPcts = null;   // límites de sectores reales (SplitTimeInfo)
     this._trackLength = null;  // largo de pista en km
+    this._trackNorthOffset = null; // orientación del circuito (rad, del YAML)
   }
 
   // Registra un consumidor de frames crudos (el SessionRecorder). Se llama con
@@ -571,6 +572,7 @@ class IrsdkClient {
     if (this._refStore) this._refStore.reset();
     this._sectorPcts = null;
     this._trackLength = null;
+    this._trackNorthOffset = null;
     // Ancla del reloj de carrera: la próxima conexión (posiblemente otro
     // weekend con el mismo SessionNum) tiene que re-anclarse.
     this._raceClockAnchor = null;
@@ -881,6 +883,7 @@ class IrsdkClient {
           if (Array.isArray(pts) && pts.length > 0) this._sectorPcts = pts;
           const ti = getTrackInfo(session);
           if (ti && ti.length > 0) this._trackLength = ti.length; // km
+          if (ti && ti.northOffset != null) this._trackNorthOffset = ti.northOffset; // rad
         } catch (_) {}
       }
       if (!this._carName) {
@@ -935,6 +938,7 @@ class IrsdkClient {
         car: this._carName,
         sectorPcts: this._sectorPcts || null,
         trackLength: this._trackLength || null,
+        trackNorthOffset: this._trackNorthOffset ?? null,
         completedLap,
       });
     }

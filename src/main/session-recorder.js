@@ -53,6 +53,7 @@ class SessionRecorder {
       sessionType: f.sessionType || 'Practice',
       sectorPcts: Array.isArray(f.sectorPcts) ? f.sectorPcts : null,
       trackLength: f.trackLength || null,
+      trackNorthOffset: f.trackNorthOffset ?? null,
       key: this._sessionKey(f),
       laps: [],
     };
