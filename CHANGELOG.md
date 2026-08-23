@@ -6,6 +6,29 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.9.0] - 2026-08-22
+
+### Agregado
+- Suspensión y frenos en el análisis. En las sesiones abiertas desde un `.ibt`
+  aparecen tres gráficos nuevos y una tarjeta de resumen que muestran lo que la
+  velocidad y los pedales no dejan ver: en qué curva bloqueaste una rueda y
+  cuál, dónde te comiste un piano o tocaste el fondo, y con qué reparto real
+  entre eje delantero y trasero estás frenando.
+  - El bloqueo se mide comparando la velocidad de cada rueda contra la del auto,
+    y sólo cuenta cuando se sostiene ~50 ms: un pico suelto es ruido. Medido en
+    sesiones propias, el MX-5 (con ABS) marca 2 bloqueos por vuelta en
+    Oschersleben y el F4 (sin ABS) marca 6 en Snetterton, todos en las mismas
+    curvas vuelta a vuelta.
+  - Los golpes salen de la velocidad del amortiguador, que es la que delata el
+    impacto: en Oschersleben el más fuerte fue de 1,40 m/s en la rueda trasera
+    derecha, siempre en el mismo punto de pista.
+  - El reparto de frenada es el medido en la línea, no el del setup: 64%
+    delantero en el MX-5, 57% en el F4. Los autos que informan la misma presión
+    en los dos ejes (verificado en el BMW M2 G87) lo dicen en vez de mostrar un
+    50% inventado.
+  - Las sesiones grabadas en vivo por la app todavía no guardan estos canales,
+    así que el panel aparece sólo al abrir un `.ibt`.
+
 ## [0.8.0] - 2026-08-22
 
 ### Agregado
