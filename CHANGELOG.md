@@ -6,6 +6,19 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.14.2] - 2026-08-23
+
+### Corregido
+- El mapa del coach quedaba con manchones negros que no se recuperaban nunca.
+  Eran dos cosas: los pedazos de foto se soltaban por antigüedad cuando pasaban
+  de 120, pero quedaba anotado que ya se habían pedido, así que al volver a esa
+  zona no se volvían a pedir; y un pedazo que fallaba al bajar (un corte de red,
+  un error del servidor) se quedaba negro sin reintento.
+  - Ahora se sueltan por distancia al auto en vez de por antigüedad, y soltarlos
+    borra la anotación: volver a pasar por ahí los vuelve a pedir.
+  - Los que fallan se reintentan hasta cuatro veces, esperando cada vez el doble
+    (0,4 s, 0,8 s, 1,6 s y 3,2 s).
+
 ## [0.14.1] - 2026-08-23
 
 ### Corregido

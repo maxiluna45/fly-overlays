@@ -4,6 +4,7 @@ import { resampleSamples } from "../lib/coach.js";
 import { detectCorners, lapFacts, cornerFacts, compareCorner, bestAdvice, announcePct, isWithinLead, anchorPct, fillTrackGaps, posAtPct, isLapCrossing } from "../lib/coach-live.js";
 import { findLovelyTrack, lovelyCorners, labelForRange } from "../lib/lovely-tracks.js";
 import * as voice from "../lib/voice.js";
+import { syncTiles, tileUrl } from "../lib/tiles.js";
 import { sameTrackAny } from "../lib/session-match.js";
 
 // Coach en vivo: mapa que sigue al auto (estilo Google Maps) sobre la foto
@@ -32,6 +33,8 @@ const OFFSET_MIN_COVERAGE = 1 / 8;
 const TRAIL_OFFSET_M = 6;         // separación de tu trazada respecto de la referencia
 const HEADING_SMOOTH = 0.15;      // suavizado del rumbo (0..1, más = más nervioso)
 const SPAN_OPTIONS = [120, 220, 400, 800]; // metros de pista visibles
+const MAX_TILE_RETRIES = 4;       // reintentos por tile que no carga
+const TILE_RETRY_BASE_MS = 400;   // espera del primer reintento (después se duplica)
 
 // ── Proyección Web Mercator ───────────────────────────────────────────────
 // Los tiles satelitales viven en este espacio, así que usarlo como sistema de
@@ -639,25 +642,36 @@ export function CoachView() {
   // Tiles alrededor del auto: sólo los que se ven, y se agregan a medida que
   // avanzás. Bajar el mosaico entero de la pista a este zoom serían cientos.
   const [tiles, setTiles] = useState([]);
-  const tileKeys = useRef(new Set());
-  useEffect(() => { tileKeys.current = new Set(); setTiles([]); }, [geo?.z]);
+  const tileMap = useRef(new Map());
+  useEffect(() => { tileMap.current.clear(); setTiles([]); }, [geo?.z]);
   useEffect(() => {
     if (!geo || !car) return;
-    const spanPx = spanM / geo.mpp;
-    const half = spanPx * 0.85; // margen para cubrir cualquier rotación
-    const tx0 = Math.floor((car.x + geo.ox - half) / 256), tx1 = Math.floor((car.x + geo.ox + half) / 256);
-    const ty0 = Math.floor((car.y + geo.oy - half) / 256), ty1 = Math.floor((car.y + geo.oy + half) / 256);
-    const add = [];
-    for (let tx = tx0; tx <= tx1; tx++) {
-      for (let ty = ty0; ty <= ty1; ty++) {
-        const k = `${tx}/${ty}`;
-        if (tileKeys.current.has(k)) continue;
-        tileKeys.current.add(k);
-        add.push({ k, px: tx * 256 - geo.ox, py: ty * 256 - geo.oy, url: TILE_URL(geo.z, tx, ty) });
-      }
+    const half = (spanM / geo.mpp) * 0.85; // margen para cubrir la rotación
+    if (syncTiles(tileMap.current, {
+      cx: car.x + geo.ox,
+      cy: car.y + geo.oy,
+      half,
+      makeTile: (tx, ty) => ({ px: tx * 256 - geo.ox, py: ty * 256 - geo.oy, url: TILE_URL(geo.z, tx, ty) }),
+    })) {
+      setTiles([...tileMap.current.values()]);
     }
-    if (add.length) setTiles((prev) => [...prev, ...add].slice(-120));
   }, [geo, car?.x, car?.y, spanM]);
+
+  // Un tile que falla (corte de red, error del servidor) se quedaba en negro
+  // para siempre. Se reintenta unas cuantas veces con espera creciente:
+  // cambiar `attempt` cambia la clave del elemento, así que React lo vuelve a
+  // montar y el navegador pide la imagen de nuevo.
+  const retryTile = useCallback((k) => {
+    const t = tileMap.current.get(k);
+    if (!t || t.attempt >= MAX_TILE_RETRIES) return;
+    const wait = TILE_RETRY_BASE_MS * 2 ** t.attempt;
+    setTimeout(() => {
+      const cur = tileMap.current.get(k);
+      if (!cur) return; // se soltó por lejanía mientras esperaba
+      cur.attempt++;
+      setTiles([...tileMap.current.values()]);
+    }, wait);
+  }, []);
 
   const view = useMemo(() => {
     if (!geo || !car) return null;
@@ -857,7 +871,13 @@ export function CoachView() {
           <svg viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`} preserveAspectRatio="xMidYMid slice" className="w-full h-full block">
             <g transform={`rotate(${rot} ${car.x} ${car.y})`}>
               {tiles.map((t) => (
-                <image key={t.k} href={t.url} x={t.px} y={t.py} width="256" height="256" preserveAspectRatio="none" />
+                <image
+                  key={`${t.k}:${t.attempt}`}
+                  href={tileUrl(t.url, t.attempt)}
+                  x={t.px} y={t.py} width="256" height="256"
+                  preserveAspectRatio="none"
+                  onError={() => retryTile(t.k)}
+                />
               ))}
               <rect x={view.x - view.w} y={view.y - view.h} width={view.w * 3} height={view.h * 3} fill="rgba(0,0,0,0.35)" />
 
