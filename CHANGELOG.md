@@ -6,6 +6,181 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.16.0] - 2026-08-23
+
+### Cambiado
+- El banner del coach se reorganizó en tres partes pensadas para leerse de reojo
+  manejando: a la izquierda la curva, en el medio el consejo y a la derecha la
+  marcha que lleva la referencia. La tipografía es bastante más grande: el
+  nombre de la curva y el consejo pasaron a un tamaño legible sin fijar la
+  vista, y el número de marcha se ve enorme.
+- El cuadro de la marcha **se pinta entero de golpe** cuando la referencia
+  cambia: celeste al subir, naranja al bajar. Es un golpe de color de un cuarto
+  de segundo para el rabillo del ojo, no algo para leer. La duración está
+  medida: en la referencia de Virginia hay 32 cambios por vuelta y los más
+  juntos están a 0,43 s, así que el destello dura 0,26 s y alcanza a apagarse
+  entre uno y otro — en una bajada en cadena se ven golpes separados y no una
+  mancha continua.
+- El consejo de la curva que viene se muestra desde antes de llegar, en vez de
+  aparecer sólo en el momento del aviso. Se ve venir con tiempo.
+
+### Corregido
+- La voz ya no dice el nombre de la curva. Los nombres vienen en inglés y el
+  sintetizador en español los pronunciaba de forma ininteligible. En pantalla se
+  siguen mostrando, que es donde se leen bien.
+
+## [0.15.0] - 2026-08-23
+
+### Agregado
+- Los cambios de marcha de la referencia se marcan sobre el mapa: un punto en el
+  lugar exacto de pista donde hay que cambiar, con la marcha que pone y una
+  flecha segun si sube o baja (celeste hacia arriba, naranja hacia abajo). La
+  marcha exacta se sabe, no solo la direccion. En la vuelta de Virginia son 32
+  cambios, 16 para cada lado.
+- Aviso nuevo sobre el momento del cambio, que es distinto de la marcha: se
+  puede llegar en la marcha correcta pero haber bajado 30 metros tarde. Cuando
+  la marcha coincide pero el punto no, el coach dice "bajá a 3ª 20 m antes". Si
+  la marcha es distinta, el consejo que corresponde sigue siendo el de la marcha.
+
+### Cambiado
+- La referencia ahora se pinta con cuatro estados del pedal en vez de dos:
+  freno, sin gas, gas parcial y a fondo. Antes solo se marcaban freno y a fondo,
+  asi que el gas parcial quedaba sin color y parecia que ahi no pasaba nada — en
+  la vuelta de Virginia eso es el 15% del recorrido.
+
+## [0.14.2] - 2026-08-23
+
+### Corregido
+- El mapa del coach quedaba con manchones negros que no se recuperaban nunca.
+  Eran dos cosas: los pedazos de foto se soltaban por antigüedad cuando pasaban
+  de 120, pero quedaba anotado que ya se habían pedido, así que al volver a esa
+  zona no se volvían a pedir; y un pedazo que fallaba al bajar (un corte de red,
+  un error del servidor) se quedaba negro sin reintento.
+  - Ahora se sueltan por distancia al auto en vez de por antigüedad, y soltarlos
+    borra la anotación: volver a pasar por ahí los vuelve a pedir.
+  - Los que fallan se reintentan hasta cuatro veces, esperando cada vez el doble
+    (0,4 s, 0,8 s, 1,6 s y 3,2 s).
+
+## [0.14.1] - 2026-08-23
+
+### Corregido
+- La trazada real ya aparece a los dos segundos de estar en pista. Antes había
+  que completar una vuelta entera antes de que se mostrara, porque la posición
+  se calibraba únicamente al cruzar meta. Eso lo había puesto para bajar el
+  error, pero en la práctica significaba que a ritmo tranquilo —donde una vuelta
+  puede llevar tres minutos— la trazada casi nunca llegaba a aparecer, y si algo
+  reiniciaba la cuenta en el camino no aparecía nunca.
+  - Ahora la calibración se fija en cuanto se recorrió un octavo de vuelta y se
+    sigue afinando con cada muestra. Verificado en una sesión real en pista:
+    calibra a los 2 segundos y la posición cae entre 1,4 y 5,6 metros de la
+    línea de la referencia, que es la diferencia de trazada esperable dentro del
+    ancho del asfalto.
+  - El indicador del mapa muestra el avance de la calibración en porcentaje en
+    vez de pedir que cruces meta.
+
+## [0.14.0] - 2026-08-23
+
+### Agregado
+- Control de volumen para los avisos del coach, con selector de voz y un botón
+  para escuchar una prueba. Arranca en 140% y llega hasta 300%.
+- La voz se escucha mucho más fuerte y más clara. La voz del navegador reproduce
+  el audio ella misma y no lo entrega, así que no había forma de subirla del
+  100% ni de procesarla; ahora el audio se genera aparte y se le aplica lo mismo
+  que a una radio de carrera: se aprovecha todo el rango (venía usando la mitad),
+  se realza la banda de las consonantes y se comprime para levantar el nivel
+  medio, que es de lo que depende el volumen que uno percibe.
+  - Medido con las dos voces del sistema y frases reales del coach: al 100% el
+    nivel medio sube entre 7 y 10 dB respecto de antes, y en el 140% que viene
+    por defecto entre 10 y 13 dB, sin una sola muestra recortada. O sea que el
+    ajuste por defecto ya suena unas tres veces más fuerte que antes.
+  - Arriba del 200% empieza a saturar, pero con un limitador suave: la
+    distorsión que aparece es la de una radio, no el chasquido del recorte
+    digital.
+  - Las frases de la vuelta se preparan al cruzar meta, así que suenan al
+    instante en vez de tardar el medio segundo que cuesta generarlas.
+
+### Corregido
+- La trazada se quedaba en modo paralelo y el contador de avisos en cero. La
+  calibración de la posición se calculaba a partir de las mismas muestras que se
+  usan para dibujar, y esas muestras se descartan en cualquier discontinuidad,
+  así que la calibración se iba con ellas. Ahora se calcula aparte, sumando
+  frame a frame, y no se pierde por eso.
+- El pie del mapa muestra cuánto le falta a la calibración y si hubo reinicios
+  con su motivo, para no tener que adivinar por qué falta la trazada.
+
+## [0.13.6] - 2026-08-23
+
+### Corregido
+- La trazada volvía a quedarse en modo paralelo después de andar un rato. La
+  culpa era de una comprobación que agregué el día anterior: daba la calibración
+  por rota cuando la posición se alejaba del trazado, y saltaba también en casos
+  en que estaba bien. Se eliminó, y la razón de fondo es que no hacía falta: el
+  desfase se vuelve a medir en **cada** cruce de meta, así que un salto de
+  posición que no venga avisado se corrige solo en la vuelta siguiente.
+- Queda la detección explícita, que es la que importa y sí está verificada:
+  entrar a boxes o salir del mundo descartan la calibración, que es lo que pasa
+  cuando volvés a boxes, te resetean o pedís un tow.
+- La calibración ahora se conforma con un tercio de vuelta en vez de media. Si
+  perdiste un tramo (un paso por boxes, un rato fuera de pista) antes no se
+  recuperaba hasta una vuelta entera limpia.
+
+## [0.13.5] - 2026-08-23
+
+### Corregido
+- La trazada se quedaba dibujada en paralelo a la referencia y no volvía nunca a
+  la posición real. Era un efecto del arreglo anterior: cuando la calibración se
+  daba por rota, también se borraban las muestras de la vuelta, que son
+  justamente lo que hace falta para recalibrar al cruzar meta. Sin ellas la
+  cobertura nunca alcanzaba el mínimo y la vista quedaba en modo paralelo para
+  siempre.
+  - Ahora se distinguen los dos casos. Si hubo teletransporte de verdad (boxes,
+    reset, tow) las muestras sí se descartan, porque las de antes y las de
+    después del salto no son comparables. Si sólo se detecta una desviación, se
+    descarta el desfase pero se conservan las muestras, y la calibración se
+    recupera en el siguiente cruce de meta.
+  - La desviación además tiene que sostenerse medio segundo para contar, así un
+    punto ruidoso de la referencia no tira abajo la calibración de la vuelta.
+- El pie del mapa ahora muestra cuántas muestras propias hay acumuladas y dice
+  "calibrando" en lugar de "sin trazada", para que se vea si le falta vuelta o
+  si hay algo mal.
+
+## [0.13.4] - 2026-08-23
+
+### Corregido
+- Al volver a boxes el auto quedaba dibujado en el medio del campo y no se
+  recuperaba más. iRacing teletransporta el auto cuando volvés a boxes, te
+  resetean o pedís un tow, y como la posición se reconstruye integrando la
+  velocidad, un salto sin velocidad de por medio es invisible: de ahí en
+  adelante todo quedaba corrido por la distancia del teletransporte. Ahora la
+  calibración se descarta al entrar a boxes o salir del mundo, y se vuelve a
+  medir en el próximo cruce de meta.
+- Además hay una comprobación que no depende de la causa: si la posición se va
+  más de 40 metros del trazado —imposible incluso yéndose largo—, la calibración
+  se da por rota y se remide. Cubre cualquier salto que no venga marcado.
+
+## [0.13.3] - 2026-08-23
+
+### Corregido
+- En el coach, la trazada quedaba corrida un par de metros hacia un costado y no
+  se acomodaba nunca, la línea de la vuelta anterior no se borraba al cruzar
+  meta y el contador de avisos se quedaba en cero. Los tres síntomas eran el
+  mismo problema: todo eso pasaba al cruzar la línea, y el evento de "vuelta
+  completada" del que dependía no llega en la primera pasada cuando saliste de
+  boxes, porque no hay vuelta anterior cronometrada. Ahora el cruce se detecta
+  por la propia distancia de vuelta, que siempre está.
+- Las muestras del pit lane se descartan. Ahí iRacing cuenta la distancia sobre
+  el recorrido de boxes y no sobre el trazado, así que ubicaban el auto en un
+  lugar de la pista donde no estaba: medido saliendo de boxes en Oschersleben,
+  metían 350 metros de error y dibujaban una trazada que cruzaba la pista.
+- La calibración de la posición se hacía con la lista de muestras ya vaciada, así
+  que no corregía nada. Era la causa de que la trazada no se acomodara nunca.
+- La trazada real ahora aparece recién cuando se calibró con una vuelta entera;
+  hasta entonces la leyenda dice "calibrando: cruzá meta una vez" y el auto se
+  ubica por distancia de vuelta. Calibrar con media vuelta (la de salida de
+  boxes) daba más de 100 metros de error, y mostrarlo era peor que esperar.
+  Medido tras el arreglo: 1,3-1,9 m en la primera vuelta completa y 0,1-0,9 m en
+  las siguientes.
+
 ## [0.13.2] - 2026-08-23
 
 ### Cambiado

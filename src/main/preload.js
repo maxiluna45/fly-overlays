@@ -102,6 +102,10 @@ contextBridge.exposeInMainWorld('fly', {
     return () => ipcRenderer.removeListener('coach:frame', listener);
   },
 
+  // Voz del coach: el main sintetiza el WAV y el renderer lo amplifica.
+  ttsVoices: () => ipcRenderer.invoke('tts:voices'),
+  ttsSay: (text, voice) => ipcRenderer.invoke('tts:say', { text, voice }),
+
   // Logs / diagnóstico
   log: (entry) => ipcRenderer.invoke('log:write', entry),
   getLogs: (opts) => ipcRenderer.invoke('log:tail', opts),

@@ -529,6 +529,26 @@ ipcMain.handle('ibt:reset-folder', () => {
   return { dir: iracingTelemetryDir(), custom: false, default: defaultTelemetryDir() };
 });
 
+// ── Voz del coach ────────────────────────────────────────────────────────
+// La síntesis vive en el main porque necesita PowerShell (WinRT), y devuelve el
+// WAV para que el renderer lo amplifique. Ver src/main/tts.js.
+const tts = require('./tts');
+
+ipcMain.handle('tts:voices', async () => {
+  try { return await tts.listVoices(); } catch (_) { return []; }
+});
+
+ipcMain.handle('tts:say', async (_e, { text, voice } = {}) => {
+  try {
+    const buf = await tts.synth(text, voice);
+    // Se devuelve el WAV crudo; el renderer lo decodifica con WebAudio.
+    return buf ? buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) : null;
+  } catch (err) {
+    log.warn('tts falló', { error: err.message });
+    return null;
+  }
+});
+
 // ── Coach en vivo ────────────────────────────────────────────────────────
 // Suscripción explícita desde la vista del panel. `coachSubscribed` arranca en
 // false, así que sin la vista abierta el costo es una comparación por frame.

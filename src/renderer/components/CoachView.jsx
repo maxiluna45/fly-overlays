@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Upload, Volume2, VolumeX, Compass, Crosshair, MapPin } from "lucide-react";
+import { Upload, Volume2, VolumeX, Compass, Crosshair, MapPin, Play } from "lucide-react";
 import { resampleSamples } from "../lib/coach.js";
-import { detectCorners, lapFacts, cornerFacts, compareCorner, bestAdvice, announcePct, isWithinLead, anchorPct, fillTrackGaps, posAtPct, meanOffset } from "../lib/coach-live.js";
+import { detectCorners, lapFacts, cornerFacts, compareCorner, bestAdvice, announcePct, isWithinLead, anchorPct, fillTrackGaps, posAtPct, isLapCrossing, detectShifts, gearAtPct, targetCorner } from "../lib/coach-live.js";
 import { findLovelyTrack, lovelyCorners, labelForRange } from "../lib/lovely-tracks.js";
+import * as voice from "../lib/voice.js";
+import { syncTiles, tileUrl } from "../lib/tiles.js";
 import { sameTrackAny } from "../lib/session-match.js";
 
 // Coach en vivo: mapa que sigue al auto (estilo Google Maps) sobre la foto
@@ -18,12 +20,26 @@ const BINS = 800;                 // misma resolución que el resto del análisi
 const TRAIL_KEEP = BINS;          // el recorrido se borra al cruzar meta
 const LEAD_SECONDS = 2.5;         // cuánto antes de la curva avisar
 const ADVICE_MIN_MS = 2600;       // un aviso no pisa a otro antes de esto
-const ADVICE_HOLD_MS = 7000;      // y se borra solo pasado esto
 const VOICE_MIN_MS = 3500;        // y no se habla encima de otro aviso
 const M_PER_DEG_LAT = 111320;     // metros por grado de latitud
+// Cuánto de la vuelta hace falta haber recorrido para fijar el desfase contra
+// la referencia. Un octavo (~100 muestras repartidas) ya promedia el ruido de
+// bineado; a partir de ahí el desfase se sigue refinando con cada muestra.
+// Exigir más era peor: había que dar una vuelta entera antes de ver la trazada.
+// Mientras no alcanza, el auto se ubica por distancia de vuelta —exacta a lo
+// largo del trazado— y la trazada propia va en banda paralela.
+const OFFSET_MIN_COVERAGE = 1 / 8;
 const TRAIL_OFFSET_M = 6;         // separación de tu trazada respecto de la referencia
 const HEADING_SMOOTH = 0.15;      // suavizado del rumbo (0..1, más = más nervioso)
 const SPAN_OPTIONS = [120, 220, 400, 800]; // metros de pista visibles
+// Umbrales con los que se colorea la referencia (fraccion de pedal).
+const BRAKE_ON_REF = 0.15;
+const THROTTLE_ON_REF = 0.05;
+const THROTTLE_FULL_REF = 0.95;
+const GEAR_FLASH_MS = 260;        // duración del destello al cambiar de marcha
+const GEAR_FADE_MS = 120;         // y lo que tarda en volver al gris
+const MAX_TILE_RETRIES = 4;       // reintentos por tile que no carga
+const TILE_RETRY_BASE_MS = 400;   // espera del primer reintento (después se duplica)
 
 // ── Proyección Web Mercator ───────────────────────────────────────────────
 // Los tiles satelitales viven en este espacio, así que usarlo como sistema de
@@ -78,15 +94,26 @@ const fmtLapTime = (s) => {
   return `${m}:${(s - m * 60).toFixed(3).padStart(6, "0")}`;
 };
 
-function speak(text) {
+// Volumen: 100% ya suena bastante más fuerte que la voz del navegador (el WAV
+// se normaliza y se comprime, ver lib/voice.js). El tope de 300% es para
+// escucharse por encima del juego con auriculares puestos.
+const VOL_MIN = 0, VOL_MAX = 3, VOL_STEP = 0.1;
+const VOL_KEY = "ifly.coachVoice";
+
+function loadVoicePrefs() {
   try {
-    if (!window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = "es-ES";
-    u.rate = 1.15;
-    window.speechSynthesis.speak(u);
-  } catch (_) {}
+    const raw = JSON.parse(localStorage.getItem(VOL_KEY) || "{}");
+    return {
+      on: !!raw.on,
+      gain: isFinite(raw.gain) ? Math.min(VOL_MAX, Math.max(VOL_MIN, raw.gain)) : 1.4,
+      voiceName: typeof raw.voiceName === "string" ? raw.voiceName : "",
+    };
+  } catch (_) {
+    return { on: false, gain: 1.4, voiceName: "" };
+  }
+}
+function saveVoicePrefs(p) {
+  try { localStorage.setItem(VOL_KEY, JSON.stringify(p)); } catch (_) {}
 }
 
 export function CoachView() {
@@ -98,14 +125,18 @@ export function CoachView() {
 
   // ── Opciones ────────────────────────────────────────────────────────────
   const [spanM, setSpanM] = useState(220);
-  const [voice, setVoice] = useState(false);
+  const prefs0 = useMemo(() => loadVoicePrefs(), []);
+  const [voiceOn, setVoiceOn] = useState(prefs0.on);
+  const [gain, setGain] = useState(prefs0.gain);
+  const [voiceName, setVoiceName] = useState(prefs0.voiceName);
+  const [voices, setVoices] = useState([]);
+  const [testing, setTesting] = useState(false);
   const [headingUp, setHeadingUp] = useState(true);
   const [scope, setScope] = useState("all"); // all | s1 | s2 | s3 | c<i>
 
   // ── Estado en vivo (se re-renderiza a ~30 Hz) ───────────────────────────
   const [tick, setTick] = useState(0);
   const [status, setStatus] = useState({ connected: false, onTrack: false, track: null, trackKey: null, car: null });
-  const [advice, setAdvice] = useState(null);      // aviso grande (anticipado)
   const [lastNote, setLastNote] = useState(null);  // qué pasó en la curva que acabás de hacer
   const [shapeVersion, setShapeVersion] = useState(0); // crece al aprender geometría
 
@@ -134,6 +165,18 @@ export function CoachView() {
     // Traslación (metros este/norte) que lleva la posición estimada al marco de
     // la referencia. Se recalcula al cerrar cada vuelta con TODA la vuelta.
     offE: null, offN: null,
+    offLocked: false,         // true = medido con una vuelta entera
+    prevPct: null,
+    // Acumulador del desfase de la vuelta en curso. Va aparte de los bins a
+    // propósito: los bins son para dibujar y se borran en cualquier
+    // discontinuidad, y antes eso se llevaba puesta la calibración con ellos.
+    accE: 0, accN: 0, accC: 0,
+    // Diagnóstico: por qué se perdió la calibración.
+    wipes: 0, lastWipe: '',
+    // Marcha de la referencia en el punto donde vas, y el instante del último
+    // cambio: el banner se pinta entero por un momento para que se note de
+    // reojo sin tener que mirar la pantalla.
+    refGear: null, gearFlashAt: 0, gearFlashUp: false,
     shape: new Array(BINS).fill(null),
     shapeFilled: 0,
     frames: 0,
@@ -189,6 +232,41 @@ export function CoachView() {
     }
   }, [loadList, loadReference]);
 
+  useEffect(() => { saveVoicePrefs({ on: voiceOn, gain, voiceName }); }, [voiceOn, gain, voiceName]);
+
+  // Voces del sistema (las que expone Windows por WinRT).
+  useEffect(() => {
+    if (!window.fly?.ttsVoices) return;
+    window.fly.ttsVoices().then((v) => {
+      setVoices(Array.isArray(v) ? v : []);
+      // Por defecto, la primera voz en español.
+      setVoiceName((cur) => cur || (v || []).find((x) => /^es/i.test(x.lang))?.name || (v || [])[0]?.name || "");
+    }).catch(() => {});
+  }, []);
+
+  // Sintetiza y deja el audio listo para sonar. Devuelve true si quedó cargado.
+  const prime = useCallback(async (text) => {
+    if (!text || voice.isLoaded(text)) return voice.isLoaded(text);
+    if (!window.fly?.ttsSay) return false;
+    try {
+      const wav = await window.fly.ttsSay(text, voiceNameRef.current);
+      if (!wav) return false;
+      return !!(await voice.preload(text, wav));
+    } catch (_) { return false; }
+  }, []);
+  const primeRef = useRef(prime); primeRef.current = prime;
+
+  const sayNow = useCallback(async (text) => {
+    if (!text) return;
+    if (!voice.isLoaded(text)) await prime(text);
+    if (!voice.play(text, { gain: gainRef.current })) {
+      // Sin síntesis del sistema queda la voz del navegador, que no puede
+      // pasar del 100% de volumen.
+      voice.fallbackSpeak(text);
+    }
+  }, [prime]);
+  const sayRef = useRef(sayNow); sayRef.current = sayNow;
+
   // ── Curvas de la referencia + datos de cada una ─────────────────────────
   const trackData = useMemo(
     () => (refInfo ? findLovelyTrack(refInfo.trackKey, refInfo.track) : null),
@@ -203,11 +281,12 @@ export function CoachView() {
       label: labelForRange(namedCorners, c.pctStart, c.pctEnd) || `Curva ${c.index + 1}`,
     }));
     const facts = lapFacts(refInfo.samples, base);
+    const shifts = detectShifts(refInfo.samples);
     // El aviso se ancla al punto de FRENADA de la referencia, no al inicio de
     // la curva: un "frená 60 m antes" que llega cuando ya estás frenando no
     // sirve de nada. Si la referencia no frena ahí, el ancla es la curva.
     const corners = base.map((c, i) => ({ ...c, anchorPct: anchorPct(c, facts[i]) }));
-    return { corners, facts };
+    return { corners, facts, shifts };
   }, [refInfo, namedCorners]);
 
   // Sectores para el selector de alcance (los reales de Lovely si están).
@@ -233,7 +312,9 @@ export function CoachView() {
   const planRef = useRef(null); planRef.current = plan;
   const refRef = useRef(null); refRef.current = refInfo;
   const inScopeRef = useRef(inScope); inScopeRef.current = inScope;
-  const voiceRef = useRef(voice); voiceRef.current = voice;
+  const voiceRef = useRef(voiceOn); voiceRef.current = voiceOn;
+  const gainRef = useRef(gain); gainRef.current = gain;
+  const voiceNameRef = useRef(voiceName); voiceNameRef.current = voiceName;
 
   useEffect(() => {
     if (!window.fly?.onCoachFrame) return;
@@ -243,7 +324,12 @@ export function CoachView() {
 
       // Cruce de meta: cerramos la vuelta, sacamos las conclusiones y borramos
       // el recorrido dibujado.
-      if (f.completedLap) {
+      // Cruce de meta. Se detecta por el salto de LapDistPct y no por el
+      // `completedLap` del SDK: ese evento exige una vuelta anterior
+      // cronometrada, así que saliendo de boxes la primera pasada por meta no
+      // lo dispara — y sin él no se borraba la trazada ni se reajustaba la
+      // posición, que es justo lo que se veía mal.
+      if (isLapCrossing(e.prevPct, f.lapDistPct)) {
         const p = planRef.current, r = refRef.current;
         if (p && r) {
           const mine = lapFacts(e.bins, p.corners);
@@ -255,36 +341,95 @@ export function CoachView() {
             })
           );
         }
+        // Sintetizar por adelantado las frases de la vuelta: cuesta ~450 ms cada
+        // una, y llegando a una curva eso es tarde. Acá ya se sabe todo lo que
+        // se va a decir en la vuelta que arranca, así que cuando toque decirlo
+        // el audio va a estar listo.
+        if (voiceRef.current) {
+          for (const v of e.verdicts) {
+            if (v) primeRef.current(v.text);
+          }
+        }
+
+        // Empieza la cuenta de la vuelta nueva. El desfase vigente se mantiene
+        // hasta que ésta junte material propio: la deriva de una vuelta es de
+        // ~1 m, así que no hay salto perceptible al relevarlo.
+        e.accE = 0; e.accN = 0; e.accC = 0;
         e.bins = new Array(BINS).fill(null);
         e.announced = new Set();
         e.reacted = new Set();
         e.variant++;
         e.trailVersion++;
-        // Re-anclar con la VUELTA ENTERA, no con un punto. Anclar en un solo
-        // punto hereda el error de ese bin de la referencia (con 800 bins, en
-        // Spa cada bin son ~9 m) y desplaza toda la vuelta. Promediando el
-        // desfase sobre los ~800 bins ese ruido se cancela: medido contra el
-        // GPS real, el error medio baja de 4,8-8,7 m a 0,9-1,4 m, y al final de
-        // la vuelta de 5,3-8,6 m a 0,5-1,6 m.
-        if (refMRef.current) {
-          const off = meanOffset(e.bins, refMRef.current.pts);
-          if (off) { e.offE = off.e; e.offN = off.n; }
-        }
         setShapeVersion((v) => v + 1); // la forma de la pista ya está completa
       }
+      e.prevPct = f.lapDistPct;
 
       e.frames++;
       if (f.posE != null) e.framesGps++;
+
+      // Volver a boxes, un reset o un tow teletransportan el auto, y la
+      // navegación a estima no puede ver un salto sin velocidad de por medio:
+      // de ahí en adelante la posición queda corrida por la distancia del
+      // salto. Las muestras de antes y de después no son comparables, así que
+      // se descartan y la calibración se mide de nuevo.
+      //
+      // No hay ninguna heurística por distancia acá a propósito: el desfase se
+      // remide en CADA cruce de meta, así que un salto que no venga marcado se
+      // corrige solo en la vuelta siguiente. Intentar detectarlo por "la
+      // posición se fue lejos" invalidaba calibraciones que estaban bien.
+      if (!f.onTrack || f.onPitRoad) {
+        if (e.offE != null || e.accC > 0) {
+          e.offE = null; e.offN = null; e.offLocked = false;
+          e.accE = 0; e.accN = 0; e.accC = 0;
+          e.bins = new Array(BINS).fill(null);
+          e.trailVersion++;
+          e.wipes++;
+          e.lastWipe = !f.onTrack ? 'fuera de pista' : 'boxes';
+        }
+      }
       if (f.posE != null && f.posN != null) { e.posE = f.posE; e.posN = f.posN; }
-      if (f.onTrack && f.lapDistPct >= 0 && f.lapDistPct <= 1) {
+      // En boxes el LapDistPct va sobre el recorrido del pit lane, no sobre el
+      // trazado, así que esas muestras no se guardan: contaminaban el desfase
+      // (medido: 350 m de error saliendo de boxes en Oschersleben) y dibujaban
+      // una trazada que cruzaba la pista.
+      if (f.onTrack && !f.onPitRoad && f.lapDistPct >= 0 && f.lapDistPct <= 1) {
         const b = Math.min(BINS - 1, Math.max(0, Math.floor(f.lapDistPct * BINS)));
         e.bins[b] = { th: f.throttle, br: f.brake, st: f.steer, sp: f.speed, g: f.gear, lat: f.lat, lon: f.lon, pe: f.posE, pn: f.posN };
+        // Desfase contra la referencia en este punto, acumulado para la vuelta.
+        // El offset se fija EN CUANTO hay material suficiente y se sigue
+        // refinando con cada muestra; no espera el cruce de meta. Esperarlo
+        // significaba que había que dar una vuelta entera antes de ver la
+        // trazada, y si algo reiniciaba la cuenta en el camino no aparecía
+        // nunca. Medido contra el GPS real, calibrar con una vuelta parcial da
+        // ~1,9 m de error y baja de 1 m cuando la vuelta se completa.
+        if (f.posE != null && refMRef.current) {
+          const rp = refMRef.current.pts[b];
+          if (rp) {
+            e.accE += rp.e - f.posE;
+            e.accN += rp.n - f.posN;
+            e.accC++;
+            if (e.accC >= BINS * OFFSET_MIN_COVERAGE) {
+              e.offE = e.accE / e.accC;
+              e.offN = e.accN / e.accC;
+              e.offLocked = true;
+            }
+          }
+        }
         if (f.lat != null && f.lon != null && e.shape[b] == null) {
           e.shape[b] = { lat: f.lat, lon: f.lon };
           e.shapeFilled++;
           // Rearmamos la capa de referencia cada tanto mientras se completa la
           // forma, no en cada bin: son 800 puntos a rearmar.
           if (e.shapeFilled % 80 === 0) setShapeVersion((v) => v + 1);
+        }
+      }
+      // Marcha que lleva la referencia en tu punto de pista. Cuando cambia se
+      // marca el instante, y el banner la usa para el destello.
+      if (refRef.current && f.lapDistPct != null) {
+        const g = gearAtPct(refRef.current.samples, f.lapDistPct);
+        if (g != null && g !== e.refGear) {
+          if (e.refGear != null) { e.gearFlashAt = now; e.gearFlashUp = g > e.refGear; }
+          e.refGear = g;
         }
       }
       e.pct = f.lapDistPct ?? e.pct;
@@ -326,10 +471,12 @@ export function CoachView() {
           if (now - e.adviceAt < ADVICE_MIN_MS) continue;
           e.announced.add(c.index);
           e.adviceAt = now;
-          setAdvice({ ...v, at: now });
           if (voiceRef.current && now - e.voiceAt > VOICE_MIN_MS) {
             e.voiceAt = now;
-            speak(`${v.cornerLabel}. ${v.text}`);
+            // Sólo el consejo: el nombre de la curva viene en inglés (de la
+            // base de Lovely) y la voz en español lo pronuncia de forma
+            // ininteligible. En pantalla sí se muestra, que es donde se lee.
+            sayRef.current(v.text);
           }
         }
 
@@ -347,13 +494,6 @@ export function CoachView() {
           });
           setLastNote(a ? { ...a, at: now } : { cornerLabel: c.label, text: "Bien ahí", kind: "ok", at: now });
         }
-      }
-
-      // El aviso grande se apaga solo: dejarlo puesto media vuelta después
-      // haría creer que sigue vigente.
-      if (e.adviceAt && now - e.adviceAt > ADVICE_HOLD_MS) {
-        e.adviceAt = 0;
-        setAdvice(null);
       }
 
       setStatus((prev) => (
@@ -422,10 +562,18 @@ export function CoachView() {
       const g = (s && s.lat != null && s.lon != null) ? s : trackShape.pts[i];
       return g ? { ...geo.proj(g.lat, g.lon), br: s ? s.br : null, th: s ? s.th : null } : null;
     });
+    // La referencia se pinta por lo que hace el pedal en cada punto, con cuatro
+    // estados y no dos. Antes solo se marcaban freno y acelerador a fondo, asi
+    // que el acelerador parcial y el ir sin gas -el 15% de la vuelta en la
+    // referencia de Virginia- quedaban sin color y parecia que no pasaba nada.
+    const br = (i) => pts[i]?.br ?? 0;
+    const th = (i) => pts[i]?.th ?? 0;
     return {
       line: pointsPath(pts),
-      brake: maskedPath(pts, (i) => (pts[i]?.br ?? 0) > 0.15),
-      throttle: maskedPath(pts, (i) => (pts[i]?.th ?? 0) > 0.95),
+      brake: maskedPath(pts, (i) => br(i) > BRAKE_ON_REF),
+      full: maskedPath(pts, (i) => br(i) <= BRAKE_ON_REF && th(i) > THROTTLE_FULL_REF),
+      partial: maskedPath(pts, (i) => br(i) <= BRAKE_ON_REF && th(i) > THROTTLE_ON_REF && th(i) <= THROTTLE_FULL_REF),
+      coast: maskedPath(pts, (i) => br(i) <= BRAKE_ON_REF && th(i) <= THROTTLE_ON_REF),
       pts,
     };
   }, [geo, refInfo, trackShape]);
@@ -435,13 +583,8 @@ export function CoachView() {
   const e = eng.current;
 
   // La posición estimada viene en metros con origen arbitrario; el desfase
-  // hasta el marco de la referencia se ajusta al cerrar cada vuelta. Mientras
-  // no haya una vuelta completa se usa un ancla provisoria de un punto, para
-  // que el mapa muestre algo desde el arranque.
-  if (e.offE == null && e.posE != null && refM) {
-    const r0 = refM.pts[Math.min(BINS - 1, Math.floor(e.pct * BINS))];
-    if (r0) { e.offE = r0.e - e.posE; e.offN = r0.n - e.posN; }
-  }
+  // hasta el marco de la referencia lo mide el handler (progresivo mientras no
+  // haya una vuelta entera, y con la vuelta entera en cada cruce de meta).
   const toLatLon = (pe, pn) => {
     if (!refM || e.offE == null || pe == null || pn == null) return null;
     return {
@@ -450,11 +593,21 @@ export function CoachView() {
     };
   };
 
+  // Marcas de cambio de marcha sobre la linea de referencia: dicen en que punto
+  // de pista hay que hacer cada cambio, que es de lo mas dificil de sacar solo.
+  const shiftMarks = useMemo(() => {
+    if (!geo || !plan || !refPath) return [];
+    return plan.shifts.map((sh) => {
+      const p0 = refPath.pts[Math.min(BINS - 1, Math.floor(sh.pct * BINS))];
+      return p0 ? { ...sh, x: p0.x, y: p0.y } : null;
+    }).filter(Boolean);
+  }, [geo, plan, refPath]);
+
   // Posición del auto: la estimada (que es la trazada REAL) y, si por lo que
   // fuera no hubiera, el punto de la referencia en tu distancia de vuelta.
-  const carGeo = toLatLon(e.posE, e.posN) || (smooth ? posAtPct(smooth, e.pct) : null);
+  const hasRealLine = e.offLocked && e.offE != null && e.posE != null;
+  const carGeo = (hasRealLine ? toLatLon(e.posE, e.posN) : null) || (smooth ? posAtPct(smooth, e.pct) : null);
   const car = geo && carGeo ? geo.proj(carGeo.lat, carGeo.lon) : null;
-  const hasRealLine = e.offE != null && e.posE != null;
 
   // Tu recorrido. Con la posición estimada es la trazada REAL, en su lugar
   // real: se ve si vas por afuera o por adentro de la referencia. Si no la
@@ -520,25 +673,36 @@ export function CoachView() {
   // Tiles alrededor del auto: sólo los que se ven, y se agregan a medida que
   // avanzás. Bajar el mosaico entero de la pista a este zoom serían cientos.
   const [tiles, setTiles] = useState([]);
-  const tileKeys = useRef(new Set());
-  useEffect(() => { tileKeys.current = new Set(); setTiles([]); }, [geo?.z]);
+  const tileMap = useRef(new Map());
+  useEffect(() => { tileMap.current.clear(); setTiles([]); }, [geo?.z]);
   useEffect(() => {
     if (!geo || !car) return;
-    const spanPx = spanM / geo.mpp;
-    const half = spanPx * 0.85; // margen para cubrir cualquier rotación
-    const tx0 = Math.floor((car.x + geo.ox - half) / 256), tx1 = Math.floor((car.x + geo.ox + half) / 256);
-    const ty0 = Math.floor((car.y + geo.oy - half) / 256), ty1 = Math.floor((car.y + geo.oy + half) / 256);
-    const add = [];
-    for (let tx = tx0; tx <= tx1; tx++) {
-      for (let ty = ty0; ty <= ty1; ty++) {
-        const k = `${tx}/${ty}`;
-        if (tileKeys.current.has(k)) continue;
-        tileKeys.current.add(k);
-        add.push({ k, px: tx * 256 - geo.ox, py: ty * 256 - geo.oy, url: TILE_URL(geo.z, tx, ty) });
-      }
+    const half = (spanM / geo.mpp) * 0.85; // margen para cubrir la rotación
+    if (syncTiles(tileMap.current, {
+      cx: car.x + geo.ox,
+      cy: car.y + geo.oy,
+      half,
+      makeTile: (tx, ty) => ({ px: tx * 256 - geo.ox, py: ty * 256 - geo.oy, url: TILE_URL(geo.z, tx, ty) }),
+    })) {
+      setTiles([...tileMap.current.values()]);
     }
-    if (add.length) setTiles((prev) => [...prev, ...add].slice(-120));
   }, [geo, car?.x, car?.y, spanM]);
+
+  // Un tile que falla (corte de red, error del servidor) se quedaba en negro
+  // para siempre. Se reintenta unas cuantas veces con espera creciente:
+  // cambiar `attempt` cambia la clave del elemento, así que React lo vuelve a
+  // montar y el navegador pide la imagen de nuevo.
+  const retryTile = useCallback((k) => {
+    const t = tileMap.current.get(k);
+    if (!t || t.attempt >= MAX_TILE_RETRIES) return;
+    const wait = TILE_RETRY_BASE_MS * 2 ** t.attempt;
+    setTimeout(() => {
+      const cur = tileMap.current.get(k);
+      if (!cur) return; // se soltó por lejanía mientras esperaba
+      cur.attempt++;
+      setTiles([...tileMap.current.values()]);
+    }, wait);
+  }, []);
 
   const view = useMemo(() => {
     if (!geo || !car) return null;
@@ -553,6 +717,23 @@ export function CoachView() {
   // vs "Virginia International Raceway (Full Course)" vs "virginia 2022 full"),
   // y comparar los strings tal cual daba una falsa alarma.
   const wrongTrack = !!(refInfo && status.track && !sameTrackAny(refInfo, status));
+
+  // Muestras propias acumuladas en la vuelta: es lo que se necesita para
+  // recalibrar en la meta, así que verlo explica por qué falta la trazada.
+  const binCount = e.bins.reduce((a, b) => a + (b && b.pe != null ? 1 : 0), 0);
+
+  // Curva objetivo (la que estás haciendo, o la que viene) y su consejo. Se
+  // muestra siempre, no sólo cuando salta el aviso: así se ve venir.
+  const target = plan ? targetCorner(plan.corners, e.pct) : null;
+  const targetAdvice = target ? e.verdicts[target.index] : null;
+
+  // Destello del cuadro de marcha. Dura poco a propósito: es un golpe de color
+  // para el rabillo del ojo, no un estado que haya que leer.
+  const sinceFlash = e.gearFlashAt ? Date.now() - e.gearFlashAt : Infinity;
+  const flashing = sinceFlash < GEAR_FLASH_MS;
+  const gearBg = flashing
+    ? (e.gearFlashUp ? "rgb(14,165,233)" : "rgb(234,88,12)")
+    : "rgba(255,255,255,0.04)";
 
   // Cuántas curvas tienen algo para avisar con lo de la vuelta pasada.
   const readyCount = e.verdicts.filter(Boolean).length;
@@ -626,14 +807,56 @@ export function CoachView() {
         >
           {headingUp ? <Crosshair className="size-3.5" /> : <Compass className="size-3.5" />}
         </button>
-        <button
-          onClick={() => setVoice((v) => !v)}
-          title={voice ? "Avisos por voz activados" : "Avisos por voz desactivados"}
-          className="px-2 py-1.5 rounded-md text-xs bg-card border border-border hover:bg-accent/50"
-          style={{ color: voice ? "rgb(52,211,153)" : undefined }}
-        >
-          {voice ? <Volume2 className="size-3.5" /> : <VolumeX className="size-3.5" />}
-        </button>
+        <div className="flex items-center gap-1.5 border border-border rounded-md px-1.5 py-1 bg-card">
+          <button
+            onClick={() => setVoiceOn((v) => !v)}
+            title={voiceOn ? "Avisos por voz activados" : "Avisos por voz desactivados"}
+            className="p-0.5 rounded hover:bg-white/10"
+            style={{ color: voiceOn ? "rgb(52,211,153)" : "rgba(255,255,255,0.45)" }}
+          >
+            {voiceOn ? <Volume2 className="size-3.5" /> : <VolumeX className="size-3.5" />}
+          </button>
+          <input
+            type="range"
+            min={VOL_MIN}
+            max={VOL_MAX}
+            step={VOL_STEP}
+            value={gain}
+            onChange={(ev) => setGain(parseFloat(ev.target.value))}
+            disabled={!voiceOn}
+            className="w-20 accent-emerald-400"
+            title="Volumen de los avisos. Al 100% ya suena más fuerte que la voz del navegador; se puede llegar al 300%."
+          />
+          <span className="text-[10px] font-mono tabular-nums w-8 text-right text-muted-foreground">
+            {Math.round(gain * 100)}%
+          </span>
+          {voices.length > 0 && (
+            <select
+              value={voiceName}
+              onChange={(ev) => { setVoiceName(ev.target.value); voice.clearCache(); }}
+              disabled={!voiceOn}
+              className="bg-transparent text-[10px] max-w-[110px] border-l border-border pl-1.5"
+              title="Voz del sistema"
+            >
+              {voices.map((v) => (
+                <option key={v.name} value={v.name}>{v.name.replace(/^Microsoft /, "")}</option>
+              ))}
+            </select>
+          )}
+          <button
+            onClick={async () => {
+              setTesting(true);
+              voice.clearCache();
+              await sayNow("Frená veinte metros más tarde y tomala más abierta");
+              setTesting(false);
+            }}
+            disabled={testing}
+            title="Escuchar una prueba con el volumen y la voz elegidos"
+            className="p-0.5 rounded hover:bg-white/10 text-muted-foreground"
+          >
+            <Play className="size-3" />
+          </button>
+        </div>
       </div>
 
       {/* Selector de referencia */}
@@ -663,27 +886,64 @@ export function CoachView() {
         </div>
       )}
 
-      {/* Aviso grande */}
-      <div className="shrink-0 rounded-lg border border-border bg-card/40 px-4 py-3 min-h-[72px] flex items-center gap-4">
-        {advice ? (
-          <>
-            <div className="text-[10px] uppercase tracking-widest text-sky-300 shrink-0 w-32 truncate">{advice.cornerLabel}</div>
-            <div className="text-2xl font-bold leading-tight">{advice.text}</div>
-            {advice.others > 0 && (
-              <div className="ml-auto text-[10px] text-muted-foreground/60 shrink-0">+{advice.others} cosa{advice.others > 1 ? "s" : ""} más en esta curva</div>
-            )}
-          </>
-        ) : (
-          <div className="text-sm text-muted-foreground">
-            {!refInfo
-              ? "Elegí una referencia para empezar. Una vuelta de Garage 61 exportada en CSV sirve directo."
-              : !status.connected
-              ? "Esperando telemetría de iRacing…"
-              : readyCount > 0
-              ? `Listo: ${readyCount} curva${readyCount > 1 ? "s" : ""} con algo para corregir. Te aviso al llegar a cada una.`
-              : "Completá una vuelta: los avisos de cada curva salen de comparar la vuelta anterior contra la referencia."}
+      {/* Banner en tres partes: curva · consejo · marcha de la referencia.
+          Todo pensado para leerse de reojo manejando, así que la tipografía es
+          grande y el cuadro de marcha avisa con color en vez de con texto. */}
+      <div className="shrink-0 rounded-lg border border-border bg-card/40 flex items-stretch overflow-hidden min-h-[104px]">
+        {/* 1 · Curva */}
+        <div className="px-5 py-3 flex flex-col justify-center border-r border-border shrink-0 w-[268px]">
+          <div className="text-[10px] uppercase tracking-widest text-muted-foreground/70">Curva</div>
+          <div className="text-3xl font-bold leading-none truncate" title={target ? target.label : ""}>
+            {target ? target.label : "—"}
           </div>
-        )}
+        </div>
+
+        {/* 2 · Consejo */}
+        <div className="flex-1 px-5 py-3 flex flex-col justify-center min-w-0">
+          {targetAdvice ? (
+            <>
+              <div className="text-4xl font-bold leading-tight">{targetAdvice.text}</div>
+              {targetAdvice.others > 0 && (
+                <div className="text-[11px] text-muted-foreground/60 mt-1">
+                  +{targetAdvice.others} cosa{targetAdvice.others > 1 ? "s" : ""} más en esta curva
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="text-base text-muted-foreground">
+              {!refInfo
+                ? "Elegí una referencia para empezar. Una vuelta de Garage 61 exportada en CSV sirve directo."
+                : !status.connected
+                ? "Esperando telemetría de iRacing…"
+                : readyCount > 0
+                ? `Sin correcciones para esta curva · ${readyCount} con algo para corregir en la vuelta`
+                : "Completá una vuelta: los avisos salen de comparar la vuelta anterior contra la referencia."}
+            </div>
+          )}
+        </div>
+
+        {/* 3 · Marcha de la referencia. El cuadro entero se pinta al cambiar:
+            celeste si sube, naranja si baja. */}
+        <div
+          className="shrink-0 w-[132px] flex flex-col items-center justify-center border-l border-border"
+          style={{
+            background: gearBg,
+            transition: flashing ? "none" : `background-color ${GEAR_FADE_MS}ms ease-out`,
+          }}
+        >
+          <div
+            className="text-[10px] uppercase tracking-widest"
+            style={{ color: flashing ? "rgba(0,0,0,0.75)" : "rgba(255,255,255,0.45)" }}
+          >
+            Marcha ref.
+          </div>
+          <div
+            className="font-black leading-none tabular-nums"
+            style={{ fontSize: 64, color: flashing ? "rgb(10,12,16)" : "rgba(255,255,255,0.92)" }}
+          >
+            {e.refGear ?? "—"}
+          </div>
+        </div>
       </div>
 
       {/* Mapa */}
@@ -692,17 +952,50 @@ export function CoachView() {
           <svg viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`} preserveAspectRatio="xMidYMid slice" className="w-full h-full block">
             <g transform={`rotate(${rot} ${car.x} ${car.y})`}>
               {tiles.map((t) => (
-                <image key={t.k} href={t.url} x={t.px} y={t.py} width="256" height="256" preserveAspectRatio="none" />
+                <image
+                  key={`${t.k}:${t.attempt}`}
+                  href={tileUrl(t.url, t.attempt)}
+                  x={t.px} y={t.py} width="256" height="256"
+                  preserveAspectRatio="none"
+                  onError={() => retryTile(t.k)}
+                />
               ))}
               <rect x={view.x - view.w} y={view.y - view.h} width={view.w * 3} height={view.h * 3} fill="rgba(0,0,0,0.35)" />
 
               {/* Referencia: línea base + zonas de freno (rojo) y de acelerador
                   a fondo (verde), que es lo que hay que copiar. */}
               {refPath && <>
-              <path d={refPath.line} fill="none" stroke="rgba(255,255,255,0.65)" strokeWidth={2.4 * k} strokeLinecap="round" strokeDasharray={`${7 * k} ${5 * k}`} />
-              <path d={refPath.brake} fill="none" stroke="rgb(239,68,68)" strokeWidth={5 * k} strokeLinecap="round" opacity="0.9" />
-              <path d={refPath.throttle} fill="none" stroke="rgb(52,211,153)" strokeWidth={5 * k} strokeLinecap="round" opacity="0.9" />
+              {/* Base continua, para que la linea nunca se corte. */}
+              <path d={refPath.line} fill="none" stroke="rgba(255,255,255,0.30)" strokeWidth={2 * k} strokeLinecap="round" />
+              {/* Cuatro estados del pedal: sin gas, gas parcial, a fondo, freno. */}
+              <path d={refPath.coast} fill="none" stroke="rgb(203,213,225)" strokeWidth={4.2 * k} strokeLinecap="round" opacity="0.85" />
+              <path d={refPath.partial} fill="none" stroke="rgb(132,204,22)" strokeWidth={4.6 * k} strokeLinecap="round" opacity="0.9" />
+              <path d={refPath.full} fill="none" stroke="rgb(52,211,153)" strokeWidth={5 * k} strokeLinecap="round" opacity="0.95" />
+              <path d={refPath.brake} fill="none" stroke="rgb(239,68,68)" strokeWidth={5 * k} strokeLinecap="round" opacity="0.95" />
               </>}
+
+              {/* Cambios de marcha de la referencia: naranja hacia abajo,
+                  celeste hacia arriba, con la marcha que pone. El texto se
+                  contra-rota para que quede legible con el mapa girado. */}
+              {shiftMarks.map((m, i) => {
+                const color = m.up ? "rgb(125,211,252)" : "rgb(251,146,60)";
+                const r = 3.2 * k;
+                return (
+                  <g key={`sh${i}`}>
+                    <circle cx={m.x} cy={m.y} r={r} fill={color} stroke="rgba(0,0,0,0.8)" strokeWidth={1.1 * k} />
+                    <g transform={`rotate(${-rot} ${m.x} ${m.y})`}>
+                      <text
+                        x={m.x + r * 1.8} y={m.y + r}
+                        fill={color} stroke="rgba(0,0,0,0.85)" strokeWidth={0.7 * k} paintOrder="stroke"
+                        fontSize={10 * k} fontWeight="700"
+                        style={{ fontFamily: "ui-monospace, monospace" }}
+                      >
+                        {m.up ? "\u2191" : "\u2193"}{m.to}
+                      </text>
+                    </g>
+                  </g>
+                );
+              })}
 
               {/* Tu vuelta, en paralelo: amarillo de base, rojo donde frenás
                   vos y verde donde vas a fondo. Comparar tu banda contra la de
@@ -732,14 +1025,21 @@ export function CoachView() {
         {/* Última curva + estado, sobre el mapa */}
         {/* Leyenda: sin esto las dos bandas paralelas no se entienden. */}
         <div className="absolute left-3 top-3 flex items-center gap-3 text-[10px] bg-black/60 rounded-md px-2.5 py-1.5 backdrop-blur-sm">
-          <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-0.5 bg-white/70" />Referencia</span>
-          <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-0.5" style={{ background: "rgb(234,179,8)" }} />Vos</span>
+          <span className="text-white/45">Referencia:</span>
           <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-0.5" style={{ background: "rgb(239,68,68)" }} />Freno</span>
+          <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-0.5" style={{ background: "rgb(203,213,225)" }} />Sin gas</span>
+          <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-0.5" style={{ background: "rgb(132,204,22)" }} />Gas parcial</span>
           <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-0.5" style={{ background: "rgb(52,211,153)" }} />A fondo</span>
+          <span className="flex items-center gap-1.5" title="Punto donde la referencia cambia de marcha, con la marcha que pone. Naranja = baja, celeste = sube.">
+            <span className="inline-block size-1.5 rounded-full" style={{ background: "rgb(251,146,60)" }} />
+            <span className="inline-block size-1.5 rounded-full" style={{ background: "rgb(125,211,252)" }} />
+            Cambios
+          </span>
+          <span className="flex items-center gap-1.5 border-l border-white/15 pl-2"><span className="inline-block w-4 h-0.5" style={{ background: "rgb(234,179,8)" }} />Vos</span>
           <span className="text-white/40" title={hasRealLine
             ? "iRacing no publica la posición del auto, así que se reconstruye integrando la velocidad y el rumbo. Verificado contra el GPS de los .ibt: menos de 1 m de error por vuelta."
-            : "Todavía sin posición reconstruida: tu línea va en paralelo a la de la referencia, no en su lugar real."}>
-            {hasRealLine ? "trazada reconstruida" : "posición por distancia de vuelta"}
+            : "Calibrando la posición: hace falta recorrer un tramo de pista. Hasta entonces tu línea va en paralelo a la de la referencia, no en su lugar real."}>
+            {hasRealLine ? "trazada reconstruida" : `calibrando ${Math.round((e.accC / (BINS * OFFSET_MIN_COVERAGE)) * 100)}%`}
           </span>
         </div>
 
@@ -756,7 +1056,9 @@ export function CoachView() {
         <div className="absolute right-3 bottom-3 flex items-center gap-3 text-[9px] text-white/50">
           {/* Diagnóstico chico pero visible: si algo no aparece, acá se ve por qué. */}
           <span className="font-mono">
-            {e.frames > 0 ? `${e.frames} frames · pista ${Math.round((trackShape.count / BINS) * 100)}% · ${hasRealLine ? "trazada real" : "sin trazada"}` : "sin frames"}
+            {e.frames > 0
+              ? `${e.frames} frames · pista ${Math.round((trackShape.count / BINS) * 100)}% · muestras ${binCount}/${BINS} · calib ${e.accC}/${Math.round(BINS * OFFSET_MIN_COVERAGE)} · ${hasRealLine ? "trazada real" : "calibrando"}${e.wipes ? ` · ${e.wipes} reinicios (${e.lastWipe})` : ""}`
+              : "sin frames"}
             {plan && ` · ${readyCount} avisos listos`}
           </span>
           <span>Imágenes: Esri, Maxar, Earthstar Geographics</span>
