@@ -377,3 +377,20 @@ export function isLapCrossing(prevPct, pct) {
   if (prevPct == null || pct == null) return false;
   return prevPct > 0.8 && pct < 0.2;
 }
+
+// ── Sanidad de la calibración ────────────────────────────────────────────
+// La navegación a estima no puede ver un teletransporte: si volvés a boxes, te
+// resetean o pedís un tow, iRacing mueve el auto sin que haya velocidad que
+// integrar, y a partir de ahí la posición reconstruida queda desfasada por la
+// distancia del salto — el auto aparece dibujado en el medio del campo.
+//
+// El chequeo es independiente de la causa: en tu propia distancia de vuelta, la
+// referencia y vos están en el mismo punto del trazado, así que la diferencia
+// sólo puede ser lateral. Más que el ancho de pista con escapatorias es
+// imposible, y significa que la calibración se rompió.
+export const MAX_LATERAL_M = 40;
+
+export function calibrationBroken(estE, estN, refPt, maxM = MAX_LATERAL_M) {
+  if (!refPt || estE == null || estN == null) return false;
+  return Math.hypot(refPt.e - estE, refPt.n - estN) > maxM;
+}

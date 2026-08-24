@@ -217,3 +217,19 @@ test('isLapCrossing detecta el cruce de meta por el salto de LapDistPct', async 
   assert.equal(isLapCrossing(null, 0.01), false);
   assert.equal(isLapCrossing(0.99, null), false);
 });
+
+// Regresión: al volver a boxes el auto se teletransporta, la estima no lo ve y
+// la trazada quedaba dibujada en el medio del campo sin recuperarse nunca.
+test('calibrationBroken detecta que la posición se fue del trazado', async () => {
+  const { calibrationBroken, MAX_LATERAL_M } = await load();
+  const ref = { e: 100, n: 200 };
+  // Diferencia lateral normal entre tu línea y la referencia: sana.
+  assert.equal(calibrationBroken(106, 203, ref), false);
+  assert.equal(calibrationBroken(100 + MAX_LATERAL_M - 1, 200, ref), false);
+  // Teletransporte a boxes: cientos de metros.
+  assert.equal(calibrationBroken(600, 900, ref), true);
+  assert.equal(calibrationBroken(100 + MAX_LATERAL_M + 1, 200, ref), true);
+  // Sin datos no se declara roto (evita invalidar en el arranque).
+  assert.equal(calibrationBroken(null, null, ref), false);
+  assert.equal(calibrationBroken(100, 200, null), false);
+});

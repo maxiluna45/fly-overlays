@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Upload, Volume2, VolumeX, Compass, Crosshair, MapPin } from "lucide-react";
 import { resampleSamples } from "../lib/coach.js";
-import { detectCorners, lapFacts, cornerFacts, compareCorner, bestAdvice, announcePct, isWithinLead, anchorPct, fillTrackGaps, posAtPct, meanOffset, isLapCrossing } from "../lib/coach-live.js";
+import { detectCorners, lapFacts, cornerFacts, compareCorner, bestAdvice, announcePct, isWithinLead, anchorPct, fillTrackGaps, posAtPct, meanOffset, isLapCrossing, calibrationBroken } from "../lib/coach-live.js";
 import { findLovelyTrack, lovelyCorners, labelForRange } from "../lib/lovely-tracks.js";
 import { sameTrackAny } from "../lib/session-match.js";
 
@@ -286,6 +286,24 @@ export function CoachView() {
 
       e.frames++;
       if (f.posE != null) e.framesGps++;
+
+      // Discontinuidad de posición. Volver a boxes, un reset o un tow
+      // teletransportan el auto, y la estima no lo ve: la calibración deja de
+      // valer y hay que medirla de nuevo. Se detecta por bandera (fuera del
+      // mundo o en el pit lane) y, por si acaso, comparando contra la
+      // referencia: si la posición se fue más de MAX_LATERAL_M del trazado, se
+      // rompió, sea cual sea el motivo.
+      const inPits = !f.onTrack || f.onPitRoad;
+      let broken = inPits;
+      if (!broken && e.offLocked && refMRef.current && f.posE != null && f.lapDistPct >= 0) {
+        const rp = refMRef.current.pts[Math.min(BINS - 1, Math.floor(f.lapDistPct * BINS))];
+        broken = calibrationBroken(f.posE + e.offE, f.posN + e.offN, rp);
+      }
+      if (broken && (e.offLocked || e.offE != null)) {
+        e.offE = null; e.offN = null; e.offLocked = false;
+        e.bins = new Array(BINS).fill(null);  // la trazada dibujada ya no vale
+        e.trailVersion++;
+      }
       if (f.posE != null && f.posN != null) { e.posE = f.posE; e.posN = f.posN; }
       // En boxes el LapDistPct va sobre el recorrido del pit lane, no sobre el
       // trazado, así que esas muestras no se guardan: contaminaban el desfase

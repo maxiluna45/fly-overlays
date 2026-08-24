@@ -6,6 +6,20 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.13.4] - 2026-08-23
+
+### Corregido
+- Al volver a boxes el auto quedaba dibujado en el medio del campo y no se
+  recuperaba más. iRacing teletransporta el auto cuando volvés a boxes, te
+  resetean o pedís un tow, y como la posición se reconstruye integrando la
+  velocidad, un salto sin velocidad de por medio es invisible: de ahí en
+  adelante todo quedaba corrido por la distancia del teletransporte. Ahora la
+  calibración se descarta al entrar a boxes o salir del mundo, y se vuelve a
+  medir en el próximo cruce de meta.
+- Además hay una comprobación que no depende de la causa: si la posición se va
+  más de 40 metros del trazado —imposible incluso yéndose largo—, la calibración
+  se da por rota y se remide. Cubre cualquier salto que no venga marcado.
+
 ## [0.13.3] - 2026-08-23
 
 ### Corregido
