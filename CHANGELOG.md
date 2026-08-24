@@ -6,6 +6,25 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.15.0] - 2026-08-23
+
+### Agregado
+- Los cambios de marcha de la referencia se marcan sobre el mapa: un punto en el
+  lugar exacto de pista donde hay que cambiar, con la marcha que pone y una
+  flecha segun si sube o baja (celeste hacia arriba, naranja hacia abajo). La
+  marcha exacta se sabe, no solo la direccion. En la vuelta de Virginia son 32
+  cambios, 16 para cada lado.
+- Aviso nuevo sobre el momento del cambio, que es distinto de la marcha: se
+  puede llegar en la marcha correcta pero haber bajado 30 metros tarde. Cuando
+  la marcha coincide pero el punto no, el coach dice "bajá a 3ª 20 m antes". Si
+  la marcha es distinta, el consejo que corresponde sigue siendo el de la marcha.
+
+### Cambiado
+- La referencia ahora se pinta con cuatro estados del pedal en vez de dos:
+  freno, sin gas, gas parcial y a fondo. Antes solo se marcaban freno y a fondo,
+  asi que el gas parcial quedaba sin color y parecia que ahi no pasaba nada — en
+  la vuelta de Virginia eso es el 15% del recorrido.
+
 ## [0.14.2] - 2026-08-23
 
 ### Corregido

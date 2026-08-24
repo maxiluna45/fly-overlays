@@ -22,6 +22,7 @@ const CORNER_MERGE_BINS = 10;   // dos tramos más cerca que esto son una curva
 const BRAKE_TOL_M = 8;          // metros en el punto de frenada
 const THROTTLE_TOL_M = 8;       // metros en el punto de aceleración
 const APEX_TOL_KMH = 2;         // km/h en el ápice
+const SHIFT_TOL_M = 12;         // metros en el punto de cambio de marcha
 // Cuánto antes de la curva se busca el inicio de la frenada.
 const BRAKE_LOOKBACK_BINS = 70;
 // Techo de credibilidad: una diferencia enorme no suele ser algo que corregir
@@ -128,8 +129,23 @@ export function cornerFacts(samples, corner, { prevExit = null } = {}) {
     if (s && s.g != null && s.g > 0) { gear = s.g; break; }
   }
 
+  // Último cambio descendente antes del ápice: el momento del cambio, que es
+  // distinto de "con qué marcha pasás". Se puede ir en la marcha correcta pero
+  // haber bajado 30 m tarde.
+  let downBin = null, downTo = null;
+  let gPrev = null;
+  for (let i = clampIdx(lookFrom, n); i <= corner.apex; i++) {
+    const s = samples[i];
+    if (!s || s.g == null || s.g <= 0) continue;
+    if (gPrev != null && s.g < gPrev) { downBin = i; downTo = s.g; }
+    gPrev = s.g;
+  }
+
   const entry = brake != null ? samples[brake] : null;
   return {
+    downshiftBin: downBin,
+    downshiftPct: downBin != null ? pctOf(downBin, n) : null,
+    downshiftTo: downTo,
     brakeBin: brake,
     brakePct: brake != null ? pctOf(brake, n) : null,
     brakePeak,
@@ -164,6 +180,8 @@ export const RULES = {
   gearHigh: { kind: 'gearHigh' },
   gearLow: { kind: 'gearLow' },
   throttleLate: { kind: 'throttleLate' },
+  shiftLate: { kind: 'shiftLate' },
+  shiftEarly: { kind: 'shiftEarly' },
   apexSlow: { kind: 'apexSlow' },
 };
 
@@ -191,6 +209,21 @@ export function compareCorner(mine, ref, { trackLength = 0 } = {}) {
       gear: ref.gear,
       loss: 25,
     });
+  }
+
+  // Momento del cambio descendente. Va aparte de "marcha equivocada": se puede
+  // llegar en la marcha correcta pero haber bajado tarde, y eso desestabiliza
+  // la entrada.
+  if (mine.downshiftPct != null && ref.downshiftPct != null && mine.gear === ref.gear) {
+    const dM = toM(mine.downshiftPct - ref.downshiftPct);
+    if (dM != null && Math.abs(dM) >= SHIFT_TOL_M && Math.abs(dM) <= MAX_DIFF_M) {
+      found.push({
+        kind: dM > 0 ? 'shiftLate' : 'shiftEarly',
+        meters: Math.round(Math.abs(dM)),
+        gear: ref.downshiftTo,
+        loss: Math.abs(dM) * 0.35,
+      });
+    }
   }
 
   if (mine.apexSpeed != null && ref.apexSpeed != null) {
@@ -239,6 +272,16 @@ const PHRASES = {
     (f) => `Más velocidad en el ápice: te faltan ${f.kmh} km/h`,
     (f) => `Tomala más abierta, ${f.kmh} km/h de diferencia`,
     (f) => `Menos freno adentro: ${f.kmh} km/h más`,
+  ],
+  shiftLate: [
+    (f) => `Bajá a ${f.gear}ª ${f.meters} m antes`,
+    (f) => `El cambio a ${f.gear}ª llega ${f.meters} m tarde`,
+    (f) => `Adelantá el cambio a ${f.gear}ª`,
+  ],
+  shiftEarly: [
+    (f) => `Bajá a ${f.gear}ª ${f.meters} m más tarde`,
+    (f) => `Estás bajando a ${f.gear}ª ${f.meters} m antes de tiempo`,
+    (f) => `Demorá el cambio a ${f.gear}ª`,
   ],
   throttleLate: [
     (f) => `Acelerá ${f.meters} m antes`,
@@ -386,4 +429,53 @@ export function meanOffset(bins, refPts, { minCoverage = 1 / 3 } = {}) {
 export function isLapCrossing(prevPct, pct) {
   if (prevPct == null || pct == null) return false;
   return prevPct > 0.8 && pct < 0.2;
+}
+
+// ── Cambios de marcha ────────────────────────────────────────────────────
+// La marcha viene en cada muestra (tanto en los .ibt como en los CSV de
+// Garage 61), así que se sabe la marcha exacta, no sólo si sube o baja.
+// Marcarlos sobre la referencia le dice al piloto en qué punto de pista hay que
+// hacer cada cambio, que es una de las cosas más difíciles de sacar solo.
+//
+// Se descarta el ruido: un cambio que se deshace en un par de bins no es un
+// cambio, es un rebote del canal o un toque de leva sin efecto.
+const SHIFT_NOISE_BINS = 3;
+
+export function detectShifts(samples) {
+  const n = Array.isArray(samples) ? samples.length : 0;
+  if (!n) return [];
+  const gearAt = (i) => {
+    const s = samples[i];
+    return s && s.g != null && s.g > 0 ? s.g : null;
+  };
+  const raw = [];
+  let prev = null, prevBin = -1;
+  for (let i = 0; i < n; i++) {
+    const g = gearAt(i);
+    if (g == null) continue;
+    if (prev != null && g !== prev) raw.push({ bin: i, from: prev, to: g, up: g > prev });
+    prev = g;
+    prevBin = i;
+  }
+  // Un cambio seguido de su inverso a los pocos bins no cuenta.
+  const out = [];
+  for (let k = 0; k < raw.length; k++) {
+    const a = raw[k], b = raw[k + 1];
+    if (b && b.bin - a.bin <= SHIFT_NOISE_BINS && b.to === a.from) { k++; continue; }
+    out.push({ ...a, pct: a.bin / n });
+  }
+  return out;
+}
+
+// Punto (fracción de vuelta) donde termina de bajar marchas para una curva: el
+// último cambio descendente entre `from` y el ápice. Es el que se puede
+// comparar contra la referencia para decir "bajá antes" o "bajá más tarde".
+export function lastDownshiftPct(shifts, fromPct, apexPct) {
+  let best = null;
+  for (const s of shifts) {
+    if (s.up) continue;
+    if (s.pct < fromPct || s.pct > apexPct) continue;
+    if (best == null || s.pct > best.pct) best = s;
+  }
+  return best;
 }

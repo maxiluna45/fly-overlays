@@ -222,3 +222,74 @@ test('isLapCrossing detecta el cruce de meta por el salto de LapDistPct', async 
   assert.equal(isLapCrossing(null, 0.01), false);
   assert.equal(isLapCrossing(0.99, null), false);
 });
+
+test('detectShifts encuentra los cambios con marcha de origen y destino', async () => {
+  const { detectShifts } = await load();
+  const s = new Array(100).fill(null).map(() => ({ g: 3 }));
+  for (let i = 40; i < 70; i++) s[i].g = 4;
+  for (let i = 70; i < 100; i++) s[i].g = 5;
+  const sh = detectShifts(s);
+  assert.equal(sh.length, 2);
+  assert.deepEqual({ bin: sh[0].bin, from: sh[0].from, to: sh[0].to, up: sh[0].up }, { bin: 40, from: 3, to: 4, up: true });
+  assert.equal(sh[0].pct, 0.4);
+  assert.equal(sh[1].to, 5);
+});
+
+test('detectShifts ignora un cambio que se deshace enseguida', async () => {
+  const { detectShifts } = await load();
+  const s = new Array(100).fill(null).map(() => ({ g: 3 }));
+  s[50].g = 4; s[51].g = 4; // rebote de 2 bins: 3→4→3 no cuenta
+  assert.deepEqual(detectShifts(s), []);
+  // Pero si se sostiene, sí es un cambio.
+  const t = new Array(100).fill(null).map(() => ({ g: 3 }));
+  for (let i = 50; i < 60; i++) t[i].g = 4;
+  assert.equal(detectShifts(t).length, 2); // 3→4 y 4→3
+});
+
+test('detectShifts tolera muestras sin marcha', async () => {
+  const { detectShifts } = await load();
+  assert.deepEqual(detectShifts([]), []);
+  assert.deepEqual(detectShifts([null, { g: 0 }, { sp: 10 }]), []);
+});
+
+test('lastDownshiftPct devuelve el último descenso antes del ápice', async () => {
+  const { lastDownshiftPct } = await load();
+  const shifts = [
+    { pct: 0.10, up: true, to: 5 },
+    { pct: 0.20, up: false, to: 4 },
+    { pct: 0.24, up: false, to: 3 },
+    { pct: 0.40, up: false, to: 2 },
+  ];
+  assert.equal(lastDownshiftPct(shifts, 0.15, 0.30).to, 3);
+  assert.equal(lastDownshiftPct(shifts, 0.15, 0.30).pct, 0.24);
+  assert.equal(lastDownshiftPct(shifts, 0.50, 0.60), null); // no hay ninguno ahí
+});
+
+test('compareCorner avisa cuando el cambio de marcha llega tarde', async () => {
+  const { detectCorners, cornerFacts, compareCorner, adviceText } = await load();
+  // Misma marcha en el ápice, pero el cambio 20 bins (100 m) más tarde.
+  const ref = synthLap();
+  for (let i = 0; i < 40; i++) ref[i].g = 5;
+  for (let i = 40; i < 200; i++) ref[i].g = 3;
+  const mine = synthLap();
+  for (let i = 0; i < 60; i++) mine[i].g = 5;
+  for (let i = 60; i < 200; i++) mine[i].g = 3;
+  const c = detectCorners(ref)[0];
+  const out = compareCorner(cornerFacts(mine, c), cornerFacts(ref, c), { trackLength: 1000 });
+  const f = out.find((x) => x.kind === 'shiftLate');
+  assert.ok(f, 'debería detectar el cambio tardío');
+  assert.equal(f.meters, 100);
+  assert.equal(f.gear, 3);
+  assert.match(adviceText(f, 0), /3ª 100 m antes/);
+});
+
+test('compareCorner no habla del momento del cambio si la marcha es distinta', async () => {
+  const { detectCorners, cornerFacts, compareCorner } = await load();
+  // Con marcha equivocada, el consejo que corresponde es la marcha, no el momento.
+  const ref = synthLap({ gear: 3 });
+  const mine = synthLap({ gear: 4 });
+  const c = detectCorners(ref)[0];
+  const out = compareCorner(cornerFacts(mine, c), cornerFacts(ref, c), { trackLength: 1000 });
+  assert.equal(out.some((x) => x.kind === 'shiftLate' || x.kind === 'shiftEarly'), false);
+  assert.ok(out.some((x) => x.kind === 'gearHigh'));
+});

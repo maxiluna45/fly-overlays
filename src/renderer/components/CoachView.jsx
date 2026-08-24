@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Upload, Volume2, VolumeX, Compass, Crosshair, MapPin, Play } from "lucide-react";
 import { resampleSamples } from "../lib/coach.js";
-import { detectCorners, lapFacts, cornerFacts, compareCorner, bestAdvice, announcePct, isWithinLead, anchorPct, fillTrackGaps, posAtPct, isLapCrossing } from "../lib/coach-live.js";
+import { detectCorners, lapFacts, cornerFacts, compareCorner, bestAdvice, announcePct, isWithinLead, anchorPct, fillTrackGaps, posAtPct, isLapCrossing, detectShifts } from "../lib/coach-live.js";
 import { findLovelyTrack, lovelyCorners, labelForRange } from "../lib/lovely-tracks.js";
 import * as voice from "../lib/voice.js";
 import { syncTiles, tileUrl } from "../lib/tiles.js";
@@ -33,6 +33,10 @@ const OFFSET_MIN_COVERAGE = 1 / 8;
 const TRAIL_OFFSET_M = 6;         // separación de tu trazada respecto de la referencia
 const HEADING_SMOOTH = 0.15;      // suavizado del rumbo (0..1, más = más nervioso)
 const SPAN_OPTIONS = [120, 220, 400, 800]; // metros de pista visibles
+// Umbrales con los que se colorea la referencia (fraccion de pedal).
+const BRAKE_ON_REF = 0.15;
+const THROTTLE_ON_REF = 0.05;
+const THROTTLE_FULL_REF = 0.95;
 const MAX_TILE_RETRIES = 4;       // reintentos por tile que no carga
 const TILE_RETRY_BASE_MS = 400;   // espera del primer reintento (después se duplica)
 
@@ -273,11 +277,12 @@ export function CoachView() {
       label: labelForRange(namedCorners, c.pctStart, c.pctEnd) || `Curva ${c.index + 1}`,
     }));
     const facts = lapFacts(refInfo.samples, base);
+    const shifts = detectShifts(refInfo.samples);
     // El aviso se ancla al punto de FRENADA de la referencia, no al inicio de
     // la curva: un "frená 60 m antes" que llega cuando ya estás frenando no
     // sirve de nada. Si la referencia no frena ahí, el ancla es la curva.
     const corners = base.map((c, i) => ({ ...c, anchorPct: anchorPct(c, facts[i]) }));
-    return { corners, facts };
+    return { corners, facts, shifts };
   }, [refInfo, namedCorners]);
 
   // Sectores para el selector de alcance (los reales de Lovely si están).
@@ -549,10 +554,18 @@ export function CoachView() {
       const g = (s && s.lat != null && s.lon != null) ? s : trackShape.pts[i];
       return g ? { ...geo.proj(g.lat, g.lon), br: s ? s.br : null, th: s ? s.th : null } : null;
     });
+    // La referencia se pinta por lo que hace el pedal en cada punto, con cuatro
+    // estados y no dos. Antes solo se marcaban freno y acelerador a fondo, asi
+    // que el acelerador parcial y el ir sin gas -el 15% de la vuelta en la
+    // referencia de Virginia- quedaban sin color y parecia que no pasaba nada.
+    const br = (i) => pts[i]?.br ?? 0;
+    const th = (i) => pts[i]?.th ?? 0;
     return {
       line: pointsPath(pts),
-      brake: maskedPath(pts, (i) => (pts[i]?.br ?? 0) > 0.15),
-      throttle: maskedPath(pts, (i) => (pts[i]?.th ?? 0) > 0.95),
+      brake: maskedPath(pts, (i) => br(i) > BRAKE_ON_REF),
+      full: maskedPath(pts, (i) => br(i) <= BRAKE_ON_REF && th(i) > THROTTLE_FULL_REF),
+      partial: maskedPath(pts, (i) => br(i) <= BRAKE_ON_REF && th(i) > THROTTLE_ON_REF && th(i) <= THROTTLE_FULL_REF),
+      coast: maskedPath(pts, (i) => br(i) <= BRAKE_ON_REF && th(i) <= THROTTLE_ON_REF),
       pts,
     };
   }, [geo, refInfo, trackShape]);
@@ -571,6 +584,16 @@ export function CoachView() {
       lon: refM.lon0 + (pe + e.offE) / refM.mLon,
     };
   };
+
+  // Marcas de cambio de marcha sobre la linea de referencia: dicen en que punto
+  // de pista hay que hacer cada cambio, que es de lo mas dificil de sacar solo.
+  const shiftMarks = useMemo(() => {
+    if (!geo || !plan || !refPath) return [];
+    return plan.shifts.map((sh) => {
+      const p0 = refPath.pts[Math.min(BINS - 1, Math.floor(sh.pct * BINS))];
+      return p0 ? { ...sh, x: p0.x, y: p0.y } : null;
+    }).filter(Boolean);
+  }, [geo, plan, refPath]);
 
   // Posición del auto: la estimada (que es la trazada REAL) y, si por lo que
   // fuera no hubiera, el punto de la referencia en tu distancia de vuelta.
@@ -884,10 +907,37 @@ export function CoachView() {
               {/* Referencia: línea base + zonas de freno (rojo) y de acelerador
                   a fondo (verde), que es lo que hay que copiar. */}
               {refPath && <>
-              <path d={refPath.line} fill="none" stroke="rgba(255,255,255,0.65)" strokeWidth={2.4 * k} strokeLinecap="round" strokeDasharray={`${7 * k} ${5 * k}`} />
-              <path d={refPath.brake} fill="none" stroke="rgb(239,68,68)" strokeWidth={5 * k} strokeLinecap="round" opacity="0.9" />
-              <path d={refPath.throttle} fill="none" stroke="rgb(52,211,153)" strokeWidth={5 * k} strokeLinecap="round" opacity="0.9" />
+              {/* Base continua, para que la linea nunca se corte. */}
+              <path d={refPath.line} fill="none" stroke="rgba(255,255,255,0.30)" strokeWidth={2 * k} strokeLinecap="round" />
+              {/* Cuatro estados del pedal: sin gas, gas parcial, a fondo, freno. */}
+              <path d={refPath.coast} fill="none" stroke="rgb(203,213,225)" strokeWidth={4.2 * k} strokeLinecap="round" opacity="0.85" />
+              <path d={refPath.partial} fill="none" stroke="rgb(132,204,22)" strokeWidth={4.6 * k} strokeLinecap="round" opacity="0.9" />
+              <path d={refPath.full} fill="none" stroke="rgb(52,211,153)" strokeWidth={5 * k} strokeLinecap="round" opacity="0.95" />
+              <path d={refPath.brake} fill="none" stroke="rgb(239,68,68)" strokeWidth={5 * k} strokeLinecap="round" opacity="0.95" />
               </>}
+
+              {/* Cambios de marcha de la referencia: naranja hacia abajo,
+                  celeste hacia arriba, con la marcha que pone. El texto se
+                  contra-rota para que quede legible con el mapa girado. */}
+              {shiftMarks.map((m, i) => {
+                const color = m.up ? "rgb(125,211,252)" : "rgb(251,146,60)";
+                const r = 3.2 * k;
+                return (
+                  <g key={`sh${i}`}>
+                    <circle cx={m.x} cy={m.y} r={r} fill={color} stroke="rgba(0,0,0,0.8)" strokeWidth={1.1 * k} />
+                    <g transform={`rotate(${-rot} ${m.x} ${m.y})`}>
+                      <text
+                        x={m.x + r * 1.8} y={m.y + r}
+                        fill={color} stroke="rgba(0,0,0,0.85)" strokeWidth={0.7 * k} paintOrder="stroke"
+                        fontSize={10 * k} fontWeight="700"
+                        style={{ fontFamily: "ui-monospace, monospace" }}
+                      >
+                        {m.up ? "\u2191" : "\u2193"}{m.to}
+                      </text>
+                    </g>
+                  </g>
+                );
+              })}
 
               {/* Tu vuelta, en paralelo: amarillo de base, rojo donde frenás
                   vos y verde donde vas a fondo. Comparar tu banda contra la de
@@ -917,10 +967,17 @@ export function CoachView() {
         {/* Última curva + estado, sobre el mapa */}
         {/* Leyenda: sin esto las dos bandas paralelas no se entienden. */}
         <div className="absolute left-3 top-3 flex items-center gap-3 text-[10px] bg-black/60 rounded-md px-2.5 py-1.5 backdrop-blur-sm">
-          <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-0.5 bg-white/70" />Referencia</span>
-          <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-0.5" style={{ background: "rgb(234,179,8)" }} />Vos</span>
+          <span className="text-white/45">Referencia:</span>
           <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-0.5" style={{ background: "rgb(239,68,68)" }} />Freno</span>
+          <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-0.5" style={{ background: "rgb(203,213,225)" }} />Sin gas</span>
+          <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-0.5" style={{ background: "rgb(132,204,22)" }} />Gas parcial</span>
           <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-0.5" style={{ background: "rgb(52,211,153)" }} />A fondo</span>
+          <span className="flex items-center gap-1.5" title="Punto donde la referencia cambia de marcha, con la marcha que pone. Naranja = baja, celeste = sube.">
+            <span className="inline-block size-1.5 rounded-full" style={{ background: "rgb(251,146,60)" }} />
+            <span className="inline-block size-1.5 rounded-full" style={{ background: "rgb(125,211,252)" }} />
+            Cambios
+          </span>
+          <span className="flex items-center gap-1.5 border-l border-white/15 pl-2"><span className="inline-block w-4 h-0.5" style={{ background: "rgb(234,179,8)" }} />Vos</span>
           <span className="text-white/40" title={hasRealLine
             ? "iRacing no publica la posición del auto, así que se reconstruye integrando la velocidad y el rumbo. Verificado contra el GPS de los .ibt: menos de 1 m de error por vuelta."
             : "Calibrando la posición: hace falta recorrer un tramo de pista. Hasta entonces tu línea va en paralelo a la de la referencia, no en su lugar real."}>
