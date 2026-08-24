@@ -22,16 +22,13 @@ const ADVICE_MIN_MS = 2600;       // un aviso no pisa a otro antes de esto
 const ADVICE_HOLD_MS = 7000;      // y se borra solo pasado esto
 const VOICE_MIN_MS = 3500;        // y no se habla encima de otro aviso
 const M_PER_DEG_LAT = 111320;     // metros por grado de latitud
-// Cuánto de la vuelta hace falta haber recorrido para fijar el desfase. Un
-// tercio alcanza: con ~250 muestras repartidas por el trazado el ruido de
-// bineado ya se cancela, y exigir más hacía que una vuelta con un tramo perdido
-// (un paso por boxes) no calibrara nunca.
-const OFFSET_MIN_COVERAGE = 1 / 3;
-// La trazada reconstruida se muestra sólo cuando el desfase contra la
-// referencia se midió con una vuelta ENTERA. Con media vuelta (la de salida de
-// boxes) el desfase queda sesgado: medido sobre .ibt reales daba más de 100 m de
-// error. Hasta entonces el auto se ubica por distancia de vuelta, que es exacta
-// a lo largo del trazado, y la trazada propia va en banda paralela.
+// Cuánto de la vuelta hace falta haber recorrido para fijar el desfase contra
+// la referencia. Un octavo (~100 muestras repartidas) ya promedia el ruido de
+// bineado; a partir de ahí el desfase se sigue refinando con cada muestra.
+// Exigir más era peor: había que dar una vuelta entera antes de ver la trazada.
+// Mientras no alcanza, el auto se ubica por distancia de vuelta —exacta a lo
+// largo del trazado— y la trazada propia va en banda paralela.
+const OFFSET_MIN_COVERAGE = 1 / 8;
 const TRAIL_OFFSET_M = 6;         // separación de tu trazada respecto de la referencia
 const HEADING_SMOOTH = 0.15;      // suavizado del rumbo (0..1, más = más nervioso)
 const SPAN_OPTIONS = [120, 220, 400, 800]; // metros de pista visibles
@@ -342,15 +339,9 @@ export function CoachView() {
           }
         }
 
-        // Fijar el desfase con el promedio de TODA la vuelta. Anclar en un solo
-        // punto hereda el error de ese bin de la referencia (con 800 bins, en
-        // Spa cada bin son ~9 m) y desplaza la vuelta entera; promediando sobre
-        // miles de muestras ese ruido se cancela.
-        if (e.accC >= BINS * OFFSET_MIN_COVERAGE) {
-          e.offE = e.accE / e.accC;
-          e.offN = e.accN / e.accC;
-          e.offLocked = true;
-        }
+        // Empieza la cuenta de la vuelta nueva. El desfase vigente se mantiene
+        // hasta que ésta junte material propio: la deriva de una vuelta es de
+        // ~1 m, así que no hay salto perceptible al relevarlo.
         e.accE = 0; e.accN = 0; e.accC = 0;
         e.bins = new Array(BINS).fill(null);
         e.announced = new Set();
@@ -393,9 +384,24 @@ export function CoachView() {
         const b = Math.min(BINS - 1, Math.max(0, Math.floor(f.lapDistPct * BINS)));
         e.bins[b] = { th: f.throttle, br: f.brake, st: f.steer, sp: f.speed, g: f.gear, lat: f.lat, lon: f.lon, pe: f.posE, pn: f.posN };
         // Desfase contra la referencia en este punto, acumulado para la vuelta.
+        // El offset se fija EN CUANTO hay material suficiente y se sigue
+        // refinando con cada muestra; no espera el cruce de meta. Esperarlo
+        // significaba que había que dar una vuelta entera antes de ver la
+        // trazada, y si algo reiniciaba la cuenta en el camino no aparecía
+        // nunca. Medido contra el GPS real, calibrar con una vuelta parcial da
+        // ~1,9 m de error y baja de 1 m cuando la vuelta se completa.
         if (f.posE != null && refMRef.current) {
           const rp = refMRef.current.pts[b];
-          if (rp) { e.accE += rp.e - f.posE; e.accN += rp.n - f.posN; e.accC++; }
+          if (rp) {
+            e.accE += rp.e - f.posE;
+            e.accN += rp.n - f.posN;
+            e.accC++;
+            if (e.accC >= BINS * OFFSET_MIN_COVERAGE) {
+              e.offE = e.accE / e.accC;
+              e.offN = e.accN / e.accC;
+              e.offLocked = true;
+            }
+          }
         }
         if (f.lat != null && f.lon != null && e.shape[b] == null) {
           e.shape[b] = { lat: f.lat, lon: f.lon };
@@ -897,8 +903,8 @@ export function CoachView() {
           <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-0.5" style={{ background: "rgb(52,211,153)" }} />A fondo</span>
           <span className="text-white/40" title={hasRealLine
             ? "iRacing no publica la posición del auto, así que se reconstruye integrando la velocidad y el rumbo. Verificado contra el GPS de los .ibt: menos de 1 m de error por vuelta."
-            : "La trazada real se calibra con una vuelta entera. Hasta que cruces meta, tu línea va en paralelo a la de la referencia, no en su lugar real."}>
-            {hasRealLine ? "trazada reconstruida" : "calibrando: cruzá meta una vez"}
+            : "Calibrando la posición: hace falta recorrer un tramo de pista. Hasta entonces tu línea va en paralelo a la de la referencia, no en su lugar real."}>
+            {hasRealLine ? "trazada reconstruida" : `calibrando ${Math.round((e.accC / (BINS * OFFSET_MIN_COVERAGE)) * 100)}%`}
           </span>
         </div>
 

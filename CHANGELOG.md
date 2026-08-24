@@ -6,6 +6,23 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.14.1] - 2026-08-23
+
+### Corregido
+- La trazada real ya aparece a los dos segundos de estar en pista. Antes había
+  que completar una vuelta entera antes de que se mostrara, porque la posición
+  se calibraba únicamente al cruzar meta. Eso lo había puesto para bajar el
+  error, pero en la práctica significaba que a ritmo tranquilo —donde una vuelta
+  puede llevar tres minutos— la trazada casi nunca llegaba a aparecer, y si algo
+  reiniciaba la cuenta en el camino no aparecía nunca.
+  - Ahora la calibración se fija en cuanto se recorrió un octavo de vuelta y se
+    sigue afinando con cada muestra. Verificado en una sesión real en pista:
+    calibra a los 2 segundos y la posición cae entre 1,4 y 5,6 metros de la
+    línea de la referencia, que es la diferencia de trazada esperable dentro del
+    ancho del asfalto.
+  - El indicador del mapa muestra el avance de la calibración en porcentaje en
+    vez de pedir que cruces meta.
+
 ## [0.14.0] - 2026-08-23
 
 ### Agregado
