@@ -961,6 +961,10 @@ class IrsdkClient {
         // Posición estimada en metros (este, norte) — ver _deadReckon.
         posE: pos ? pos.e : null,
         posN: pos ? pos.n : null,
+        // En el pit lane el LapDistPct no corresponde al trazado (iRacing lo
+        // cuenta sobre el recorrido de boxes), así que el consumidor tiene que
+        // poder descartar esas muestras.
+        onPitRoad: !!this._read(telemetry, 'OnPitRoad'),
         completedLap,
       });
     }

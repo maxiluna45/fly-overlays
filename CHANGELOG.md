@@ -6,6 +6,29 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.13.3] - 2026-08-23
+
+### Corregido
+- En el coach, la trazada quedaba corrida un par de metros hacia un costado y no
+  se acomodaba nunca, la línea de la vuelta anterior no se borraba al cruzar
+  meta y el contador de avisos se quedaba en cero. Los tres síntomas eran el
+  mismo problema: todo eso pasaba al cruzar la línea, y el evento de "vuelta
+  completada" del que dependía no llega en la primera pasada cuando saliste de
+  boxes, porque no hay vuelta anterior cronometrada. Ahora el cruce se detecta
+  por la propia distancia de vuelta, que siempre está.
+- Las muestras del pit lane se descartan. Ahí iRacing cuenta la distancia sobre
+  el recorrido de boxes y no sobre el trazado, así que ubicaban el auto en un
+  lugar de la pista donde no estaba: medido saliendo de boxes en Oschersleben,
+  metían 350 metros de error y dibujaban una trazada que cruzaba la pista.
+- La calibración de la posición se hacía con la lista de muestras ya vaciada, así
+  que no corregía nada. Era la causa de que la trazada no se acomodara nunca.
+- La trazada real ahora aparece recién cuando se calibró con una vuelta entera;
+  hasta entonces la leyenda dice "calibrando: cruzá meta una vez" y el auto se
+  ubica por distancia de vuelta. Calibrar con media vuelta (la de salida de
+  boxes) daba más de 100 metros de error, y mostrarlo era peor que esperar.
+  Medido tras el arreglo: 1,3-1,9 m en la primera vuelta completa y 0,1-0,9 m en
+  las siguientes.
+
 ## [0.13.2] - 2026-08-23
 
 ### Cambiado

@@ -200,3 +200,20 @@ test('meanOffset no devuelve nada con media vuelta sin datos', async () => {
   assert.equal(meanOffset(bins, ref), null);
   assert.equal(meanOffset(null, ref), null);
 });
+
+// Regresión: el borrado de la trazada y el reajuste de la posición dependían de
+// `completedLap` del SDK, que no llega en la primera pasada por meta cuando
+// saliste de boxes (no hay vuelta anterior cronometrada). Resultado: la vuelta
+// vieja quedaba dibujada y la posición nunca se corregía.
+test('isLapCrossing detecta el cruce de meta por el salto de LapDistPct', async () => {
+  const { isLapCrossing } = await load();
+  assert.equal(isLapCrossing(0.99, 0.01), true);
+  assert.equal(isLapCrossing(0.85, 0.05), true);
+  // Avance normal: no es cruce.
+  assert.equal(isLapCrossing(0.30, 0.31), false);
+  assert.equal(isLapCrossing(0.10, 0.90), false); // retroceso (reset a boxes)
+  assert.equal(isLapCrossing(0.79, 0.19), false); // salto chico, no llega a meta
+  // Sin dato previo (primer frame) no se inventa un cruce.
+  assert.equal(isLapCrossing(null, 0.01), false);
+  assert.equal(isLapCrossing(0.99, null), false);
+});

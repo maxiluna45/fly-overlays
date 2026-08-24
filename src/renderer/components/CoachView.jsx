@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Upload, Volume2, VolumeX, Compass, Crosshair, MapPin } from "lucide-react";
 import { resampleSamples } from "../lib/coach.js";
-import { detectCorners, lapFacts, cornerFacts, compareCorner, bestAdvice, announcePct, isWithinLead, anchorPct, fillTrackGaps, posAtPct, meanOffset } from "../lib/coach-live.js";
+import { detectCorners, lapFacts, cornerFacts, compareCorner, bestAdvice, announcePct, isWithinLead, anchorPct, fillTrackGaps, posAtPct, meanOffset, isLapCrossing } from "../lib/coach-live.js";
 import { findLovelyTrack, lovelyCorners, labelForRange } from "../lib/lovely-tracks.js";
 import { sameTrackAny } from "../lib/session-match.js";
 
@@ -21,6 +21,11 @@ const ADVICE_MIN_MS = 2600;       // un aviso no pisa a otro antes de esto
 const ADVICE_HOLD_MS = 7000;      // y se borra solo pasado esto
 const VOICE_MIN_MS = 3500;        // y no se habla encima de otro aviso
 const M_PER_DEG_LAT = 111320;     // metros por grado de latitud
+// La trazada reconstruida se muestra sólo cuando el desfase contra la
+// referencia se midió con una vuelta ENTERA. Con media vuelta (la de salida de
+// boxes) el desfase queda sesgado: medido sobre .ibt reales daba más de 100 m de
+// error. Hasta entonces el auto se ubica por distancia de vuelta, que es exacta
+// a lo largo del trazado, y la trazada propia va en banda paralela.
 const TRAIL_OFFSET_M = 6;         // separación de tu trazada respecto de la referencia
 const HEADING_SMOOTH = 0.15;      // suavizado del rumbo (0..1, más = más nervioso)
 const SPAN_OPTIONS = [120, 220, 400, 800]; // metros de pista visibles
@@ -134,6 +139,8 @@ export function CoachView() {
     // Traslación (metros este/norte) que lleva la posición estimada al marco de
     // la referencia. Se recalcula al cerrar cada vuelta con TODA la vuelta.
     offE: null, offN: null,
+    offLocked: false,         // true = medido con una vuelta entera
+    prevPct: null,
     shape: new Array(BINS).fill(null),
     shapeFilled: 0,
     frames: 0,
@@ -243,7 +250,12 @@ export function CoachView() {
 
       // Cruce de meta: cerramos la vuelta, sacamos las conclusiones y borramos
       // el recorrido dibujado.
-      if (f.completedLap) {
+      // Cruce de meta. Se detecta por el salto de LapDistPct y no por el
+      // `completedLap` del SDK: ese evento exige una vuelta anterior
+      // cronometrada, así que saliendo de boxes la primera pasada por meta no
+      // lo dispara — y sin él no se borraba la trazada ni se reajustaba la
+      // posición, que es justo lo que se veía mal.
+      if (isLapCrossing(e.prevPct, f.lapDistPct)) {
         const p = planRef.current, r = refRef.current;
         if (p && r) {
           const mine = lapFacts(e.bins, p.corners);
@@ -255,28 +267,31 @@ export function CoachView() {
             })
           );
         }
+        // Medir el desfase con la VUELTA ENTERA **antes** de limpiar los bins.
+        // Anclar en un solo punto hereda el error de ese bin de la referencia
+        // (con 800 bins, en Spa cada bin son ~9 m) y desplaza toda la vuelta;
+        // promediando sobre los ~800 bins ese ruido se cancela.
+        if (refMRef.current) {
+          const off = meanOffset(e.bins, refMRef.current.pts);
+          if (off) { e.offE = off.e; e.offN = off.n; e.offLocked = true; }
+        }
         e.bins = new Array(BINS).fill(null);
         e.announced = new Set();
         e.reacted = new Set();
         e.variant++;
         e.trailVersion++;
-        // Re-anclar con la VUELTA ENTERA, no con un punto. Anclar en un solo
-        // punto hereda el error de ese bin de la referencia (con 800 bins, en
-        // Spa cada bin son ~9 m) y desplaza toda la vuelta. Promediando el
-        // desfase sobre los ~800 bins ese ruido se cancela: medido contra el
-        // GPS real, el error medio baja de 4,8-8,7 m a 0,9-1,4 m, y al final de
-        // la vuelta de 5,3-8,6 m a 0,5-1,6 m.
-        if (refMRef.current) {
-          const off = meanOffset(e.bins, refMRef.current.pts);
-          if (off) { e.offE = off.e; e.offN = off.n; }
-        }
         setShapeVersion((v) => v + 1); // la forma de la pista ya está completa
       }
+      e.prevPct = f.lapDistPct;
 
       e.frames++;
       if (f.posE != null) e.framesGps++;
       if (f.posE != null && f.posN != null) { e.posE = f.posE; e.posN = f.posN; }
-      if (f.onTrack && f.lapDistPct >= 0 && f.lapDistPct <= 1) {
+      // En boxes el LapDistPct va sobre el recorrido del pit lane, no sobre el
+      // trazado, así que esas muestras no se guardan: contaminaban el desfase
+      // (medido: 350 m de error saliendo de boxes en Oschersleben) y dibujaban
+      // una trazada que cruzaba la pista.
+      if (f.onTrack && !f.onPitRoad && f.lapDistPct >= 0 && f.lapDistPct <= 1) {
         const b = Math.min(BINS - 1, Math.max(0, Math.floor(f.lapDistPct * BINS)));
         e.bins[b] = { th: f.throttle, br: f.brake, st: f.steer, sp: f.speed, g: f.gear, lat: f.lat, lon: f.lon, pe: f.posE, pn: f.posN };
         if (f.lat != null && f.lon != null && e.shape[b] == null) {
@@ -435,13 +450,8 @@ export function CoachView() {
   const e = eng.current;
 
   // La posición estimada viene en metros con origen arbitrario; el desfase
-  // hasta el marco de la referencia se ajusta al cerrar cada vuelta. Mientras
-  // no haya una vuelta completa se usa un ancla provisoria de un punto, para
-  // que el mapa muestre algo desde el arranque.
-  if (e.offE == null && e.posE != null && refM) {
-    const r0 = refM.pts[Math.min(BINS - 1, Math.floor(e.pct * BINS))];
-    if (r0) { e.offE = r0.e - e.posE; e.offN = r0.n - e.posN; }
-  }
+  // hasta el marco de la referencia lo mide el handler (progresivo mientras no
+  // haya una vuelta entera, y con la vuelta entera en cada cruce de meta).
   const toLatLon = (pe, pn) => {
     if (!refM || e.offE == null || pe == null || pn == null) return null;
     return {
@@ -452,9 +462,9 @@ export function CoachView() {
 
   // Posición del auto: la estimada (que es la trazada REAL) y, si por lo que
   // fuera no hubiera, el punto de la referencia en tu distancia de vuelta.
-  const carGeo = toLatLon(e.posE, e.posN) || (smooth ? posAtPct(smooth, e.pct) : null);
+  const hasRealLine = e.offLocked && e.offE != null && e.posE != null;
+  const carGeo = (hasRealLine ? toLatLon(e.posE, e.posN) : null) || (smooth ? posAtPct(smooth, e.pct) : null);
   const car = geo && carGeo ? geo.proj(carGeo.lat, carGeo.lon) : null;
-  const hasRealLine = e.offE != null && e.posE != null;
 
   // Tu recorrido. Con la posición estimada es la trazada REAL, en su lugar
   // real: se ve si vas por afuera o por adentro de la referencia. Si no la
@@ -738,8 +748,8 @@ export function CoachView() {
           <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-0.5" style={{ background: "rgb(52,211,153)" }} />A fondo</span>
           <span className="text-white/40" title={hasRealLine
             ? "iRacing no publica la posición del auto, así que se reconstruye integrando la velocidad y el rumbo. Verificado contra el GPS de los .ibt: menos de 1 m de error por vuelta."
-            : "Todavía sin posición reconstruida: tu línea va en paralelo a la de la referencia, no en su lugar real."}>
-            {hasRealLine ? "trazada reconstruida" : "posición por distancia de vuelta"}
+            : "La trazada real se calibra con una vuelta entera. Hasta que cruces meta, tu línea va en paralelo a la de la referencia, no en su lugar real."}>
+            {hasRealLine ? "trazada reconstruida" : "calibrando: cruzá meta una vez"}
           </span>
         </div>
 

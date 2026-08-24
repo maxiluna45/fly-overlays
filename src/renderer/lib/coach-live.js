@@ -365,3 +365,15 @@ export function meanOffset(bins, refPts, { minCoverage = 0.5 } = {}) {
   if (count < n * minCoverage) return null;
   return { e: sE / count, n: sN / count, samples: count };
 }
+
+// ── Cruce de meta ────────────────────────────────────────────────────────
+// Detecta el cruce por el salto de LapDistPct de ~1 a ~0.
+//
+// Por qué no usar el `completedLap` del SDK: ése exige que LapLastLapTime sea
+// mayor que 0, y saliendo de boxes la primera pasada por meta no tiene vuelta
+// anterior cronometrada. Ahí el evento nunca llega, y con él no llegaba ni el
+// borrado de la trazada ni el reajuste de la posición.
+export function isLapCrossing(prevPct, pct) {
+  if (prevPct == null || pct == null) return false;
+  return prevPct > 0.8 && pct < 0.2;
+}
