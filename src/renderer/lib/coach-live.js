@@ -351,7 +351,11 @@ export function posAtPct(pts, pct) {
 // `refPts` = geometría de la referencia en metros, mismo índice de bin.
 // Devuelve null si no hay cobertura suficiente para que el promedio signifique
 // algo (media vuelta).
-export function meanOffset(bins, refPts, { minCoverage = 0.5 } = {}) {
+// `minCoverage` es bajo a propósito (un tercio de la vuelta): si se perdió un
+// tramo — un paso por boxes, un tramo fuera de pista — con exigir media vuelta
+// la calibración no se recuperaba nunca. Con 250 muestras repartidas por el
+// trazado el promedio ya es sólido: el ruido de bineado se cancela igual.
+export function meanOffset(bins, refPts, { minCoverage = 1 / 3 } = {}) {
   const n = Math.min(bins?.length || 0, refPts?.length || 0);
   if (!n) return null;
   let sE = 0, sN = 0, count = 0;
@@ -376,21 +380,4 @@ export function meanOffset(bins, refPts, { minCoverage = 0.5 } = {}) {
 export function isLapCrossing(prevPct, pct) {
   if (prevPct == null || pct == null) return false;
   return prevPct > 0.8 && pct < 0.2;
-}
-
-// ── Sanidad de la calibración ────────────────────────────────────────────
-// La navegación a estima no puede ver un teletransporte: si volvés a boxes, te
-// resetean o pedís un tow, iRacing mueve el auto sin que haya velocidad que
-// integrar, y a partir de ahí la posición reconstruida queda desfasada por la
-// distancia del salto — el auto aparece dibujado en el medio del campo.
-//
-// El chequeo es independiente de la causa: en tu propia distancia de vuelta, la
-// referencia y vos están en el mismo punto del trazado, así que la diferencia
-// sólo puede ser lateral. Más que el ancho de pista con escapatorias es
-// imposible, y significa que la calibración se rompió.
-export const MAX_LATERAL_M = 40;
-
-export function calibrationBroken(estE, estN, refPt, maxM = MAX_LATERAL_M) {
-  if (!refPt || estE == null || estN == null) return false;
-  return Math.hypot(refPt.e - estE, refPt.n - estN) > maxM;
 }

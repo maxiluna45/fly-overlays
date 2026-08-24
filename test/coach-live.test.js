@@ -191,13 +191,18 @@ test('meanOffset promedia el desfase de toda la vuelta y cancela el ruido de un 
   assert.equal(off.samples, 100);
 });
 
-test('meanOffset no devuelve nada con media vuelta sin datos', async () => {
+test('meanOffset exige cobertura mínima pero se conforma con un tercio de vuelta', async () => {
   const { meanOffset } = await load();
   const n = 100;
   const ref = new Array(n).fill(null).map((_, i) => ({ e: i, n: 0 }));
-  const bins = new Array(n).fill(null);
-  for (let i = 0; i < 40; i++) bins[i] = { pe: i, pn: 0 };
-  assert.equal(meanOffset(bins, ref), null);
+  const few = new Array(n).fill(null);
+  for (let i = 0; i < 20; i++) few[i] = { pe: i, pn: 0 };
+  assert.equal(meanOffset(few, ref), null); // 20%: no alcanza
+  // 40% sí: con una vuelta a la que le falta un tramo (un paso por boxes) la
+  // calibración tiene que poder recuperarse igual.
+  const enough = new Array(n).fill(null);
+  for (let i = 0; i < 40; i++) enough[i] = { pe: i, pn: 0 };
+  assert.ok(meanOffset(enough, ref) != null);
   assert.equal(meanOffset(null, ref), null);
 });
 
@@ -216,20 +221,4 @@ test('isLapCrossing detecta el cruce de meta por el salto de LapDistPct', async 
   // Sin dato previo (primer frame) no se inventa un cruce.
   assert.equal(isLapCrossing(null, 0.01), false);
   assert.equal(isLapCrossing(0.99, null), false);
-});
-
-// Regresión: al volver a boxes el auto se teletransporta, la estima no lo ve y
-// la trazada quedaba dibujada en el medio del campo sin recuperarse nunca.
-test('calibrationBroken detecta que la posición se fue del trazado', async () => {
-  const { calibrationBroken, MAX_LATERAL_M } = await load();
-  const ref = { e: 100, n: 200 };
-  // Diferencia lateral normal entre tu línea y la referencia: sana.
-  assert.equal(calibrationBroken(106, 203, ref), false);
-  assert.equal(calibrationBroken(100 + MAX_LATERAL_M - 1, 200, ref), false);
-  // Teletransporte a boxes: cientos de metros.
-  assert.equal(calibrationBroken(600, 900, ref), true);
-  assert.equal(calibrationBroken(100 + MAX_LATERAL_M + 1, 200, ref), true);
-  // Sin datos no se declara roto (evita invalidar en el arranque).
-  assert.equal(calibrationBroken(null, null, ref), false);
-  assert.equal(calibrationBroken(100, 200, null), false);
 });

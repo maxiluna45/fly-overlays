@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Upload, Volume2, VolumeX, Compass, Crosshair, MapPin } from "lucide-react";
+import { Upload, Volume2, VolumeX, Compass, Crosshair, MapPin, Play } from "lucide-react";
 import { resampleSamples } from "../lib/coach.js";
-import { detectCorners, lapFacts, cornerFacts, compareCorner, bestAdvice, announcePct, isWithinLead, anchorPct, fillTrackGaps, posAtPct, meanOffset, isLapCrossing, calibrationBroken } from "../lib/coach-live.js";
+import { detectCorners, lapFacts, cornerFacts, compareCorner, bestAdvice, announcePct, isWithinLead, anchorPct, fillTrackGaps, posAtPct, meanOffset, isLapCrossing } from "../lib/coach-live.js";
 import { findLovelyTrack, lovelyCorners, labelForRange } from "../lib/lovely-tracks.js";
+import * as voice from "../lib/voice.js";
 import { sameTrackAny } from "../lib/session-match.js";
 
 // Coach en vivo: mapa que sigue al auto (estilo Google Maps) sobre la foto
@@ -83,15 +84,26 @@ const fmtLapTime = (s) => {
   return `${m}:${(s - m * 60).toFixed(3).padStart(6, "0")}`;
 };
 
-function speak(text) {
+// Volumen: 100% ya suena bastante más fuerte que la voz del navegador (el WAV
+// se normaliza y se comprime, ver lib/voice.js). El tope de 300% es para
+// escucharse por encima del juego con auriculares puestos.
+const VOL_MIN = 0, VOL_MAX = 3, VOL_STEP = 0.1;
+const VOL_KEY = "ifly.coachVoice";
+
+function loadVoicePrefs() {
   try {
-    if (!window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = "es-ES";
-    u.rate = 1.15;
-    window.speechSynthesis.speak(u);
-  } catch (_) {}
+    const raw = JSON.parse(localStorage.getItem(VOL_KEY) || "{}");
+    return {
+      on: !!raw.on,
+      gain: isFinite(raw.gain) ? Math.min(VOL_MAX, Math.max(VOL_MIN, raw.gain)) : 1.4,
+      voiceName: typeof raw.voiceName === "string" ? raw.voiceName : "",
+    };
+  } catch (_) {
+    return { on: false, gain: 1.4, voiceName: "" };
+  }
+}
+function saveVoicePrefs(p) {
+  try { localStorage.setItem(VOL_KEY, JSON.stringify(p)); } catch (_) {}
 }
 
 export function CoachView() {
@@ -103,7 +115,12 @@ export function CoachView() {
 
   // ── Opciones ────────────────────────────────────────────────────────────
   const [spanM, setSpanM] = useState(220);
-  const [voice, setVoice] = useState(false);
+  const prefs0 = useMemo(() => loadVoicePrefs(), []);
+  const [voiceOn, setVoiceOn] = useState(prefs0.on);
+  const [gain, setGain] = useState(prefs0.gain);
+  const [voiceName, setVoiceName] = useState(prefs0.voiceName);
+  const [voices, setVoices] = useState([]);
+  const [testing, setTesting] = useState(false);
   const [headingUp, setHeadingUp] = useState(true);
   const [scope, setScope] = useState("all"); // all | s1 | s2 | s3 | c<i>
 
@@ -196,6 +213,41 @@ export function CoachView() {
     }
   }, [loadList, loadReference]);
 
+  useEffect(() => { saveVoicePrefs({ on: voiceOn, gain, voiceName }); }, [voiceOn, gain, voiceName]);
+
+  // Voces del sistema (las que expone Windows por WinRT).
+  useEffect(() => {
+    if (!window.fly?.ttsVoices) return;
+    window.fly.ttsVoices().then((v) => {
+      setVoices(Array.isArray(v) ? v : []);
+      // Por defecto, la primera voz en español.
+      setVoiceName((cur) => cur || (v || []).find((x) => /^es/i.test(x.lang))?.name || (v || [])[0]?.name || "");
+    }).catch(() => {});
+  }, []);
+
+  // Sintetiza y deja el audio listo para sonar. Devuelve true si quedó cargado.
+  const prime = useCallback(async (text) => {
+    if (!text || voice.isLoaded(text)) return voice.isLoaded(text);
+    if (!window.fly?.ttsSay) return false;
+    try {
+      const wav = await window.fly.ttsSay(text, voiceNameRef.current);
+      if (!wav) return false;
+      return !!(await voice.preload(text, wav));
+    } catch (_) { return false; }
+  }, []);
+  const primeRef = useRef(prime); primeRef.current = prime;
+
+  const sayNow = useCallback(async (text) => {
+    if (!text) return;
+    if (!voice.isLoaded(text)) await prime(text);
+    if (!voice.play(text, { gain: gainRef.current })) {
+      // Sin síntesis del sistema queda la voz del navegador, que no puede
+      // pasar del 100% de volumen.
+      voice.fallbackSpeak(text);
+    }
+  }, [prime]);
+  const sayRef = useRef(sayNow); sayRef.current = sayNow;
+
   // ── Curvas de la referencia + datos de cada una ─────────────────────────
   const trackData = useMemo(
     () => (refInfo ? findLovelyTrack(refInfo.trackKey, refInfo.track) : null),
@@ -240,7 +292,9 @@ export function CoachView() {
   const planRef = useRef(null); planRef.current = plan;
   const refRef = useRef(null); refRef.current = refInfo;
   const inScopeRef = useRef(inScope); inScopeRef.current = inScope;
-  const voiceRef = useRef(voice); voiceRef.current = voice;
+  const voiceRef = useRef(voiceOn); voiceRef.current = voiceOn;
+  const gainRef = useRef(gain); gainRef.current = gain;
+  const voiceNameRef = useRef(voiceName); voiceNameRef.current = voiceName;
 
   useEffect(() => {
     if (!window.fly?.onCoachFrame) return;
@@ -267,6 +321,16 @@ export function CoachView() {
             })
           );
         }
+        // Sintetizar por adelantado las frases de la vuelta: cuesta ~450 ms cada
+        // una, y llegando a una curva eso es tarde. Acá ya se sabe todo lo que
+        // se va a decir en la vuelta que arranca, así que cuando toque decirlo
+        // el audio va a estar listo.
+        if (voiceRef.current) {
+          for (const v of e.verdicts) {
+            if (v) primeRef.current(`${v.cornerLabel}. ${v.text}`);
+          }
+        }
+
         // Medir el desfase con la VUELTA ENTERA **antes** de limpiar los bins.
         // Anclar en un solo punto hereda el error de ese bin de la referencia
         // (con 800 bins, en Spa cada bin son ~9 m) y desplaza toda la vuelta;
@@ -287,38 +351,21 @@ export function CoachView() {
       e.frames++;
       if (f.posE != null) e.framesGps++;
 
-      // Discontinuidad de posición. Volver a boxes, un reset o un tow
-      // teletransportan el auto y la estima no lo ve, así que la calibración
-      // deja de valer. Hay dos casos, y NO se tratan igual:
+      // Volver a boxes, un reset o un tow teletransportan el auto, y la
+      // navegación a estima no puede ver un salto sin velocidad de por medio:
+      // de ahí en adelante la posición queda corrida por la distancia del
+      // salto. Las muestras de antes y de después no son comparables, así que
+      // se descartan y la calibración se mide de nuevo.
       //
-      // 1) Teletransporte (fuera del mundo o en el pit lane). La estima tiene un
-      //    salto real: lo de antes y lo de después están en marcos distintos, así
-      //    que las muestras de la vuelta ya no sirven y se descartan.
-      // 2) La posición se fue lejos del trazado sin bandera de por medio. Acá lo
-      //    único inválido es el desfase contra la referencia; las posiciones
-      //    estimadas siguen siendo coherentes entre sí. Se borra el desfase pero
-      //    NO las muestras, porque son justamente el material para recalibrar en
-      //    el próximo cruce de meta. (Borrarlas dejaba la cobertura por debajo del
-      //    mínimo, la calibración no se recuperaba nunca y la trazada quedaba en
-      //    modo banda paralela para siempre.)
-      const teleported = !f.onTrack || f.onPitRoad;
-      if (teleported) {
+      // No hay ninguna heurística por distancia acá a propósito: el desfase se
+      // remide en CADA cruce de meta, así que un salto que no venga marcado se
+      // corrige solo en la vuelta siguiente. Intentar detectarlo por "la
+      // posición se fue lejos" invalidaba calibraciones que estaban bien.
+      if (!f.onTrack || f.onPitRoad) {
         if (e.offE != null || e.bins.some(Boolean)) {
           e.offE = null; e.offN = null; e.offLocked = false;
           e.bins = new Array(BINS).fill(null);
           e.trailVersion++;
-        }
-      } else if (e.offLocked && refMRef.current && f.posE != null && f.lapDistPct >= 0) {
-        const rp = refMRef.current.pts[Math.min(BINS - 1, Math.floor(f.lapDistPct * BINS))];
-        // Se exige que la desviación se sostenga: un bin ruidoso de la
-        // referencia no puede tirar abajo la calibración de la vuelta.
-        if (calibrationBroken(f.posE + e.offE, f.posN + e.offN, rp)) {
-          e.insane = (e.insane || 0) + 1;
-          if (e.insane > INSANE_FRAMES) {
-            e.offE = null; e.offN = null; e.offLocked = false; e.insane = 0;
-          }
-        } else {
-          e.insane = 0;
         }
       }
       if (f.posE != null && f.posN != null) { e.posE = f.posE; e.posN = f.posN; }
@@ -379,7 +426,7 @@ export function CoachView() {
           setAdvice({ ...v, at: now });
           if (voiceRef.current && now - e.voiceAt > VOICE_MIN_MS) {
             e.voiceAt = now;
-            speak(`${v.cornerLabel}. ${v.text}`);
+            sayRef.current(`${v.cornerLabel}. ${v.text}`);
           }
         }
 
@@ -675,14 +722,56 @@ export function CoachView() {
         >
           {headingUp ? <Crosshair className="size-3.5" /> : <Compass className="size-3.5" />}
         </button>
-        <button
-          onClick={() => setVoice((v) => !v)}
-          title={voice ? "Avisos por voz activados" : "Avisos por voz desactivados"}
-          className="px-2 py-1.5 rounded-md text-xs bg-card border border-border hover:bg-accent/50"
-          style={{ color: voice ? "rgb(52,211,153)" : undefined }}
-        >
-          {voice ? <Volume2 className="size-3.5" /> : <VolumeX className="size-3.5" />}
-        </button>
+        <div className="flex items-center gap-1.5 border border-border rounded-md px-1.5 py-1 bg-card">
+          <button
+            onClick={() => setVoiceOn((v) => !v)}
+            title={voiceOn ? "Avisos por voz activados" : "Avisos por voz desactivados"}
+            className="p-0.5 rounded hover:bg-white/10"
+            style={{ color: voiceOn ? "rgb(52,211,153)" : "rgba(255,255,255,0.45)" }}
+          >
+            {voiceOn ? <Volume2 className="size-3.5" /> : <VolumeX className="size-3.5" />}
+          </button>
+          <input
+            type="range"
+            min={VOL_MIN}
+            max={VOL_MAX}
+            step={VOL_STEP}
+            value={gain}
+            onChange={(ev) => setGain(parseFloat(ev.target.value))}
+            disabled={!voiceOn}
+            className="w-20 accent-emerald-400"
+            title="Volumen de los avisos. Al 100% ya suena más fuerte que la voz del navegador; se puede llegar al 300%."
+          />
+          <span className="text-[10px] font-mono tabular-nums w-8 text-right text-muted-foreground">
+            {Math.round(gain * 100)}%
+          </span>
+          {voices.length > 0 && (
+            <select
+              value={voiceName}
+              onChange={(ev) => { setVoiceName(ev.target.value); voice.clearCache(); }}
+              disabled={!voiceOn}
+              className="bg-transparent text-[10px] max-w-[110px] border-l border-border pl-1.5"
+              title="Voz del sistema"
+            >
+              {voices.map((v) => (
+                <option key={v.name} value={v.name}>{v.name.replace(/^Microsoft /, "")}</option>
+              ))}
+            </select>
+          )}
+          <button
+            onClick={async () => {
+              setTesting(true);
+              voice.clearCache();
+              await sayNow("Frená veinte metros más tarde y tomala más abierta");
+              setTesting(false);
+            }}
+            disabled={testing}
+            title="Escuchar una prueba con el volumen y la voz elegidos"
+            className="p-0.5 rounded hover:bg-white/10 text-muted-foreground"
+          >
+            <Play className="size-3" />
+          </button>
+        </div>
       </div>
 
       {/* Selector de referencia */}

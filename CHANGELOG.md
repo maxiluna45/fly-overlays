@@ -6,6 +6,22 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.13.6] - 2026-08-23
+
+### Corregido
+- La trazada volvía a quedarse en modo paralelo después de andar un rato. La
+  culpa era de una comprobación que agregué el día anterior: daba la calibración
+  por rota cuando la posición se alejaba del trazado, y saltaba también en casos
+  en que estaba bien. Se eliminó, y la razón de fondo es que no hacía falta: el
+  desfase se vuelve a medir en **cada** cruce de meta, así que un salto de
+  posición que no venga avisado se corrige solo en la vuelta siguiente.
+- Queda la detección explícita, que es la que importa y sí está verificada:
+  entrar a boxes o salir del mundo descartan la calibración, que es lo que pasa
+  cuando volvés a boxes, te resetean o pedís un tow.
+- La calibración ahora se conforma con un tercio de vuelta en vez de media. Si
+  perdiste un tramo (un paso por boxes, un rato fuera de pista) antes no se
+  recuperaba hasta una vuelta entera limpia.
+
 ## [0.13.5] - 2026-08-23
 
 ### Corregido
