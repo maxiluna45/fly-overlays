@@ -318,3 +318,20 @@ test('targetCorner da la curva en curso o la próxima, con wrap por meta', async
   assert.equal(targetCorner(corners, 0.90).index, 0); // pasadas todas: vuelve a la primera
   assert.equal(targetCorner([], 0.5), null);
 });
+
+// Regresión: este bloque usaba una variable declarada más abajo en el handler,
+// así que lanzaba en cada frame justo al cambiar de marcha y dejaba la vista
+// congelada. Extraído acá, el contrato queda fijado y probado.
+test('gearFlash marca el instante del cambio y no destella en la primera lectura', async () => {
+  const { gearFlash } = await load();
+  // Primera lectura: fija la marcha sin destellar.
+  assert.deepEqual(gearFlash(null, 4, 1000), { gear: 4, flashAt: 0, up: false });
+  // Sin cambio: nada.
+  assert.equal(gearFlash(4, 4, 1000), null);
+  // Sube y baja.
+  assert.deepEqual(gearFlash(4, 5, 2000), { gear: 5, flashAt: 2000, up: true });
+  assert.deepEqual(gearFlash(4, 3, 2000), { gear: 3, flashAt: 2000, up: false });
+  // Sin dato de marcha no se toca nada (punto muerto o muestra vacía).
+  assert.equal(gearFlash(4, null, 1000), null);
+  assert.equal(gearFlash(4, 0, 1000), null);
+});

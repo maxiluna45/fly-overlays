@@ -505,3 +505,14 @@ export function targetCorner(corners, pct) {
   }
   return corners[0];
 }
+
+// Transición de marcha de la referencia, para el destello del banner.
+// Devuelve null si no cambió nada. La primera lectura fija la marcha pero NO
+// destella: al abrir la vista no tiene sentido un golpe de color por algo que
+// no pasó.
+export function gearFlash(prevGear, gear, now) {
+  if (gear == null || gear <= 0) return null;
+  if (prevGear === gear) return null;
+  if (prevGear == null) return { gear, flashAt: 0, up: false };
+  return { gear, flashAt: now, up: gear > prevGear };
+}

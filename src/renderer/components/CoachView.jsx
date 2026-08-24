@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Upload, Volume2, VolumeX, Compass, Crosshair, MapPin, Play } from "lucide-react";
 import { resampleSamples } from "../lib/coach.js";
-import { detectCorners, lapFacts, cornerFacts, compareCorner, bestAdvice, announcePct, isWithinLead, anchorPct, fillTrackGaps, posAtPct, isLapCrossing, detectShifts, gearAtPct, targetCorner } from "../lib/coach-live.js";
+import { detectCorners, lapFacts, cornerFacts, compareCorner, bestAdvice, announcePct, isWithinLead, anchorPct, fillTrackGaps, posAtPct, isLapCrossing, detectShifts, gearAtPct, targetCorner, gearFlash } from "../lib/coach-live.js";
 import { findLovelyTrack, lovelyCorners, labelForRange } from "../lib/lovely-tracks.js";
 import * as voice from "../lib/voice.js";
 import { syncTiles, tileUrl } from "../lib/tiles.js";
@@ -99,6 +99,7 @@ const fmtLapTime = (s) => {
 // escucharse por encima del juego con auriculares puestos.
 const VOL_MIN = 0, VOL_MAX = 3, VOL_STEP = 0.1;
 const VOL_KEY = "ifly.coachVoice";
+const REF_KEY = "ifly.coachReference";
 
 function loadVoicePrefs() {
   try {
@@ -198,6 +199,15 @@ export function CoachView() {
   }, []);
   useEffect(() => { loadList(); }, [loadList]);
 
+  // Recuperar la referencia de la última vez.
+  useEffect(() => {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(REF_KEY) || "null"); } catch (_) {}
+    if (saved && saved.id) loadReference(saved.id, saved.label);
+  }, [loadReference]);
+
+  // La referencia elegida se recuerda: es lo primero que hay que hacer cada vez
+  // que se abre la vista, y siempre es la misma mientras practicás un circuito.
   const loadReference = useCallback(async (id, label) => {
     const getter = /^(ibt|csv|ifly)/.test(id) ? window.fly?.getIbtSession : window.fly?.getRecording;
     if (!getter) return;
@@ -217,6 +227,7 @@ export function CoachView() {
         trackLength: (s.trackLength || 0) * 1000, // km → m
         samples: resampleSamples(lap.samples, BINS),
       });
+      try { localStorage.setItem(REF_KEY, JSON.stringify({ id, label })); } catch (_) {}
     } finally {
       setLoadingRef(false);
       setPickerOpen(false);
@@ -321,6 +332,7 @@ export function CoachView() {
     window.fly.subscribeCoach?.(true);
     const unsub = window.fly.onCoachFrame((f) => {
       const e = eng.current;
+      const now = Date.now();
 
       // Cruce de meta: cerramos la vuelta, sacamos las conclusiones y borramos
       // el recorrido dibujado.
@@ -426,10 +438,10 @@ export function CoachView() {
       // Marcha que lleva la referencia en tu punto de pista. Cuando cambia se
       // marca el instante, y el banner la usa para el destello.
       if (refRef.current && f.lapDistPct != null) {
-        const g = gearAtPct(refRef.current.samples, f.lapDistPct);
-        if (g != null && g !== e.refGear) {
-          if (e.refGear != null) { e.gearFlashAt = now; e.gearFlashUp = g > e.refGear; }
-          e.refGear = g;
+        const fl = gearFlash(e.refGear, gearAtPct(refRef.current.samples, f.lapDistPct), now);
+        if (fl) {
+          e.refGear = fl.gear;
+          if (fl.flashAt) { e.gearFlashAt = fl.flashAt; e.gearFlashUp = fl.up; }
         }
       }
       e.pct = f.lapDistPct ?? e.pct;
@@ -456,7 +468,6 @@ export function CoachView() {
       }
 
       const p = planRef.current, r = refRef.current;
-      const now = Date.now();
       if (p && r) {
         // 1) Aviso ANTICIPADO: lo que hiciste mal acá la vuelta pasada, dicho
         //    antes de llegar. Es la única forma de que sirva: un consejo que

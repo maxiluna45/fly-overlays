@@ -25,6 +25,14 @@ compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correccion
   aparecer sólo en el momento del aviso. Se ve venir con tiempo.
 
 ### Corregido
+- La app se trababa apenas cambiaba de marcha. El código que sigue la marcha de
+  la referencia usaba una variable declarada más abajo, lo que en JavaScript
+  lanza un error: el aviso moría antes de anotar la marcha nueva, así que en el
+  frame siguiente volvía a detectar el mismo cambio y a fallar, unas treinta
+  veces por segundo. Fue un descuido del cambio anterior, no un problema de
+  fondo.
+- La referencia elegida se recuerda entre sesiones. Era lo primero que había que
+  volver a elegir cada vez que se abría la vista.
 - La voz ya no dice el nombre de la curva. Los nombres vienen en inglés y el
   sintetizador en español los pronunciaba de forma ininteligible. En pantalla se
   siguen mostrando, que es donde se leen bien.
