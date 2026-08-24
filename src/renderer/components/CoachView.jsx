@@ -288,21 +288,38 @@ export function CoachView() {
       if (f.posE != null) e.framesGps++;
 
       // Discontinuidad de posición. Volver a boxes, un reset o un tow
-      // teletransportan el auto, y la estima no lo ve: la calibración deja de
-      // valer y hay que medirla de nuevo. Se detecta por bandera (fuera del
-      // mundo o en el pit lane) y, por si acaso, comparando contra la
-      // referencia: si la posición se fue más de MAX_LATERAL_M del trazado, se
-      // rompió, sea cual sea el motivo.
-      const inPits = !f.onTrack || f.onPitRoad;
-      let broken = inPits;
-      if (!broken && e.offLocked && refMRef.current && f.posE != null && f.lapDistPct >= 0) {
+      // teletransportan el auto y la estima no lo ve, así que la calibración
+      // deja de valer. Hay dos casos, y NO se tratan igual:
+      //
+      // 1) Teletransporte (fuera del mundo o en el pit lane). La estima tiene un
+      //    salto real: lo de antes y lo de después están en marcos distintos, así
+      //    que las muestras de la vuelta ya no sirven y se descartan.
+      // 2) La posición se fue lejos del trazado sin bandera de por medio. Acá lo
+      //    único inválido es el desfase contra la referencia; las posiciones
+      //    estimadas siguen siendo coherentes entre sí. Se borra el desfase pero
+      //    NO las muestras, porque son justamente el material para recalibrar en
+      //    el próximo cruce de meta. (Borrarlas dejaba la cobertura por debajo del
+      //    mínimo, la calibración no se recuperaba nunca y la trazada quedaba en
+      //    modo banda paralela para siempre.)
+      const teleported = !f.onTrack || f.onPitRoad;
+      if (teleported) {
+        if (e.offE != null || e.bins.some(Boolean)) {
+          e.offE = null; e.offN = null; e.offLocked = false;
+          e.bins = new Array(BINS).fill(null);
+          e.trailVersion++;
+        }
+      } else if (e.offLocked && refMRef.current && f.posE != null && f.lapDistPct >= 0) {
         const rp = refMRef.current.pts[Math.min(BINS - 1, Math.floor(f.lapDistPct * BINS))];
-        broken = calibrationBroken(f.posE + e.offE, f.posN + e.offN, rp);
-      }
-      if (broken && (e.offLocked || e.offE != null)) {
-        e.offE = null; e.offN = null; e.offLocked = false;
-        e.bins = new Array(BINS).fill(null);  // la trazada dibujada ya no vale
-        e.trailVersion++;
+        // Se exige que la desviación se sostenga: un bin ruidoso de la
+        // referencia no puede tirar abajo la calibración de la vuelta.
+        if (calibrationBroken(f.posE + e.offE, f.posN + e.offN, rp)) {
+          e.insane = (e.insane || 0) + 1;
+          if (e.insane > INSANE_FRAMES) {
+            e.offE = null; e.offN = null; e.offLocked = false; e.insane = 0;
+          }
+        } else {
+          e.insane = 0;
+        }
       }
       if (f.posE != null && f.posN != null) { e.posE = f.posE; e.posN = f.posN; }
       // En boxes el LapDistPct va sobre el recorrido del pit lane, no sobre el
@@ -582,6 +599,10 @@ export function CoachView() {
   // y comparar los strings tal cual daba una falsa alarma.
   const wrongTrack = !!(refInfo && status.track && !sameTrackAny(refInfo, status));
 
+  // Muestras propias acumuladas en la vuelta: es lo que se necesita para
+  // recalibrar en la meta, así que verlo explica por qué falta la trazada.
+  const binCount = e.bins.reduce((a, b) => a + (b && b.pe != null ? 1 : 0), 0);
+
   // Cuántas curvas tienen algo para avisar con lo de la vuelta pasada.
   const readyCount = e.verdicts.filter(Boolean).length;
 
@@ -784,7 +805,9 @@ export function CoachView() {
         <div className="absolute right-3 bottom-3 flex items-center gap-3 text-[9px] text-white/50">
           {/* Diagnóstico chico pero visible: si algo no aparece, acá se ve por qué. */}
           <span className="font-mono">
-            {e.frames > 0 ? `${e.frames} frames · pista ${Math.round((trackShape.count / BINS) * 100)}% · ${hasRealLine ? "trazada real" : "sin trazada"}` : "sin frames"}
+            {e.frames > 0
+              ? `${e.frames} frames · pista ${Math.round((trackShape.count / BINS) * 100)}% · muestras ${binCount}/${BINS} · ${hasRealLine ? "trazada real" : "calibrando"}`
+              : "sin frames"}
             {plan && ` · ${readyCount} avisos listos`}
           </span>
           <span>Imágenes: Esri, Maxar, Earthstar Geographics</span>

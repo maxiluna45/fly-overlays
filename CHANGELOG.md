@@ -6,6 +6,26 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.13.5] - 2026-08-23
+
+### Corregido
+- La trazada se quedaba dibujada en paralelo a la referencia y no volvía nunca a
+  la posición real. Era un efecto del arreglo anterior: cuando la calibración se
+  daba por rota, también se borraban las muestras de la vuelta, que son
+  justamente lo que hace falta para recalibrar al cruzar meta. Sin ellas la
+  cobertura nunca alcanzaba el mínimo y la vista quedaba en modo paralelo para
+  siempre.
+  - Ahora se distinguen los dos casos. Si hubo teletransporte de verdad (boxes,
+    reset, tow) las muestras sí se descartan, porque las de antes y las de
+    después del salto no son comparables. Si sólo se detecta una desviación, se
+    descarta el desfase pero se conservan las muestras, y la calibración se
+    recupera en el siguiente cruce de meta.
+  - La desviación además tiene que sostenerse medio segundo para contar, así un
+    punto ruidoso de la referencia no tira abajo la calibración de la vuelta.
+- El pie del mapa ahora muestra cuántas muestras propias hay acumuladas y dice
+  "calibrando" en lugar de "sin trazada", para que se vea si le falta vuelta o
+  si hay algo mal.
+
 ## [0.13.4] - 2026-08-23
 
 ### Corregido
