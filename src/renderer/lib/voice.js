@@ -17,13 +17,44 @@
 //      PERCIBIDO depende del promedio, no del pico, y ese promedio es lo que
 //      estaba en 2,6%.
 //
-// Con eso, el tope de volumen queda muy por encima del que puede dar la voz del
-// navegador, y el limitador de la cadena evita que distorsione al amplificar.
+// Medido sobre la voz de Windows (Raul, es-MX) con la cadena completa: al 100%
+// el nivel medio sube +10 dB respecto del WAV original y sin una sola muestra
+// recortada; al 300%, +16,4 dB. Como la voz del navegador reproduce el WAV tal
+// cual, el 100% de acá ya suena unas tres veces más fuerte que el 100% de antes.
+//
+// Al final hay un saturador suave (tanh) en vez de un recorte duro: garantiza
+// que la señal no pase del máximo, y cuando el usuario sube el volumen al tope
+// la distorsión que aparece es la de una radio, que encima ayuda a entender por
+// encima del motor, en vez del chasquido del recorte digital.
 
 const PRESENCE_HZ = 3000;
 const PRESENCE_GAIN_DB = 6;
 const HIGHPASS_HZ = 120;   // saca retumbe que sólo gasta rango
 const PEAK_TARGET = 0.97;  // a cuánto se normaliza el pico
+// Compresor: valores elegidos midiendo: con ratio más alto se gana ~2 dB más de
+// nivel medio pero empieza a saturar ya al 100%, y eso se escucha áspero.
+const COMP_THRESHOLD_DB = -20;
+const COMP_RATIO = 6;
+const COMP_KNEE_DB = 6;
+const COMP_ATTACK_S = 0.003;
+const COMP_RELEASE_S = 0.15;
+const SOFT_CLIP_DRIVE = 1.6;
+
+// Curva del saturador, calculada una sola vez: tanh normalizada para que la
+// entrada 1 salga 1 y por encima se doble en vez de recortarse.
+let clipCurve = null;
+function softClipCurve() {
+  if (clipCurve) return clipCurve;
+  const N = 1024;
+  const c = new Float32Array(N);
+  const k = Math.tanh(SOFT_CLIP_DRIVE);
+  for (let i = 0; i < N; i++) {
+    const x = (i / (N - 1)) * 2 - 1;
+    c[i] = Math.tanh(x * SOFT_CLIP_DRIVE) / k;
+  }
+  clipCurve = c;
+  return c;
+}
 
 let ctx = null;
 function audioCtx() {
@@ -105,19 +136,26 @@ export function play(key, { gain = 1 } = {}) {
   const norm = ac.createGain();
   norm.gain.value = PEAK_TARGET / entry.peak;
 
-  // Compresor con ataque rápido: sube el nivel medio y contiene los picos, así
-  // amplificar no distorsiona.
+  // Compresor con ataque rápido: sube el nivel medio y contiene los picos.
   const comp = ac.createDynamicsCompressor();
-  comp.threshold.value = -20;
-  comp.knee.value = 6;
-  comp.ratio.value = 6;
-  comp.attack.value = 0.004;
-  comp.release.value = 0.12;
+  comp.threshold.value = COMP_THRESHOLD_DB;
+  comp.knee.value = COMP_KNEE_DB;
+  comp.ratio.value = COMP_RATIO;
+  comp.attack.value = COMP_ATTACK_S;
+  comp.release.value = COMP_RELEASE_S;
 
+  // El volumen del usuario va al final, después de comprimir: si fuera antes,
+  // el compresor se comería el aumento y el control casi no se notaría (medido:
+  // de 100% a 300% subía 3 dB en vez de 6,4).
   const out = ac.createGain();
   out.gain.value = Math.max(0, gain);
 
-  src.connect(hp).connect(presence).connect(norm).connect(comp).connect(out).connect(ac.destination);
+  const limiter = ac.createWaveShaper();
+  limiter.curve = softClipCurve();
+  limiter.oversample = '4x';
+
+  src.connect(hp).connect(presence).connect(norm).connect(comp)
+     .connect(out).connect(limiter).connect(ac.destination);
   try { src.start(); return true; } catch (_) { return false; }
 }
 

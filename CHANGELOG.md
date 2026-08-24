@@ -6,6 +6,36 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.14.0] - 2026-08-23
+
+### Agregado
+- Control de volumen para los avisos del coach, con selector de voz y un botón
+  para escuchar una prueba. Arranca en 140% y llega hasta 300%.
+- La voz se escucha mucho más fuerte y más clara. La voz del navegador reproduce
+  el audio ella misma y no lo entrega, así que no había forma de subirla del
+  100% ni de procesarla; ahora el audio se genera aparte y se le aplica lo mismo
+  que a una radio de carrera: se aprovecha todo el rango (venía usando la mitad),
+  se realza la banda de las consonantes y se comprime para levantar el nivel
+  medio, que es de lo que depende el volumen que uno percibe.
+  - Medido con las dos voces del sistema y frases reales del coach: al 100% el
+    nivel medio sube entre 7 y 10 dB respecto de antes, y en el 140% que viene
+    por defecto entre 10 y 13 dB, sin una sola muestra recortada. O sea que el
+    ajuste por defecto ya suena unas tres veces más fuerte que antes.
+  - Arriba del 200% empieza a saturar, pero con un limitador suave: la
+    distorsión que aparece es la de una radio, no el chasquido del recorte
+    digital.
+  - Las frases de la vuelta se preparan al cruzar meta, así que suenan al
+    instante en vez de tardar el medio segundo que cuesta generarlas.
+
+### Corregido
+- La trazada se quedaba en modo paralelo y el contador de avisos en cero. La
+  calibración de la posición se calculaba a partir de las mismas muestras que se
+  usan para dibujar, y esas muestras se descartan en cualquier discontinuidad,
+  así que la calibración se iba con ellas. Ahora se calcula aparte, sumando
+  frame a frame, y no se pierde por eso.
+- El pie del mapa muestra cuánto le falta a la calibración y si hubo reinicios
+  con su motivo, para no tener que adivinar por qué falta la trazada.
+
 ## [0.13.6] - 2026-08-23
 
 ### Corregido

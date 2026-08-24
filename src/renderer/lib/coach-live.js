@@ -340,6 +340,12 @@ export function posAtPct(pts, pct) {
 // Desfase entre la trazada estimada de una vuelta y la geometría de la
 // referencia, promediado sobre TODA la vuelta.
 //
+// La vista en vivo hace esta misma cuenta de forma incremental (suma y cuenta
+// frame a frame) para no depender de que las muestras dibujadas sigan estando:
+// se borran en cualquier discontinuidad, y eso se llevaba puesta la
+// calibración. Esta versión sobre un arreglo es la que queda documentada y
+// probada, y sirve para calcular el desfase de una vuelta ya cerrada.
+//
 // Por qué el promedio y no un punto: anclar en un solo punto hereda el error de
 // ese bin. La geometría de la referencia está binada (800 bins: en Spa, ~9 m
 // por bin), así que un bin suelto puede estar varios metros corrido a lo largo

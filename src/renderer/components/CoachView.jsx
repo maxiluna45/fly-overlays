@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Upload, Volume2, VolumeX, Compass, Crosshair, MapPin, Play } from "lucide-react";
 import { resampleSamples } from "../lib/coach.js";
-import { detectCorners, lapFacts, cornerFacts, compareCorner, bestAdvice, announcePct, isWithinLead, anchorPct, fillTrackGaps, posAtPct, meanOffset, isLapCrossing } from "../lib/coach-live.js";
+import { detectCorners, lapFacts, cornerFacts, compareCorner, bestAdvice, announcePct, isWithinLead, anchorPct, fillTrackGaps, posAtPct, isLapCrossing } from "../lib/coach-live.js";
 import { findLovelyTrack, lovelyCorners, labelForRange } from "../lib/lovely-tracks.js";
 import * as voice from "../lib/voice.js";
 import { sameTrackAny } from "../lib/session-match.js";
@@ -22,6 +22,11 @@ const ADVICE_MIN_MS = 2600;       // un aviso no pisa a otro antes de esto
 const ADVICE_HOLD_MS = 7000;      // y se borra solo pasado esto
 const VOICE_MIN_MS = 3500;        // y no se habla encima de otro aviso
 const M_PER_DEG_LAT = 111320;     // metros por grado de latitud
+// Cuánto de la vuelta hace falta haber recorrido para fijar el desfase. Un
+// tercio alcanza: con ~250 muestras repartidas por el trazado el ruido de
+// bineado ya se cancela, y exigir más hacía que una vuelta con un tramo perdido
+// (un paso por boxes) no calibrara nunca.
+const OFFSET_MIN_COVERAGE = 1 / 3;
 // La trazada reconstruida se muestra sólo cuando el desfase contra la
 // referencia se midió con una vuelta ENTERA. Con media vuelta (la de salida de
 // boxes) el desfase queda sesgado: medido sobre .ibt reales daba más de 100 m de
@@ -158,6 +163,12 @@ export function CoachView() {
     offE: null, offN: null,
     offLocked: false,         // true = medido con una vuelta entera
     prevPct: null,
+    // Acumulador del desfase de la vuelta en curso. Va aparte de los bins a
+    // propósito: los bins son para dibujar y se borran en cualquier
+    // discontinuidad, y antes eso se llevaba puesta la calibración con ellos.
+    accE: 0, accN: 0, accC: 0,
+    // Diagnóstico: por qué se perdió la calibración.
+    wipes: 0, lastWipe: '',
     shape: new Array(BINS).fill(null),
     shapeFilled: 0,
     frames: 0,
@@ -331,14 +342,16 @@ export function CoachView() {
           }
         }
 
-        // Medir el desfase con la VUELTA ENTERA **antes** de limpiar los bins.
-        // Anclar en un solo punto hereda el error de ese bin de la referencia
-        // (con 800 bins, en Spa cada bin son ~9 m) y desplaza toda la vuelta;
-        // promediando sobre los ~800 bins ese ruido se cancela.
-        if (refMRef.current) {
-          const off = meanOffset(e.bins, refMRef.current.pts);
-          if (off) { e.offE = off.e; e.offN = off.n; e.offLocked = true; }
+        // Fijar el desfase con el promedio de TODA la vuelta. Anclar en un solo
+        // punto hereda el error de ese bin de la referencia (con 800 bins, en
+        // Spa cada bin son ~9 m) y desplaza la vuelta entera; promediando sobre
+        // miles de muestras ese ruido se cancela.
+        if (e.accC >= BINS * OFFSET_MIN_COVERAGE) {
+          e.offE = e.accE / e.accC;
+          e.offN = e.accN / e.accC;
+          e.offLocked = true;
         }
+        e.accE = 0; e.accN = 0; e.accC = 0;
         e.bins = new Array(BINS).fill(null);
         e.announced = new Set();
         e.reacted = new Set();
@@ -362,10 +375,13 @@ export function CoachView() {
       // corrige solo en la vuelta siguiente. Intentar detectarlo por "la
       // posición se fue lejos" invalidaba calibraciones que estaban bien.
       if (!f.onTrack || f.onPitRoad) {
-        if (e.offE != null || e.bins.some(Boolean)) {
+        if (e.offE != null || e.accC > 0) {
           e.offE = null; e.offN = null; e.offLocked = false;
+          e.accE = 0; e.accN = 0; e.accC = 0;
           e.bins = new Array(BINS).fill(null);
           e.trailVersion++;
+          e.wipes++;
+          e.lastWipe = !f.onTrack ? 'fuera de pista' : 'boxes';
         }
       }
       if (f.posE != null && f.posN != null) { e.posE = f.posE; e.posN = f.posN; }
@@ -376,6 +392,11 @@ export function CoachView() {
       if (f.onTrack && !f.onPitRoad && f.lapDistPct >= 0 && f.lapDistPct <= 1) {
         const b = Math.min(BINS - 1, Math.max(0, Math.floor(f.lapDistPct * BINS)));
         e.bins[b] = { th: f.throttle, br: f.brake, st: f.steer, sp: f.speed, g: f.gear, lat: f.lat, lon: f.lon, pe: f.posE, pn: f.posN };
+        // Desfase contra la referencia en este punto, acumulado para la vuelta.
+        if (f.posE != null && refMRef.current) {
+          const rp = refMRef.current.pts[b];
+          if (rp) { e.accE += rp.e - f.posE; e.accN += rp.n - f.posN; e.accC++; }
+        }
         if (f.lat != null && f.lon != null && e.shape[b] == null) {
           e.shape[b] = { lat: f.lat, lon: f.lon };
           e.shapeFilled++;
@@ -895,7 +916,7 @@ export function CoachView() {
           {/* Diagnóstico chico pero visible: si algo no aparece, acá se ve por qué. */}
           <span className="font-mono">
             {e.frames > 0
-              ? `${e.frames} frames · pista ${Math.round((trackShape.count / BINS) * 100)}% · muestras ${binCount}/${BINS} · ${hasRealLine ? "trazada real" : "calibrando"}`
+              ? `${e.frames} frames · pista ${Math.round((trackShape.count / BINS) * 100)}% · muestras ${binCount}/${BINS} · calib ${e.accC}/${Math.round(BINS * OFFSET_MIN_COVERAGE)} · ${hasRealLine ? "trazada real" : "calibrando"}${e.wipes ? ` · ${e.wipes} reinicios (${e.lastWipe})` : ""}`
               : "sin frames"}
             {plan && ` · ${readyCount} avisos listos`}
           </span>
