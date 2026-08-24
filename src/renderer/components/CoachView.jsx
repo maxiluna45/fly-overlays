@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Upload, Volume2, VolumeX, Compass, Crosshair, MapPin, Play } from "lucide-react";
 import { resampleSamples } from "../lib/coach.js";
-import { detectCorners, lapFacts, cornerFacts, compareCorner, bestAdvice, announcePct, isWithinLead, anchorPct, fillTrackGaps, posAtPct, isLapCrossing, detectShifts } from "../lib/coach-live.js";
+import { detectCorners, lapFacts, cornerFacts, compareCorner, bestAdvice, announcePct, isWithinLead, anchorPct, fillTrackGaps, posAtPct, isLapCrossing, detectShifts, gearAtPct, targetCorner } from "../lib/coach-live.js";
 import { findLovelyTrack, lovelyCorners, labelForRange } from "../lib/lovely-tracks.js";
 import * as voice from "../lib/voice.js";
 import { syncTiles, tileUrl } from "../lib/tiles.js";
@@ -20,7 +20,6 @@ const BINS = 800;                 // misma resolución que el resto del análisi
 const TRAIL_KEEP = BINS;          // el recorrido se borra al cruzar meta
 const LEAD_SECONDS = 2.5;         // cuánto antes de la curva avisar
 const ADVICE_MIN_MS = 2600;       // un aviso no pisa a otro antes de esto
-const ADVICE_HOLD_MS = 7000;      // y se borra solo pasado esto
 const VOICE_MIN_MS = 3500;        // y no se habla encima de otro aviso
 const M_PER_DEG_LAT = 111320;     // metros por grado de latitud
 // Cuánto de la vuelta hace falta haber recorrido para fijar el desfase contra
@@ -37,6 +36,8 @@ const SPAN_OPTIONS = [120, 220, 400, 800]; // metros de pista visibles
 const BRAKE_ON_REF = 0.15;
 const THROTTLE_ON_REF = 0.05;
 const THROTTLE_FULL_REF = 0.95;
+const GEAR_FLASH_MS = 260;        // duración del destello al cambiar de marcha
+const GEAR_FADE_MS = 120;         // y lo que tarda en volver al gris
 const MAX_TILE_RETRIES = 4;       // reintentos por tile que no carga
 const TILE_RETRY_BASE_MS = 400;   // espera del primer reintento (después se duplica)
 
@@ -136,7 +137,6 @@ export function CoachView() {
   // ── Estado en vivo (se re-renderiza a ~30 Hz) ───────────────────────────
   const [tick, setTick] = useState(0);
   const [status, setStatus] = useState({ connected: false, onTrack: false, track: null, trackKey: null, car: null });
-  const [advice, setAdvice] = useState(null);      // aviso grande (anticipado)
   const [lastNote, setLastNote] = useState(null);  // qué pasó en la curva que acabás de hacer
   const [shapeVersion, setShapeVersion] = useState(0); // crece al aprender geometría
 
@@ -173,6 +173,10 @@ export function CoachView() {
     accE: 0, accN: 0, accC: 0,
     // Diagnóstico: por qué se perdió la calibración.
     wipes: 0, lastWipe: '',
+    // Marcha de la referencia en el punto donde vas, y el instante del último
+    // cambio: el banner se pinta entero por un momento para que se note de
+    // reojo sin tener que mirar la pantalla.
+    refGear: null, gearFlashAt: 0, gearFlashUp: false,
     shape: new Array(BINS).fill(null),
     shapeFilled: 0,
     frames: 0,
@@ -343,7 +347,7 @@ export function CoachView() {
         // el audio va a estar listo.
         if (voiceRef.current) {
           for (const v of e.verdicts) {
-            if (v) primeRef.current(`${v.cornerLabel}. ${v.text}`);
+            if (v) primeRef.current(v.text);
           }
         }
 
@@ -419,6 +423,15 @@ export function CoachView() {
           if (e.shapeFilled % 80 === 0) setShapeVersion((v) => v + 1);
         }
       }
+      // Marcha que lleva la referencia en tu punto de pista. Cuando cambia se
+      // marca el instante, y el banner la usa para el destello.
+      if (refRef.current && f.lapDistPct != null) {
+        const g = gearAtPct(refRef.current.samples, f.lapDistPct);
+        if (g != null && g !== e.refGear) {
+          if (e.refGear != null) { e.gearFlashAt = now; e.gearFlashUp = g > e.refGear; }
+          e.refGear = g;
+        }
+      }
       e.pct = f.lapDistPct ?? e.pct;
       e.speed = f.speed ?? 0;
       // El CSV de Garage 61 no trae el largo de pista; el frame en vivo sí, y
@@ -458,10 +471,12 @@ export function CoachView() {
           if (now - e.adviceAt < ADVICE_MIN_MS) continue;
           e.announced.add(c.index);
           e.adviceAt = now;
-          setAdvice({ ...v, at: now });
           if (voiceRef.current && now - e.voiceAt > VOICE_MIN_MS) {
             e.voiceAt = now;
-            sayRef.current(`${v.cornerLabel}. ${v.text}`);
+            // Sólo el consejo: el nombre de la curva viene en inglés (de la
+            // base de Lovely) y la voz en español lo pronuncia de forma
+            // ininteligible. En pantalla sí se muestra, que es donde se lee.
+            sayRef.current(v.text);
           }
         }
 
@@ -479,13 +494,6 @@ export function CoachView() {
           });
           setLastNote(a ? { ...a, at: now } : { cornerLabel: c.label, text: "Bien ahí", kind: "ok", at: now });
         }
-      }
-
-      // El aviso grande se apaga solo: dejarlo puesto media vuelta después
-      // haría creer que sigue vigente.
-      if (e.adviceAt && now - e.adviceAt > ADVICE_HOLD_MS) {
-        e.adviceAt = 0;
-        setAdvice(null);
       }
 
       setStatus((prev) => (
@@ -714,6 +722,19 @@ export function CoachView() {
   // recalibrar en la meta, así que verlo explica por qué falta la trazada.
   const binCount = e.bins.reduce((a, b) => a + (b && b.pe != null ? 1 : 0), 0);
 
+  // Curva objetivo (la que estás haciendo, o la que viene) y su consejo. Se
+  // muestra siempre, no sólo cuando salta el aviso: así se ve venir.
+  const target = plan ? targetCorner(plan.corners, e.pct) : null;
+  const targetAdvice = target ? e.verdicts[target.index] : null;
+
+  // Destello del cuadro de marcha. Dura poco a propósito: es un golpe de color
+  // para el rabillo del ojo, no un estado que haya que leer.
+  const sinceFlash = e.gearFlashAt ? Date.now() - e.gearFlashAt : Infinity;
+  const flashing = sinceFlash < GEAR_FLASH_MS;
+  const gearBg = flashing
+    ? (e.gearFlashUp ? "rgb(14,165,233)" : "rgb(234,88,12)")
+    : "rgba(255,255,255,0.04)";
+
   // Cuántas curvas tienen algo para avisar con lo de la vuelta pasada.
   const readyCount = e.verdicts.filter(Boolean).length;
 
@@ -865,27 +886,64 @@ export function CoachView() {
         </div>
       )}
 
-      {/* Aviso grande */}
-      <div className="shrink-0 rounded-lg border border-border bg-card/40 px-4 py-3 min-h-[72px] flex items-center gap-4">
-        {advice ? (
-          <>
-            <div className="text-[10px] uppercase tracking-widest text-sky-300 shrink-0 w-32 truncate">{advice.cornerLabel}</div>
-            <div className="text-2xl font-bold leading-tight">{advice.text}</div>
-            {advice.others > 0 && (
-              <div className="ml-auto text-[10px] text-muted-foreground/60 shrink-0">+{advice.others} cosa{advice.others > 1 ? "s" : ""} más en esta curva</div>
-            )}
-          </>
-        ) : (
-          <div className="text-sm text-muted-foreground">
-            {!refInfo
-              ? "Elegí una referencia para empezar. Una vuelta de Garage 61 exportada en CSV sirve directo."
-              : !status.connected
-              ? "Esperando telemetría de iRacing…"
-              : readyCount > 0
-              ? `Listo: ${readyCount} curva${readyCount > 1 ? "s" : ""} con algo para corregir. Te aviso al llegar a cada una.`
-              : "Completá una vuelta: los avisos de cada curva salen de comparar la vuelta anterior contra la referencia."}
+      {/* Banner en tres partes: curva · consejo · marcha de la referencia.
+          Todo pensado para leerse de reojo manejando, así que la tipografía es
+          grande y el cuadro de marcha avisa con color en vez de con texto. */}
+      <div className="shrink-0 rounded-lg border border-border bg-card/40 flex items-stretch overflow-hidden min-h-[104px]">
+        {/* 1 · Curva */}
+        <div className="px-5 py-3 flex flex-col justify-center border-r border-border shrink-0 w-[268px]">
+          <div className="text-[10px] uppercase tracking-widest text-muted-foreground/70">Curva</div>
+          <div className="text-3xl font-bold leading-none truncate" title={target ? target.label : ""}>
+            {target ? target.label : "—"}
           </div>
-        )}
+        </div>
+
+        {/* 2 · Consejo */}
+        <div className="flex-1 px-5 py-3 flex flex-col justify-center min-w-0">
+          {targetAdvice ? (
+            <>
+              <div className="text-4xl font-bold leading-tight">{targetAdvice.text}</div>
+              {targetAdvice.others > 0 && (
+                <div className="text-[11px] text-muted-foreground/60 mt-1">
+                  +{targetAdvice.others} cosa{targetAdvice.others > 1 ? "s" : ""} más en esta curva
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="text-base text-muted-foreground">
+              {!refInfo
+                ? "Elegí una referencia para empezar. Una vuelta de Garage 61 exportada en CSV sirve directo."
+                : !status.connected
+                ? "Esperando telemetría de iRacing…"
+                : readyCount > 0
+                ? `Sin correcciones para esta curva · ${readyCount} con algo para corregir en la vuelta`
+                : "Completá una vuelta: los avisos salen de comparar la vuelta anterior contra la referencia."}
+            </div>
+          )}
+        </div>
+
+        {/* 3 · Marcha de la referencia. El cuadro entero se pinta al cambiar:
+            celeste si sube, naranja si baja. */}
+        <div
+          className="shrink-0 w-[132px] flex flex-col items-center justify-center border-l border-border"
+          style={{
+            background: gearBg,
+            transition: flashing ? "none" : `background-color ${GEAR_FADE_MS}ms ease-out`,
+          }}
+        >
+          <div
+            className="text-[10px] uppercase tracking-widest"
+            style={{ color: flashing ? "rgba(0,0,0,0.75)" : "rgba(255,255,255,0.45)" }}
+          >
+            Marcha ref.
+          </div>
+          <div
+            className="font-black leading-none tabular-nums"
+            style={{ fontSize: 64, color: flashing ? "rgb(10,12,16)" : "rgba(255,255,255,0.92)" }}
+          >
+            {e.refGear ?? "—"}
+          </div>
+        </div>
       </div>
 
       {/* Mapa */}

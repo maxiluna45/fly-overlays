@@ -479,3 +479,29 @@ export function lastDownshiftPct(shifts, fromPct, apexPct) {
   }
   return best;
 }
+
+// Marcha de una vuelta en cualquier punto de pista. Si el bin exacto no tiene
+// dato se busca hacia atrás: la marcha es un escalón, así que el último valor
+// conocido es el correcto.
+export function gearAtPct(samples, pct, { lookback = 40 } = {}) {
+  const n = Array.isArray(samples) ? samples.length : 0;
+  if (!n) return null;
+  const b = Math.min(n - 1, Math.max(0, Math.floor((((pct % 1) + 1) % 1) * n)));
+  for (let d = 0; d <= lookback; d++) {
+    const s = samples[(b - d + n) % n];
+    if (s && s.g != null && s.g > 0) return s.g;
+  }
+  return null;
+}
+
+// Curva "objetivo" para un punto de pista: la que estás haciendo si estás
+// dentro de una, y si no la próxima. Es la que conviene mostrar en pantalla.
+// Contempla el wrap por meta (si ya pasaste la última, la próxima es la primera).
+export function targetCorner(corners, pct) {
+  if (!Array.isArray(corners) || !corners.length) return null;
+  const p = (((pct % 1) + 1) % 1);
+  for (const c of corners) {
+    if (p < c.pctEnd) return c;
+  }
+  return corners[0];
+}

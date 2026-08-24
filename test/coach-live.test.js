@@ -293,3 +293,28 @@ test('compareCorner no habla del momento del cambio si la marcha es distinta', a
   assert.equal(out.some((x) => x.kind === 'shiftLate' || x.kind === 'shiftEarly'), false);
   assert.ok(out.some((x) => x.kind === 'gearHigh'));
 });
+
+test('gearAtPct devuelve la marcha en cualquier punto, mirando hacia atrás', async () => {
+  const { gearAtPct } = await load();
+  const s = new Array(100).fill(null).map(() => ({ g: 3 }));
+  for (let i = 50; i < 100; i++) s[i].g = 5;
+  assert.equal(gearAtPct(s, 0.10), 3);
+  assert.equal(gearAtPct(s, 0.60), 5);
+  // Bin sin dato: toma el último conocido, no null.
+  s[62] = null;
+  assert.equal(gearAtPct(s, 0.62), 5);
+  assert.equal(gearAtPct([], 0.5), null);
+});
+
+test('targetCorner da la curva en curso o la próxima, con wrap por meta', async () => {
+  const { targetCorner } = await load();
+  const corners = [
+    { index: 0, pctStart: 0.10, pctEnd: 0.20 },
+    { index: 1, pctStart: 0.50, pctEnd: 0.60 },
+  ];
+  assert.equal(targetCorner(corners, 0.05).index, 0); // viene la primera
+  assert.equal(targetCorner(corners, 0.15).index, 0); // estoy dentro de la primera
+  assert.equal(targetCorner(corners, 0.30).index, 1); // viene la segunda
+  assert.equal(targetCorner(corners, 0.90).index, 0); // pasadas todas: vuelve a la primera
+  assert.equal(targetCorner([], 0.5), null);
+});

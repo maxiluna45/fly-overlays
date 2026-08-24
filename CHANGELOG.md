@@ -6,6 +6,29 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.16.0] - 2026-08-23
+
+### Cambiado
+- El banner del coach se reorganizó en tres partes pensadas para leerse de reojo
+  manejando: a la izquierda la curva, en el medio el consejo y a la derecha la
+  marcha que lleva la referencia. La tipografía es bastante más grande: el
+  nombre de la curva y el consejo pasaron a un tamaño legible sin fijar la
+  vista, y el número de marcha se ve enorme.
+- El cuadro de la marcha **se pinta entero de golpe** cuando la referencia
+  cambia: celeste al subir, naranja al bajar. Es un golpe de color de un cuarto
+  de segundo para el rabillo del ojo, no algo para leer. La duración está
+  medida: en la referencia de Virginia hay 32 cambios por vuelta y los más
+  juntos están a 0,43 s, así que el destello dura 0,26 s y alcanza a apagarse
+  entre uno y otro — en una bajada en cadena se ven golpes separados y no una
+  mancha continua.
+- El consejo de la curva que viene se muestra desde antes de llegar, en vez de
+  aparecer sólo en el momento del aviso. Se ve venir con tiempo.
+
+### Corregido
+- La voz ya no dice el nombre de la curva. Los nombres vienen en inglés y el
+  sintetizador en español los pronunciaba de forma ininteligible. En pantalla se
+  siguen mostrando, que es donde se leen bien.
+
 ## [0.15.0] - 2026-08-23
 
 ### Agregado
