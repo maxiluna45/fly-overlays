@@ -199,15 +199,6 @@ export function CoachView() {
   }, []);
   useEffect(() => { loadList(); }, [loadList]);
 
-  // Recuperar la referencia de la última vez.
-  useEffect(() => {
-    let saved = null;
-    try { saved = JSON.parse(localStorage.getItem(REF_KEY) || "null"); } catch (_) {}
-    if (saved && saved.id) loadReference(saved.id, saved.label);
-  }, [loadReference]);
-
-  // La referencia elegida se recuerda: es lo primero que hay que hacer cada vez
-  // que se abre la vista, y siempre es la misma mientras practicás un circuito.
   const loadReference = useCallback(async (id, label) => {
     const getter = /^(ibt|csv|ifly)/.test(id) ? window.fly?.getIbtSession : window.fly?.getRecording;
     if (!getter) return;
@@ -233,6 +224,16 @@ export function CoachView() {
       setPickerOpen(false);
     }
   }, []);
+
+  // La referencia elegida se recuerda: es lo primero que hay que hacer cada vez
+  // que se abre la vista, y siempre es la misma mientras practicás un circuito.
+  // El efecto va DESPUÉS de loadReference: si lo nombrás antes, el array de
+  // dependencias lo lee en la zona muerta del const y el render entero revienta.
+  useEffect(() => {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(REF_KEY) || "null"); } catch (_) {}
+    if (saved && saved.id) loadReference(saved.id, saved.label);
+  }, [loadReference]);
 
   const importReference = useCallback(async () => {
     if (!window.fly?.importIbt) return;

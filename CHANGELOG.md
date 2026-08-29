@@ -6,6 +6,16 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.16.1] - 2026-08-28
+
+### Corregido
+- Entrar al coach dejaba la pantalla en negro. Al recordar la referencia elegida
+  se agregó un bloque que nombraba a `loadReference` unas líneas antes de que
+  quedara definida; esa lista se lee mientras se arma la vista, así que tiraba
+  `ReferenceError` y se caía todo el panel, no sólo el coach. El bloque pasó
+  abajo de la definición. Un test nuevo revisa todas las vistas para que no
+  vuelva a pasar en ninguna.
+
 ## [0.16.0] - 2026-08-23
 
 ### Cambiado
