@@ -43,3 +43,32 @@ export function stepPath(vals, n, yMin, yMax, W, H, range) {
   if (prevY != null && lastX != null && !d.endsWith(fmt(lastX, prevY))) d += ` L${fmt(lastX, prevY)}`;
   return d.trim();
 }
+
+// Ubica los cambios de marcha sobre la trazada YA PROYECTADA del mapa.
+// `mapPts` es el array indexado por bucket que dibuja el mapa (con null donde
+// falta la posición) y `shifts` son los cambios con su fracción de vuelta.
+//
+// El índice sale de la fracción y no del número de bin crudo: hoy la vuelta y la
+// referencia miden 800 buckets las dos, pero si alguna trajera otra cantidad
+// las marcas se correrían de lugar en la pista sin que nada avise.
+//
+// Si el bucket exacto no tiene posición se busca el más cercano que sí la tenga:
+// los mapas reales vienen con huecos y perder la marca por un bin vacío es peor
+// que correrla unos metros.
+const HUECO_MAX = 12; // buckets a cada lado; a 800 por vuelta son ~1.5% de pista
+
+export function shiftPointsOn(mapPts, shifts) {
+  if (!Array.isArray(mapPts) || !mapPts.length || !Array.isArray(shifts) || !shifts.length) return [];
+  const n = mapPts.length;
+  const out = [];
+  for (const sh of shifts) {
+    if (!sh || sh.pct == null || !isFinite(sh.pct)) continue;
+    const base = Math.min(n - 1, Math.max(0, Math.round(sh.pct * (n - 1))));
+    let p = null;
+    for (let d = 0; d <= HUECO_MAX && !p; d++) {
+      p = mapPts[base - d] || mapPts[base + d] || null;
+    }
+    if (p) out.push({ x: p.x, y: p.y, up: !!sh.up, to: sh.to, pct: sh.pct });
+  }
+  return out;
+}

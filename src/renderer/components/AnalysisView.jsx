@@ -7,7 +7,7 @@ import { hasChassisData, chassisSeries, chassisSummary, WHEEL_LABEL } from "../l
 import { ShareCard } from "./ShareCard.jsx";
 import { buildCardModel, FORMATS, shareMapBox, countShareCharts, sanitizeFilename } from "../lib/share-card-data.js";
 import { svgToPngBlob } from "../lib/render-svg-to-png.js";
-import { stepPath } from "../lib/chart-paths.js";
+import { stepPath, shiftPointsOn } from "../lib/chart-paths.js";
 import { detectShifts } from "../lib/coach-live.js"; // los mismos cambios de marcha que marca el coach en pista
 import { findLovelyTrack } from "../lib/lovely-tracks.js"; // curvas + sectores por pista (© Lovely Sim Racing, CC BY-NC-SA)
 
@@ -405,11 +405,15 @@ const TrackLayer = React.memo(function TrackLayer({ segs, segsRef = [], refD, sh
 
 // Mapa interactivo: zoom (rueda / +−), pan (arrastrar), toggle de trazadas y
 // marcador del instante bajo el cursor (vinculado a los gráficos de telemetría).
-function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, outlineD, corners, fill = false, highlightRange = null, roadWidth = 0, outlineMode = null, tiles = null, attribution = null, scrim = false, gripLap = null, gripRef = null, rot = 0, onRotChange = null, onRotReset = null }) {
+function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, outlineD, corners, shifts = null, fill = false, highlightRange = null, roadWidth = 0, outlineMode = null, tiles = null, attribution = null, scrim = false, gripLap = null, gripRef = null, rot = 0, onRotChange = null, onRotReset = null }) {
   const BV = baseView || { x: 0, y: 0, w: 1000, h: 380 };
   const W = BV.w, H = BV.h, X0 = BV.x, Y0 = BV.y;
   const [showLap, setShowLap] = useState(true);
   const [showRef, setShowRef] = useState(true);
+  // Cambios de marcha de la referencia sobre la trazada. Independiente del
+  // toggle de Referencia: sirve ver dónde van los cambios aunque tengas la
+  // línea de la referencia apagada y mires sólo la tuya.
+  const [showShifts, setShowShifts] = useState(true);
   const [mode, setMode] = useState("speed"); // 'speed' | 'compare' | 'inputs'
   const [view, setView] = useState(BV);
   const [dragging, setDragging] = useState(false);
@@ -571,6 +575,12 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
     return smoothPath(mapPath.slice(aI, bI + 1));
   }, [highlightRange, mapPath]);
   const hLap = showLap && hoverIdx != null && mapPath && mapPath[hoverIdx];
+  // Posiciones de los cambios sobre la trazada dibujada de la referencia.
+  const shiftPts = useMemo(
+    () => (showShifts ? shiftPointsOn(mapPathRef, shifts) : []),
+    [showShifts, shifts, mapPathRef],
+  );
+
   const hRef = showRef && hoverIdx != null && mapPathRef && mapPathRef[hoverIdx];
 
   return (
@@ -594,6 +604,9 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
         <div className="flex items-center gap-1">
           <ToggleBtn active={showLap} onClick={() => setShowLap((v) => !v)} color="rgb(52,211,153)">Tu vuelta</ToggleBtn>
           {mapPathRef && <ToggleBtn active={showRef} onClick={() => setShowRef((v) => !v)} color="rgba(255,255,255,0.85)">Referencia</ToggleBtn>}
+          {mapPathRef && shifts && shifts.length > 0 && (
+            <ToggleBtn active={showShifts} onClick={() => setShowShifts((v) => !v)} color="rgb(125,211,252)">Cambios de marcha</ToggleBtn>
+          )}
           {onRotChange && (
             <div className="flex items-center gap-1 pl-1" title="Rotación del mapa (se guarda por circuito)">
               <RotateCcw className="size-3 text-muted-foreground/60" />
@@ -697,6 +710,27 @@ function MapPanel({ mapPath, mapPathRef, mapDelta, hasRef, hoverIdx, baseView, o
                   style={{ userSelect: "none", paintOrder: "stroke" }}
                 >
                   {c.label}
+                </text>
+              </g>
+            );
+          })}
+          {/* Cambios de marcha de la referencia: celeste sube, naranja baja, con
+              la marcha que pone. Mismo dibujo y mismos colores que en el coach,
+              y el texto contra-rotado para que se lea con el mapa girado. */}
+          {shiftPts.map((m, i) => {
+            const color = m.up ? "rgb(125,211,252)" : "rgb(251,146,60)";
+            const r = 3.2 * k;
+            return (
+              <g key={`sh-${i}`}>
+                <circle cx={m.x} cy={m.y} r={r} fill={color} stroke="rgba(0,0,0,0.8)" strokeWidth={1.1 * k} />
+                <text
+                  transform={rot ? `rotate(${-rot} ${m.x} ${m.y})` : undefined}
+                  x={m.x + r * 1.8} y={m.y + r}
+                  fontSize={10 * k} fontWeight="700"
+                  fill={color} stroke="rgba(0,0,0,0.85)" strokeWidth={0.7 * k} paintOrder="stroke"
+                  style={{ userSelect: "none", fontFamily: "ui-monospace, monospace", paintOrder: "stroke" }}
+                >
+                  {m.up ? "↑" : "↓"}{m.to}
                 </text>
               </g>
             );
@@ -2587,6 +2621,7 @@ function AnalysisDetail({ charts, svgMap, corners, hoverIdx, setHoverIdx, showLa
     <MapPanel
       mapPath={svgMap ? svgMap.mapPath : charts.mapPath}
       mapPathRef={svgMap ? svgMap.mapPathRef : charts.mapPathRef}
+      shifts={charts.hasRef ? charts.refShifts : null}
       mapDelta={charts.delta}
       hasRef={charts.hasRef}
       gripLap={charts.gripLap}

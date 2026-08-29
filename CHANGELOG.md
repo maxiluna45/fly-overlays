@@ -6,6 +6,21 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.18.0] - 2026-08-28
+
+### Agregado
+- **Los cambios de marcha de la referencia, sobre el mapa del Análisis.** Cada
+  cambio es un punto en el lugar exacto de la pista donde la referencia lo hace:
+  celeste cuando sube, naranja cuando baja, con la marcha que pone al lado
+  (↑4, ↓3). Es el mismo dibujo que ves en el mapa del coach en pista, así que
+  los dos coinciden. El número se contra-rota con el mapa, o sea que se sigue
+  leyendo derecho aunque tengas el circuito girado.
+- El botón **"Cambios de marcha"** en la barra del mapa los prende y apaga.
+  Aparece sólo cuando la vuelta tiene una referencia con marchas, y es
+  independiente del botón "Referencia": podés dejar los puntos visibles con la
+  línea de la referencia apagada, para ver dónde caen los cambios sobre tu
+  propia trazada.
+
 ## [0.17.0] - 2026-08-28
 
 ### Agregado
