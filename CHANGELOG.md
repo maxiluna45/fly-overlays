@@ -6,6 +6,17 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.16.2] - 2026-08-28
+
+### Cambiado
+- El semáforo de incidentes del Relative ya no pinta un chip cuando el rival
+  lleva 0. En práctica y clasificación eso era casi toda la grilla, así que se
+  veían veinte "0x" verdes que tapaban justo a los dos o tres que sí venían
+  sucios. Ahora el chip aparece recién con el primer incidente. El dato en sí
+  está bien y es real: se verificó con iRacing corriendo y en grabaciones de
+  carreras, donde los rivales traen 1x, 2x, 5x. Lo que pasa es que cuenta los
+  incidentes de la sesión en curso, y en una práctica todavía no hay ninguno.
+
 ## [0.16.1] - 2026-08-28
 
 ### Corregido

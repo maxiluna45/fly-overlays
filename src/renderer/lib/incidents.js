@@ -24,9 +24,15 @@ export const INCIDENT_COLORS = {
   risk: "rgb(239, 68, 68)",    // rojo
 };
 
-// Devuelve null cuando no hay dato (así la fila no muestra un chip vacío).
+// Devuelve null cuando no hay dato, y también cuando el contador está en 0.
+// Verificado con iRacing corriendo: el dato es real (en carreras los rivales
+// traen 1x, 2x, 5x), pero en práctica y clasificación casi nadie sumó nada
+// todavía, así que un chip verde "0x" en las veinte filas no dice nada y tapa
+// las que sí importan. El semáforo aparece recién con el primer incidente.
+// Si preferís ver el verde de "éste viene limpio", alcanza con volver a
+// aceptar el 0 en esta línea.
 export function incidentLevel(count, { limit = 0 } = {}) {
-  if (count == null || !isFinite(count) || count < 0) return null;
+  if (count == null || !isFinite(count) || count < 1) return null;
   const lim = limit > 0 ? limit : 0;
   if (count >= RISK_AT || (lim && count >= lim * RISK_FRACTION)) return "risk";
   if (count >= WARN_AT || (lim && count >= lim * WARN_FRACTION)) return "warn";

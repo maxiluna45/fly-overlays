@@ -8,11 +8,13 @@ test('incidentLevel: sin dato no hay semáforo', async () => {
   assert.equal(incidentLevel(null), null);
   assert.equal(incidentLevel(undefined), null);
   assert.equal(incidentLevel(-1), null); // lo que devuelve iRacing para los rivales
+  // El 0 tampoco pinta: en práctica lo tiene casi todo el mundo y sería ruido.
+  assert.equal(incidentLevel(0), null);
+  assert.equal(incidentLevel(0, { limit: 17 }), null);
 });
 
 test('incidentLevel: cortes absolutos', async () => {
   const { incidentLevel } = await load();
-  assert.equal(incidentLevel(0), 'clean');
   assert.equal(incidentLevel(1), 'clean');
   assert.equal(incidentLevel(2), 'warn');
   assert.equal(incidentLevel(3), 'warn');
