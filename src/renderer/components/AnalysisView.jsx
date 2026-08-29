@@ -7,6 +7,8 @@ import { hasChassisData, chassisSeries, chassisSummary, WHEEL_LABEL } from "../l
 import { ShareCard } from "./ShareCard.jsx";
 import { buildCardModel, FORMATS, shareMapBox, countShareCharts, sanitizeFilename } from "../lib/share-card-data.js";
 import { svgToPngBlob } from "../lib/render-svg-to-png.js";
+import { stepPath } from "../lib/chart-paths.js";
+import { detectShifts } from "../lib/coach-live.js"; // los mismos cambios de marcha que marca el coach en pista
 import { findLovelyTrack } from "../lib/lovely-tracks.js"; // curvas + sectores por pista (© Lovely Sim Racing, CC BY-NC-SA)
 
 // Ancho de asfalto (metros) para engrosar el eje de OSM y dibujar ambos bordes.
@@ -45,6 +47,7 @@ const tPct = (v) => (v != null ? `${Math.round(v * 100)}%` : "—");
 const tKmh = (v) => (v != null ? `${Math.round(v)}` : "—");
 const tDeg = (v) => (v != null ? `${Math.round((v * 180) / Math.PI)}°` : "—");
 const tRpm = (v) => (v != null ? `${Math.round(v)}` : "—");
+const tGear = (v) => (v != null ? `${Math.round(v)}` : "—"); // el neutral no tiene numero
 const tSec = (v) => (v != null ? `${v >= 0 ? "+" : ""}${v.toFixed(2)}` : "—");
 // Colores de las 4 ruedas en el gráfico de suspensión (orden LF, RF, LR, RR).
 const SUSP_COLORS = ["rgb(125,211,252)", "rgb(52,211,153)", "rgb(234,179,8)", "rgb(244,114,182)"];
@@ -155,7 +158,7 @@ function parseTrackSvg(svgText) {
   } catch (_) { return null; }
 }
 
-function Chart({ title, height = 110, n, hoverIdx, onHover, corners, children, tooltip = null, hasRef = false, range = null, selecting = false, onSelectRange }) {
+function Chart({ title, height = 110, n, hoverIdx, onHover, corners, shifts = null, children, tooltip = null, hasRef = false, range = null, selecting = false, onSelectRange }) {
   const aF = range && range.length === 2 ? range[0] : 0;
   const bF = range && range.length === 2 ? range[1] : 1;
   const spanF = (bF - aF) || 1;
@@ -198,6 +201,13 @@ function Chart({ title, height = 110, n, hoverIdx, onHover, corners, children, t
             const cf = toView(c.pct);
             if (cf < 0 || cf > 1) return null;
             return <line key={`c-${i}`} x1={cf * 1000} y1="0" x2={cf * 1000} y2={height} stroke="rgba(255,255,255,0.08)" strokeWidth="1" />;
+          })}
+          {shifts && shifts.map((sh, i) => {
+            const sf = toView(sh.pct);
+            if (sf < 0 || sf > 1) return null;
+            // Mismo código de color que el banner del coach: celeste sube, naranja baja.
+            const col = sh.up ? "rgba(125,211,252,0.55)" : "rgba(251,146,60,0.55)";
+            return <line key={`sh-${i}`} x1={sf * 1000} y1="0" x2={sf * 1000} y2={height} stroke={col} strokeWidth="1" strokeDasharray="3 3" />;
           })}
           {children}
           {hx != null && <line x1={hx} y1="0" x2={hx} y2={height} stroke="rgba(255,255,255,0.55)" strokeWidth="1.5" />}
@@ -1310,6 +1320,10 @@ export function AnalysisView() {
     const brake = lap.samples.map((s) => (s ? s.br : null));
     const steer = lap.samples.map((s) => (s && s.st != null ? s.st : null));
     const rpm = lap.samples.map((s) => (s && s.rpm != null ? s.rpm : null));
+    // La marcha viene en los samples de las tres fuentes (grabación en vivo,
+    // .ibt y CSV). El 0 es el neutral y no se dibuja: cortar el trazo dice más
+    // que una escalera que baja hasta el piso cada vez que pasás por punto muerto.
+    const gear = lap.samples.map((s) => (s && s.g != null && s.g > 0 ? s.g : null));
     const delta = analysis ? analysis.deltaTrace.map((p) => p.delta) : [];
 
     // Series de la referencia (ghost) para superponer en cada gráfico.
@@ -1319,6 +1333,14 @@ export function AnalysisView() {
     const brakeRef = refS.map((s) => (s ? s.br : null));
     const steerRef = refS.map((s) => (s && s.st != null ? s.st : null));
     const rpmRef = refS.map((s) => (s && s.rpm != null ? s.rpm : null));
+    const gearRef = refS.map((s) => (s && s.g != null && s.g > 0 ? s.g : null));
+
+    // Cambios de marcha DE LA REFERENCIA, para marcarlos sobre los gráficos.
+    // Se calculan sobre refS, que ya está reescalado a n buckets, así que el bin
+    // cae en el mismo lugar de pista que el resto de las series. detectShifts es
+    // la misma función que usa el coach para el destello del banner: ya descarta
+    // los cambios rebotados, así que las marcas coinciden con lo que ves en pista.
+    const refShifts = hasRef ? detectShifts(refS).map((sh) => ({ ...sh, pct: sh.bin / n })) : [];
 
     const speedVals = [...speedLap, ...speedBest].filter((v) => v != null && isFinite(v));
     const spMin = speedVals.length ? Math.min(...speedVals) - 5 : 0;
@@ -1329,6 +1351,11 @@ export function AnalysisView() {
     const stMax = steerVals.length ? Math.max(0.1, Math.max(...steerVals.map(Math.abs))) : 1;
     const rpmVals = [...rpm, ...rpmRef].filter((v) => v != null && isFinite(v));
     const rpmMax = rpmVals.length ? Math.max(...rpmVals) : 1;
+    // Escala de marchas: la real de la caja, con medio escalón de aire arriba y
+    // abajo para que la 1a y la última no queden pegadas al borde del gráfico.
+    const gearVals = [...gear, ...gearRef].filter((v) => v != null && isFinite(v));
+    const gearMin = gearVals.length ? Math.min(...gearVals) - 0.5 : 0.5;
+    const gearMax = gearVals.length ? Math.max(...gearVals) + 0.5 : 6.5;
 
     // Mapa: puntos lat/lon alineados POR BUCKET (length n, null donde falta),
     // con bounding box COMPARTIDO entre vuelta y referencia, para que ambas
@@ -1383,7 +1410,7 @@ export function AnalysisView() {
       };
     }
 
-    return { n, speedLap, speedBest, throttle, brake, steer, rpm, delta, throttleRef, brakeRef, steerRef, rpmRef, hasRef, spMin, spMax, dMax, stMax, rpmMax, mapPath, mapPathRef, gPts, hasG, gMax, hasMap: mapPath != null, gripLap: grip.lap, gripRef: grip.ref, chassis };
+    return { n, speedLap, speedBest, throttle, brake, steer, rpm, delta, throttleRef, brakeRef, steerRef, rpmRef, hasRef, spMin, spMax, dMax, stMax, rpmMax, gear, gearRef, gearMin, gearMax, refShifts, mapPath, mapPathRef, gPts, hasG, gMax, hasMap: mapPath != null, gripLap: grip.lap, gripRef: grip.ref, chassis };
   }, [lap, best, analysis]);
 
   // Mapa con la FORMA REAL del circuito (SVG de iRacing): sampleamos el path por
@@ -2521,6 +2548,10 @@ function ChassisCard({ summary }) {
 }
 
 function AnalysisDetail({ charts, svgMap, corners, hoverIdx, setHoverIdx, showLapLine, setShowLapLine, showRefLine, setShowRefLine, split = false, range = null, selecting = false, onSelectRange, mapRot = 0, onMapRotChange = null, onMapRotReset = null }) {
+  // Marcas de cambio de marcha de la referencia. Van apagables porque en un
+  // circuito como Snetterton son 30 por vuelta y sobre el gráfico de volante
+  // o el de suspensión tapan más de lo que muestran.
+  const [showShifts, setShowShifts] = useState(true);
   // Path strings de las series MEMOIZADOS: son O(800) de armado de string y NO
   // dependen de `hoverIdx`. Sin este memo se reconstruían las ~11 series en CADA
   // mousemove (setHoverIdx re-renderiza AnalysisView entero) → stutter. Con deps
@@ -2540,6 +2571,8 @@ function AnalysisDetail({ charts, svgMap, corners, hoverIdx, setHoverIdx, showLa
       steer: sp(charts.steer, -charts.stMax, charts.stMax),
       rpmRef: sp(charts.rpmRef, 0, charts.rpmMax),
       rpm: sp(charts.rpm, 0, charts.rpmMax),
+      gearRef: stepPath(charts.gearRef, charts.n, charts.gearMin, charts.gearMax, 1000, 110, range),
+      gear: stepPath(charts.gear, charts.n, charts.gearMin, charts.gearMax, 1000, 110, range),
       ...(charts.chassis ? {
         slip: sp(charts.chassis.slip, 0, charts.chassis.slipMax),
         pressF: sp(charts.chassis.pressF, 0, charts.chassis.pressMax),
@@ -2576,7 +2609,8 @@ function AnalysisDetail({ charts, svgMap, corners, hoverIdx, setHoverIdx, showLa
   ) : null;
 
   // Props comunes a todos los gráficos (incluye rango/selección).
-  const cp = { n: charts.n, hoverIdx, onHover: setHoverIdx, corners, range, selecting, onSelectRange };
+  const shifts = showShifts && charts.hasRef ? charts.refShifts : null;
+  const cp = { n: charts.n, hoverIdx, onHover: setHoverIdx, corners, shifts, range, selecting, onSelectRange };
 
   const chartsCol = (
     <>
@@ -2585,6 +2619,7 @@ function AnalysisDetail({ charts, svgMap, corners, hoverIdx, setHoverIdx, showLa
           <span className="text-[10px] text-muted-foreground uppercase tracking-widest">Líneas:</span>
           <ToggleBtn active={showLapLine} onClick={() => setShowLapLine((v) => !v)} color="rgb(52,211,153)">Tu vuelta</ToggleBtn>
           <ToggleBtn active={showRefLine} onClick={() => setShowRefLine((v) => !v)} color="rgb(168,85,247)">Referencia</ToggleBtn>
+          <ToggleBtn active={showShifts} onClick={() => setShowShifts((v) => !v)} color="rgb(125,211,252)">Cambios de marcha</ToggleBtn>
         </div>
       )}
 
@@ -2622,6 +2657,12 @@ function AnalysisDetail({ charts, svgMap, corners, hoverIdx, setHoverIdx, showLa
         tooltip={[{ label: "RPM", value: tRpm(atv(charts.rpm, hoverIdx)), ref: tRpm(atv(charts.rpmRef, hoverIdx)), color: "rgb(129,140,248)" }]}>
         {showRefLine && charts.hasRef && <path d={P.rpmRef} fill="none" stroke="rgba(129,140,248,0.5)" strokeWidth="1.5" strokeDasharray="5 3" />}
         {showLapLine && <path d={P.rpm} fill="none" stroke="rgb(129,140,248)" strokeWidth="2" />}
+      </Chart>
+
+      <Chart title="Marcha — vuelta vs referencia" {...cp} hasRef={charts.hasRef}
+        tooltip={[{ label: "Marcha", value: tGear(atv(charts.gear, hoverIdx)), ref: tGear(atv(charts.gearRef, hoverIdx)), color: "rgb(125,211,252)" }]}>
+        {showRefLine && charts.hasRef && <path d={P.gearRef} fill="none" stroke="rgba(168,85,247,0.7)" strokeWidth="1.5" strokeDasharray="5 3" />}
+        {showLapLine && <path d={P.gear} fill="none" stroke="rgb(125,211,252)" strokeWidth="2" />}
       </Chart>
 
       {charts.chassis && (

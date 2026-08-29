@@ -6,6 +6,25 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.17.0] - 2026-08-28
+
+### Agregado
+- **Marcha en el Análisis.** Un gráfico nuevo abajo de RPM muestra la marcha de
+  tu vuelta contra la de la referencia, dibujada en escalera: se mantiene
+  horizontal mientras no cambiás y salta en vertical justo donde metés el
+  cambio. Se lee de un vistazo en qué curvas vas una marcha más corta o más
+  larga que la referencia. El hover suma la marcha al recuadro de datos, con tu
+  valor y el de la referencia lado a lado.
+- **Marcas de los cambios de la referencia** sobre todos los gráficos: una línea
+  punteada celeste donde sube y naranja donde baja, en el mismo punto de pista.
+  Salen del mismo cálculo que usa el destello del banner del coach, así que
+  coinciden con lo que ves en pista. Se apagan con el botón "Cambios de marcha"
+  al lado de los de líneas: en Snetterton son 30 por vuelta y sobre el gráfico
+  de volante o el de suspensión tapan más de lo que muestran.
+
+El dato ya venía en las grabaciones (en vivo, .ibt y .csv), así que también
+aparece en las vueltas viejas; no hay que volver a grabar nada.
+
 ## [0.16.2] - 2026-08-28
 
 ### Cambiado
