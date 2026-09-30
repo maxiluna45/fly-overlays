@@ -1,6 +1,7 @@
 const { IRacingSDK } = require('irsdk-node');
 const { getSectorPoints, getTrackInfo } = require('./session-parser');
 const { ReferenceLapStore } = require('./reference-lap-store');
+const { rememberProgress, positionsByClass, countInClass } = require('./race-order');
 const { createLogger, logThrottled } = require('./logger');
 const log = createLogger('irsdk');
 
@@ -1629,7 +1630,7 @@ class IrsdkClient {
             totalOverall = 0;
             for (let i = 0; i < n; i++) { if ((trackSurface[i] ?? -1) > -1) totalOverall++; }
           }
-          const totalInClass = drivers.filter((x) => x.isPlayerClass).length;
+          let totalInClass = drivers.filter((x) => x.isPlayerClass).length;
 
           // ── Posiciones de clasificación / grilla (para mostrarlas pre-largada
           // y para el cambio de posición vs qualy) + flag de carrera oficial.
@@ -1696,13 +1697,42 @@ class IrsdkClient {
           // (preRace) NO se toca: se respeta el orden de grilla y así los números
           // no bailan ni aparecen duplicados antes de largar.
           if (isRace && lapReal && !preRace) {
-            for (const cls of Object.values(byClass)) {
-              const prog = (d) => (lapCompleted[d.carIdx] || 0) + (d.lapDistPct || 0);
-              cls.slice().sort((a, b) => prog(b) - prog(a)).forEach((d, k) => {
-                d.classPosition = k + 1;
+            // La memoria arranca de cero en cada sesión: si no, la carrera
+            // heredaría las posiciones de la clasificación anterior.
+            const memKey = `${this._read(telemetry, 'SessionNum')}|${this._cachedSessionType || ''}`;
+            if (this._raceMemKey !== memKey) { this._raceMem = {}; this._raceMemKey = memKey; }
+
+            // SessionState 5 es la bandera a cuadros. Desde ahí, el primer cruce
+            // de meta de cada auto es su llegada y su progreso queda congelado:
+            // la vuelta de enfriamiento no tiene que sumar por encima de los que
+            // ya terminaron.
+            const checkered = sessionState >= 5;
+            const now = Date.now();
+            this._raceMem = rememberProgress(
+              this._raceMem,
+              drivers.map((d) => ({
+                carIdx: d.carIdx,
+                cls: d.carClassId,
+                prog: (lapCompleted[d.carIdx] || 0) + (d.lapDistPct || 0),
+              })),
+              now,
+              { checkered },
+            );
+
+            // Las posiciones salen de la memoria, que incluye a los autos que ya
+            // no se ven (garage o desconectados). Sin esto, cada abandono corría
+            // un lugar a todos los de atrás y el número del jugador mejoraba solo.
+            // Los ausentes NO se agregan a `drivers`: no se muestran como fila,
+            // pero ocupan su lugar, así que los números pueden saltear.
+            const livePos = positionsByClass(this._raceMem);
+            for (const d of drivers) {
+              if (livePos[d.carIdx] > 0) {
+                d.classPosition = livePos[d.carIdx];
                 d.livePosition = true;
-              });
+              }
             }
+            const playerCls = drivers.find((d) => d.carIdx === playerIdx);
+            if (playerCls) totalInClass = countInClass(this._raceMem, playerCls.carClassId);
           }
 
           if (isRace && official) {

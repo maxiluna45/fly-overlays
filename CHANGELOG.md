@@ -6,6 +6,27 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.18.1] - 2026-09-30
+
+### Corregido
+- **La posición en el Standings mejoraba sola al final de la carrera.** Cuando
+  los de adelante iban terminando y se iban al garage o se desconectaban, cada
+  uno que desaparecía te corría un lugar hacia arriba: en una carrera de 6 autos
+  podías ver P5, P4, P3 y terminar marcando P1 sin haber adelantado a nadie. Lo
+  causaban tres cosas juntas: iRacing borra de la memoria compartida a los autos
+  que salen del mundo, el overlay repartía las posiciones sólo entre los que
+  quedaban, y además seguía haciéndolo después de la bandera a cuadros, cuando
+  el que sigue rodando la vuelta de enfriamiento suma progreso por encima de los
+  que ya cruzaron.
+- Ahora se recuerda el mayor progreso de cada auto y el momento en que lo hizo,
+  así que el que desaparece conserva su lugar, y con la bandera afuera el primer
+  cruce de meta de cada uno queda registrado como su llegada. El orden pasa a
+  ser el mismo que usa iRacing: más vueltas adelante, y entre los que terminan
+  con las mismas vueltas manda quién cruzó primero. El que abandona con menos
+  vueltas que vos sí te deja pasar, que es lo correcto.
+- Los autos retirados no se muestran como fila, sólo cuentan para el orden, así
+  que vas a ver números salteados (P5 y después P7) cuando alguien abandona.
+
 ## [0.18.0] - 2026-08-28
 
 ### Agregado
