@@ -1239,7 +1239,6 @@ const SETTING_LABELS = {
     showIRating: "Mostrar iRating",
     showCarNumber: "Mostrar número de auto",
     showFlag: "Mostrar bandera (país del club)",
-    showIncidents: "Semáforo de incidentes del rival",
     showLaps: "Mostrar last lap",
     rowsAbove: "Rivales arriba",
     rowsBelow: "Rivales abajo",
@@ -1517,7 +1516,6 @@ function AppearanceSettings({ overlayId, overlayKey, settings = {}, onChange }) 
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showIRating" value={settings.showIRating} onChange={onChange} />
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showCarNumber" value={settings.showCarNumber} onChange={onChange} />
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showFlag" value={settings.showFlag} onChange={onChange} />
-          <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showIncidents" value={settings.showIncidents} onChange={onChange} />
           <ToggleField overlayId={overlayId} overlayKey={overlayKey} k="showLaps" value={settings.showLaps} onChange={onChange} />
           {settings.showFlag !== false && (
             <CountryField overlayId={overlayId} value={settings.playerCountry} onChange={onChange} />

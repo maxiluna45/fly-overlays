@@ -6,6 +6,19 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.19.0] - 2026-09-30
+
+### Eliminado
+- **El semáforo de incidentes del rival en el Relative.** Era el `2x`, `3x` de
+  color que aparecía al lado del nombre de cada piloto. Contaba los incidentes
+  de la sesión en curso, y en la práctica no servía: en entrenamiento y
+  clasificación casi nadie tiene ninguno, y en carrera el número tampoco resultó
+  útil para decidir con quién no pelear una curva. Con él se va la opción
+  "Semáforo de incidentes del rival" del panel de configuración del Relative.
+- Tu propio contador de incidentes, el `✕` arriba a la derecha del Relative con
+  el total y el máximo de la sesión, **no cambia**: ese sale de un dato distinto
+  que iRacing sí publica para tu auto y sigue igual que siempre.
+
 ## [0.18.1] - 2026-09-30
 
 ### Corregido
