@@ -38,7 +38,7 @@ const OVERLAY_DEFAULT_SETTINGS = {
     showIRating: true,       // mostrar iRating al final de la fila
     showLicense: true,       // mostrar el badge de licencia (LicLevel)
     showCarNumber: true,     // mostrar número del auto
-    showFlag: true,          // mostrar bandera del país del club
+    showFlag: false,         // iRacing manda ClubName "None": sin dato, columna oculta
     playerCountry: "ar",     // ISO2 de tu bandera (tu fila; el club no distingue país)
     showLaps: true,          // mostrar la caja de last lap
     nameFormat: "full",      // full | short | initials
@@ -58,7 +58,7 @@ const OVERLAY_DEFAULT_SETTINGS = {
     showLicense: true,       // badge de licencia
     showIRating: true,       // columna de iRating
     showCarNumber: true,     // número del auto
-    showFlag: true,          // bandera del país del club
+    showFlag: false,         // iRacing manda ClubName "None": sin dato, columna oculta
     playerCountry: "ar",     // ISO2 de tu bandera (tu fila; el club no distingue país)
     showBestLap: true,       // columna de best lap
     showLastLap: false,      // columna de last lap (en carrera se fuerza a true)

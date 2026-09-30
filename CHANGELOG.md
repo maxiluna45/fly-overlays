@@ -6,6 +6,17 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.19.1] - 2026-09-30
+
+### Cambiado
+- **La columna de banderas del Relative viene apagada.** iRacing manda
+  `ClubName: None` y `ClubID: 0` para todos los rivales: lo verifiqué en las 36
+  sesiones que tenés grabadas, así que la columna sólo mostraba un placeholder
+  gris al lado de cada nombre. No hay de dónde sacar el dato sin la API web, que
+  desde diciembre de 2025 exige un Client ID de OAuth2 que iRacing no está
+  entregando. El código y el interruptor siguen estando: si el sim vuelve a
+  publicar el club, se prende desde el panel y anda.
+
 ## [0.19.0] - 2026-09-30
 
 ### Eliminado

@@ -164,7 +164,7 @@ export function Relative({ previewMode = false, injectedTelemetry = null, settin
     showIRating: true,
     showLicense: true,
     showCarNumber: true,
-    showFlag: true,
+    showFlag: false, // ver config-store: hoy iRacing no publica el club
     playerCountry: "ar",
     fontSize: 11,
     rowHeight: 26,
