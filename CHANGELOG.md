@@ -6,6 +6,26 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.22.0] - 2026-09-30
+
+### Agregado
+- **El Standings ajusta su alto a lo que está mostrando.** En vista reducida
+  sobraba espacio en blanco abajo, y si lo achicabas a mano la vista completa
+  quedaba cortada. Ahora el overlay mide lo que necesita y la ventana se
+  acomoda sola: al alternar con F11 y también cuando cambia la cantidad de autos
+  en pista o de clases. Sólo cambia el alto — el ancho y la posición siguen
+  siendo los que vos elegiste.
+- Nunca se hace más chico que el mínimo de ventana ni más alto que lo que queda
+  de pantalla, así que una grilla de 60 autos no crea un overlay más largo que
+  el monitor. Y en modo edición (F7) no se ajusta: si estás dimensionando a
+  mano, el overlay no te pelea el alto.
+
+### Cambiado
+- El modo preview genera 24 pilotos en tres clases en vez de 10 en una. Con diez
+  autos la vista reducida y la completa del Standings mostraban exactamente lo
+  mismo, así que no se podía ver el recorte ni el cambio de alto sin entrar a
+  una carrera con grilla llena.
+
 ## [0.21.3] - 2026-09-30
 
 ### Corregido

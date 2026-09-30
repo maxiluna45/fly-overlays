@@ -35,6 +35,8 @@ contextBridge.exposeInMainWorld('fly', {
   // cargara (ej: F7 crea la ventana y manda el evento antes del did-finish-load)
   // → sin esto, el overlay quedaba "quieto" sin poder arrastrarse.
   getLockState: () => ipcRenderer.invoke('overlay:get-lock-state', overlayId),
+  // El overlay pide el alto que necesita su contenido (ver setAutoHeight).
+  autoHeight: (h) => ipcRenderer.invoke('overlay:auto-height', overlayId, h),
   openPanel: () => ipcRenderer.invoke('overlay:open-panel'),
 
   // Panel only

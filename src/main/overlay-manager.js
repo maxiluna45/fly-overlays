@@ -182,6 +182,35 @@ class OverlayManager {
     return !!this.unlockedState.get(id);
   }
 
+  // Alto pedido por el propio overlay según lo que está mostrando (hoy el
+  // Standings, que cambia mucho entre la vista reducida y la completa).
+  //
+  // El valor viene del renderer, así que se acota: nunca por debajo del mínimo
+  // de ventana ni más allá de lo que queda de pantalla desde donde está
+  // apoyado --una carrera de 60 autos pediría un overlay más alto que el
+  // monitor--. Los cambios de menos de 2px se ignoran: ajustar por un píxel
+  // vuelve a disparar la medición y así se arma un bucle.
+  setAutoHeight(id, height) {
+    const win = this.windows.get(id);
+    if (!win || win.isDestroyed()) return;
+    // En modo edición manda el usuario: si está dimensionando con F7, no se le
+    // pelea el alto.
+    if (this.isUnlocked(id)) return;
+    const pedido = Number(height);
+    if (!Number.isFinite(pedido) || pedido <= 0) return;
+
+    const b = win.getBounds();
+    let alto = Math.round(pedido);
+    try {
+      const { height: areaH } = screen.getPrimaryDisplay().workAreaSize;
+      alto = Math.min(alto, Math.max(MIN_HEIGHT, areaH - Math.max(0, b.y)));
+    } catch (_) {}
+    alto = Math.max(MIN_HEIGHT, alto);
+    if (Math.abs(alto - b.height) < 2) return;
+
+    win.setBounds({ x: b.x, y: b.y, width: b.width, height: alto });
+  }
+
   setUnlocked(id, value) {
     this.unlockedState.set(id, value);
     // Unlock puede requerir mostrar (o crear) una ventana oculta por el filtro

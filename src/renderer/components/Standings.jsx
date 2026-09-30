@@ -244,6 +244,49 @@ export function Standings({ previewMode = false, injectedTelemetry = null, setti
     return { total: drivers.length, porClase };
   }, [drivers]);
 
+  // Alto de la ventana segun lo que hay para mostrar. La vista reducida son
+  // ~10 filas y la completa puede ser la grilla entera: con un alto fijo, o
+  // sobra espacio en blanco abajo o se cortan las últimas posiciones.
+  //
+  // El alto deseado sale de:
+  //
+  //   alto de ventana + (lo que necesitan las filas - lo que ocupan ahora)
+  //
+  // Así no hay que sumar a mano el header, las cabeceras de clase, el
+  // separador ni el pie: cambien como cambien, la cuenta sigue valiendo.
+  //
+  // "Lo que necesitan" es la suma de las filas, no el scrollHeight: el
+  // contenedor es flex-1, así que cuando SOBRA espacio su scrollHeight es su
+  // propia altura y el overlay nunca se achicaba (medido: pedía siempre el
+  // mismo alto que ya tenía).
+  const rowsRef = useRef(null);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.fly?.autoHeight) return;
+    // En edit mode manda el usuario: el main también lo ignora, pero así ni
+    // siquiera se le pide.
+    if (unlocked) return;
+    const el = rowsRef.current;
+    if (!el) return;
+
+    let ultimo = 0;
+    const medir = () => {
+      const caja = el.getBoundingClientRect().height;
+      let necesita = 0;
+      for (const hijo of el.children) necesita += hijo.getBoundingClientRect().height;
+      const alto = Math.round(window.innerHeight + (necesita - caja));
+      if (!(alto > 0) || Math.abs(alto - ultimo) < 2) return;
+      ultimo = alto;
+      try { window.fly.autoHeight(alto); } catch (_) {}
+    };
+
+    // Una medición después del layout y otra observando cambios de tamanio del
+    // contenido (cambia la cantidad de autos, de clases, o el modo con F11).
+    const raf = requestAnimationFrame(medir);
+    const ro = typeof ResizeObserver === "function" ? new ResizeObserver(medir) : null;
+    if (ro) { ro.observe(el); for (const hijo of el.children) ro.observe(hijo); }
+    return () => { cancelAnimationFrame(raf); if (ro) ro.disconnect(); };
+  }, [rows, unlocked, cfg.rowHeight, cfg.fontSize, showBestCol, showLastCol]);
+
   return (
     <div
       ref={containerRef}
@@ -318,6 +361,7 @@ export function Standings({ previewMode = false, injectedTelemetry = null, setti
           {/* key por modo: al alternar reducido/completo el bloque se vuelve a
               montar y las filas entran animadas en vez de aparecer de golpe. */}
           <div
+            ref={rowsRef}
             className="flex-1 overflow-hidden flex flex-col"
             key={cfg.compact !== false ? "compacto" : "completo"}
           >

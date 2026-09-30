@@ -338,38 +338,35 @@ class IrsdkClient {
   }
 
   // Genera un payload "relative" fake pero estable para preview mode.
-  // 10 pilotos, vos en P6 con gap 0.0, todos con datos coherentes.
+  // 24 pilotos en 3 clases, vos en el medio de la tuya. La grilla tiene que ser
+  // grande de verdad: con 10 autos la vista reducida del standings y la completa
+  // muestran lo mismo, y no se puede ver ni probar el recorte.
   _getMockRelative(t, currentLapNum, currentLapTime) {
     const driverNames = [
       "Tre Blohm", "Max Josten", "Henrique Silva", "Joao Rocha", "Suleiman Himmo",
-      "Jose Ferrada", "Maximiliano Luna2", "Anders Krog", "Marc Vidal", "Park Joon",
+      "Jose Ferrada", "Anders Krog", "Marc Vidal", "Park Joon", "Ignacio Hortal",
+      "Ryan Smit", "Daniel Byde", "Maxime Laforge", "Christian Eschner", "Joselu Otero",
+      "Maximiliano Luna2", "Ingo Kussian", "Anton Efimenko", "Alberto Coello", "Sito Ferrer",
+      "Rodrigo Ianni", "Olivier Granier", "Thomas Bance", "Alejandro Cazala",
     ];
-    const carNumbers = ["9", "12", "10", "7", "23", "17", "62", "44", "8", "21"];
-    // Clubes de iRacing para el mock. Mezcla intencional: algunos con bandera y
-    // otros pan-regionales (Scandinavia/South America/Asia) que NO tienen país
-    // único → se ven sin bandera, reflejando el comportamiento real.
-    const clubs = [
-      "Scandinavia", "DE-AT-CH", "Brazil", "Brazil", "UK and I",
-      "Iberia", "South America", "Finland", "France", "Asia",
-    ];
-    const licData = [
-      ["A 4.6", 5, 4.6, 5], ["D 3.4", 2, 3.4, 2], ["D 2.7", 2, 2.7, 2],
-      ["C 3.9", 3, 3.9, 3], ["R 2.1", 1, 2.1, 1], ["B 4.2", 4, 4.2, 4],
-      ["D 2.3", 2, 2.3, 2], ["D 3.7", 2, 3.7, 2], ["R 1.8", 1, 1.8, 1],
-      ["D 2.9", 2, 2.9, 2],
-    ];
-    const iratings = [14500, 1850, 2400, 3200, 1100, 6700, 1500, 2800, 1400, 1700];
-    // Tres clases, con el player en la del medio. El preview es la única forma
-    // de ver las cabeceras de clase sin entrar a una carrera multiclase.
+    const playerIdx = 15;
+    const carNumbers = driverNames.map((_, i) => String(((i * 7) % 89) + 2));
+    // Clubes: da igual cuál, iRacing manda "None" en vivo y la columna viene
+    // apagada. Se deja variado por si algún día vuelve el dato.
+    const CLUBS = ["Scandinavia", "DE-AT-CH", "Brazil", "UK and I", "Iberia", "South America", "Finland", "France", "Asia"];
+    const clubs = driverNames.map((_, i) => CLUBS[i % CLUBS.length]);
+    const LICS = [["A 4.6", 5, 4.6, 5], ["D 3.4", 2, 3.4, 2], ["C 3.9", 3, 3.9, 3], ["B 4.2", 4, 4.2, 4], ["R 2.1", 1, 2.1, 1], ["D 2.7", 2, 2.7, 2]];
+    const licData = driverNames.map((_, i) => LICS[i % LICS.length]);
+    const iratings = driverNames.map((_, i) => 900 + ((i * 617) % 6200));
+    // Tres clases, con el player en la del medio.
     const clases = [
       { id: 3188, name: "LMP2", color: 2 },
       { id: 2708, name: "GT3", color: 1 },
       { id: 1534, name: "GT4", color: 4 },
     ];
-    //          idx:  0  1  2  3  4  5  6  7  8  9
-    const claseDe = [ 0, 0, 0, 1, 1, 1, 1, 1, 2, 2 ];
+    // 7 en LMP2, 10 en GT3 (la tuya) y 7 en GT4.
+    const claseDe = driverNames.map((_, i) => (i < 7 ? 0 : i < 17 ? 1 : 2));
     const baseLap = 95 + (t % 7) * 0.2; // varía un poco con el tiempo
-    const playerIdx = 6;
     const drivers = driverNames.map((name, i) => {
       const [licString, licLevel, licSub, licColor] = licData[i];
       const isPlayer = i === playerIdx;

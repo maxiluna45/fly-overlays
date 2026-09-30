@@ -441,6 +441,13 @@ ipcMain.handle('overlay:toggle-lock', () => {
   return results;
 });
 
+// El overlay mide su contenido y pide el alto: el Standings pasa de 10 filas
+// en vista reducida a la tabla entera, y con un alto fijo o sobra espacio en
+// blanco o se cortan las últimas posiciones.
+ipcMain.handle('overlay:auto-height', (_e, id, height) => {
+  overlayManager.setAutoHeight(id, height);
+});
+
 // Estado de lock actual de UN overlay (pull al montar el componente). Cubre la
 // carrera en la que el push 'overlay:lock-state' se emitió antes de que el
 // renderer terminara de cargar (F7 puede crear la ventana en ese instante).
