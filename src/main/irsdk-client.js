@@ -1,6 +1,7 @@
 const { IRacingSDK } = require('irsdk-node');
 const { getSectorPoints, getTrackInfo } = require('./session-parser');
 const { ReferenceLapStore } = require('./reference-lap-store');
+const { createTracker } = require('./lap-traces');
 const { rememberProgress, positionsByClass, countInClass } = require('./race-order');
 const { createLogger, logThrottled } = require('./logger');
 const log = createLogger('irsdk');
@@ -151,6 +152,10 @@ class IrsdkClient {
     this._refStore = null;
     this._refTrackId = null;
     this._refCarId = null;
+    // Delta calculado por nosotros contra las trazas de la sesión. Ver
+    // lap-traces.js: los deltas del sim se apagan al invalidarse la vuelta.
+    this._traces = createTracker();
+    this._tracesKey = null;
     this._refPrevLap = null;
     this._trackLengthM = null;  // largo de pista en metros (para el radar)
     this._onTrackLatchUntil = 0; // ms hasta cuándo mantener visibles los overlays
@@ -232,7 +237,7 @@ class IrsdkClient {
   _snapshotSample() {
     const c = this._cachedData || {};
     return JSON.parse(JSON.stringify({
-      delta: c.delta ?? 0, deltaRate: c.deltaRate ?? 0, deltaRefs: c.deltaRefs ?? null, refLapTime: c.refLapTime ?? 0,
+      delta: c.delta ?? 0, deltaRate: c.deltaRate ?? 0, deltaRefs: c.deltaRefs ?? null, refLapTime: c.refLapTime ?? 0, predictedLap: c.predictedLap ?? null,
       sectors: c.sectors ?? null, lapTimes: c.lapTimes ?? null, relative: c.relative ?? null,
       carLeftRight: c.carLeftRight ?? 0, session: c.session ?? null, sessionType: c.sessionType ?? null,
     }));
@@ -743,6 +748,15 @@ class IrsdkClient {
         }
         this._refPrevLap = lap;
       }
+      // Las trazas de la sesión (mejor y anterior) viven aparte del store, que
+      // guarda el histórico persistido. Se reinician al cambiar de sesión.
+      const tKey = `${session?.SessionNum}|${this._refTrackId}|${this._refCarId}`;
+      if (this._tracesKey !== tKey) { this._traces.reset(); this._tracesKey = tKey; }
+      this._traces.feed(lapDistPct, currentLap);
+      if (this._tracesPrevLap != null && lap > this._tracesPrevLap) {
+        this._traces.completeLap(lastLapTime);
+      }
+      this._tracesPrevLap = lap;
     } catch (_) {}
 
     // Selección de la fuente de delta (mismo criterio que benofficial2 / bo2):
@@ -815,18 +829,27 @@ class IrsdkClient {
       // histórico personal / óptima). null = iRacing no tiene esa referencia
       // válida todavía. La elección "auto" (según tipo de sesión) sigue en `delta`.
       deltaRefs: {
-        sessionBest: this._readDelta(telemetry, 'LapDeltaToSessionBestLap'),
-        personalBest: this._readDelta(telemetry, 'LapDeltaToBestLap'),
+        // Propios (ver lap-traces.js): siguen vivos con la vuelta invalidada y
+        // dan un valor realmente distinto por referencia. Si todavía no hay
+        // traza --primera vuelta de la sesión-- caen al dato del sim.
+        sessionBest: this._traces.deltas(lapDistPct, currentLap).sessionBest
+          ?? this._readDelta(telemetry, 'LapDeltaToSessionBestLap'),
+        lastLap: this._traces.deltas(lapDistPct, currentLap).lastLap
+          ?? this._readDelta(telemetry, 'LapDeltaToSessionLastlLap'),
+        personalBest: this._deltaToStoredBest(currentLap, lapDistPct)
+          ?? this._readDelta(telemetry, 'LapDeltaToBestLap'),
         optimal: this._readDelta(telemetry, 'LapDeltaToOptimalLap'),
-        // Tu vuelta ANTERIOR ('Lastl' no es typo nuestro: es el nombre real
-        // de la variable en el SDK de iRacing).
-        lastLap: this._readDelta(telemetry, 'LapDeltaToSessionLastlLap'),
         // Mejor vuelta de CUALQUIER piloto de tu clase en la sesión (derivado).
         fieldBest: this._deltaToFieldBest(telemetry, bestLap, lapDistPct),
       },
-      // Tiempo de vuelta de referencia (best del player en la sesión) para que
-      // el DeltaBar pueda proyectar la vuelta actual: predicha = ref + delta.
+      // Tiempo de vuelta de referencia (best del player en la sesión).
       refLapTime: bestLap || 0,
+      // Vuelta proyectada: lo que llevás recorrido más lo que falta al ritmo de
+      // tu mejor. NO depende de la referencia elegida en la barra --el
+      // proyectado es una propiedad de tu vuelta, no de con quién te comparás--,
+      // que antes cambiaba al ciclar con F10 porque se sumaba el delta de la
+      // referencia elegida al tiempo de OTRA vuelta.
+      predictedLap: this._traces.predict(lapDistPct, currentLap) ?? this._predictFromStore(currentLap, lapDistPct),
       // Tiempo de vuelta en curso a 60 Hz. lapTimes.currentLap viaja por el
       // canal pesado throttled a 500ms y se ve "a saltos"; este campo permite
       // que SectorTimes muestre el Current fluido.
@@ -1108,6 +1131,31 @@ class IrsdkClient {
   // Lee una variable de delta oficial (LapDeltaTo*) solo si su flag _OK está
   // activo y el valor es sano. Devuelve null en caso contrario, para que el
   // overlay distinguga "sin referencia" de "delta exactamente 0".
+  // Delta contra tu mejor vuelta GUARDADA (reference-lap-store, que persiste
+  // entre sesiones por pista+auto). Es la unica de las referencias que sobrevive
+  // a cerrar el juego, y la que el sim NO publica de verdad: su
+  // LapDeltaToBestLap devolvia el mismo numero que el de la sesion.
+  _deltaToStoredBest(currentLap, lapDistPct) {
+    if (!(currentLap > 0)) return null;
+    const store = this._refs();
+    if (!store || this._refTrackId == null || this._refCarId == null) return null;
+    const t = store.interp(this._refTrackId, this._refCarId, lapDistPct);
+    if (t == null) return null;
+    return Math.round((currentLap - t) * 1000) / 1000;
+  }
+
+  // Proyeccion de respaldo cuando todavia no cerraste una vuelta en esta
+  // sesion: se usa la guardada del store con el mismo criterio.
+  _predictFromStore(currentLap, lapDistPct) {
+    if (!(currentLap > 0)) return null;
+    const store = this._refs();
+    if (!store || this._refTrackId == null || this._refCarId == null) return null;
+    const total = store.lapTime(this._refTrackId, this._refCarId);
+    const hecho = store.interp(this._refTrackId, this._refCarId, lapDistPct);
+    if (!(total > 0) || hecho == null) return null;
+    return Math.round((currentLap + (total - hecho)) * 1000) / 1000;
+  }
+
   _readDelta(telemetry, base) {
     if (this._read(telemetry, base + '_OK')) {
       const v = this._read(telemetry, base);
@@ -1139,6 +1187,7 @@ class IrsdkClient {
       deltaRate: this._cachedData.deltaRate ?? 0,
       deltaRefs: this._cachedData.deltaRefs ?? { sessionBest: null, personalBest: null, optimal: null },
       refLapTime: this._cachedData.refLapTime ?? 0,
+      predictedLap: this._cachedData.predictedLap ?? null,
       lap: this._cachedData.lap ?? 0,
       speed: this._cachedData.speed ?? 0,
       onTrack: this._cachedData.onTrack ?? false,

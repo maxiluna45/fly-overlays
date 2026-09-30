@@ -6,6 +6,37 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.20.0] - 2026-09-30
+
+### Agregado
+- **La delta bar calcula su propio delta.** Antes leía el que publica iRacing, y
+  ese se apaga entero apenas la vuelta se invalida: medido en tu telemetría, un
+  despiste de 3,9 s en Lime Rock dejó las cuatro referencias sin dato **por el
+  resto de la vuelta**, y la barra caía a un cálculo de respaldo que suponía
+  ritmo parejo y terminaba mostrando 0,00. Ahora se guarda el tiempo de la
+  vuelta de referencia en cada punto de la pista y se resta contra el tuyo, así
+  que el número sigue vivo aunque despistes: si perdiste cinco segundos, se ven.
+  Contra una vuelta limpia coincide con el delta del sim dentro de ~0,05 s.
+
+### Corregido
+- **Varias referencias del ciclo F10 mostraban el mismo número.** Por dos
+  motivos. iRacing devuelve el mismo valor en varias de sus variables cuando tu
+  mejor vuelta de la sesión es además tu óptima: medido en tu telemetría, "mejor
+  personal" y "óptima" coincidían el 69% del tiempo, y "mejor de sesión" con
+  "vuelta anterior" el 72%. Y cuando una referencia no tenía dato, la barra caía
+  al mismo número de respaldo para todas, así que ciclabas y no cambiaba nada.
+  Ahora "mejor de sesión", "vuelta anterior" y "mejor personal" se calculan por
+  separado y dan valores distintos de verdad; la que no tenga dato muestra un
+  guion en vez de un cero que parecía "vas parejo".
+- **El tiempo proyectado cambiaba según la referencia elegida.** Sumaba el delta
+  contra la referencia que estabas mirando al tiempo de **otra** vuelta (siempre
+  tu mejor de la sesión), que son magnitudes que no se pueden sumar. Ahora es lo
+  que llevás recorrido más lo que falta al ritmo de tu mejor vuelta, y es el
+  mismo número sin importar contra quién estés comparando en la barra.
+- Un pico enorme en el instante de cruzar la meta: en ese frame iRacing ya
+  reinició la distancia de vuelta pero todavía no el cronómetro, y el delta
+  saltaba a −43 s por un momento. Medido en la telemetría de Snetterton.
+
 ## [0.19.1] - 2026-09-30
 
 ### Cambiado

@@ -125,10 +125,15 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null, settin
     const ref = raw && raw !== "auto" ? raw : "sessionBest";
     const v = telemetry.deltaRefs?.[ref];
     if (v != null && isFinite(v)) return v;
-    return telemetry.delta || 0;
-  }, [telemetry.delta, telemetry.deltaRefs, cfg.deltaReference]);
+    // Sin dato para ESTA referencia. Antes se caía a telemetry.delta, que es
+    // el mismo para todas: ciclabas con F10 y el número no cambiaba, o
+    // aparecía un 0 que parecía "vas parejo" cuando en realidad no había nada
+    // con qué comparar.
+    return null;
+  }, [telemetry.deltaRefs, cfg.deltaReference]);
+  const hasDelta = selectedDelta != null;
 
-  useEffect(() => { targetRef.current = selectedDelta; }, [selectedDelta]);
+  useEffect(() => { targetRef.current = selectedDelta ?? 0; }, [selectedDelta]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.fly) return;
@@ -247,8 +252,10 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null, settin
   // Vuelta proyectada = tiempo de referencia + delta actual. Solo se muestra
   // con una referencia válida (ya diste una vuelta). Es una proyección: asume
   // que sostenés el ritmo del delta actual hasta el final de la vuelta.
-  const refLapTime = telemetry.refLapTime || 0;
-  const predictedLap = refLapTime > 0 ? refLapTime + renderDelta : null;
+  // La proyección viene calculada del main (lap-traces): tu tiempo recorrido
+  // más lo que falta al ritmo de tu mejor vuelta. Es la MISMA sin importar qué
+  // referencia estés mirando, que es lo que se espera de un tiempo proyectado.
+  const predictedLap = telemetry.predictedLap && telemetry.predictedLap > 0 ? telemetry.predictedLap : null;
   const showPrediction = cfg.showPrediction && showBar && predictedLap != null && predictedLap > 0;
 
   return (
@@ -373,7 +380,7 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null, settin
                     opacity: showBar ? 1 : 0.45,
                   }}
                 >
-                  {showBar ? formatDelta(renderDelta) : "+0.00"}
+                  {!hasDelta ? "—" : showBar ? formatDelta(renderDelta) : "+0.00"}
                 </span>
                 {trend !== 0 && (
                   <span

@@ -583,7 +583,16 @@ function simSectors(t) {
 }
 function simFrame(id, t) {
   const base = { connected: true, onTrack: true, preview: true };
-  if (id === "delta") return { ...base, delta: Math.sin(t * 0.7) * 0.5 - 0.05, deltaRate: Math.cos(t * 0.7) * 0.2, refLapTime: 92.3, deltaRefs: {} };
+  if (id === "delta") {
+    // Cada referencia con su propio valor: en el sim tambien difieren, y con
+    // deltaRefs vacio la barra del preview quedaria sin numero.
+    const d = Math.sin(t * 0.7) * 0.5 - 0.05;
+    return {
+      ...base, delta: d, deltaRate: Math.cos(t * 0.7) * 0.2, refLapTime: 92.3,
+      deltaRefs: { sessionBest: d, personalBest: d + 0.21, lastLap: d - 0.34, optimal: d + 0.47, fieldBest: d + 0.68 },
+      predictedLap: 92.3 + d,
+    };
+  }
   if (id === "sectors") return { ...base, ...simSectors(t) };
   if (id === "radar") return { ...base, carLeftRight: [1, 2, 3, 4][Math.floor(t / 1.5) % 4], relative: simRelative(t) };
   return { ...base, relative: simRelative(t) }; // relative / standings
