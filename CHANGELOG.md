@@ -6,6 +6,18 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.21.2] - 2026-09-30
+
+### Corregido
+- **En el modo edición (F7) sólo se podía mover y redimensionar la delta bar.**
+  El resto de los overlays quedaban clavados. En edit mode el contenedor de cada
+  overlay se marca entero como zona de arrastre, así que la ventana queda
+  cubierta al 100% y no le queda ningún borde libre por donde agarrarla para
+  redimensionar. La delta bar era la única que tenía cuatro huecos en las
+  esquinas para eso; los demás dibujaban sólo las esquinas decorativas. Ahora
+  esos huecos son parte del componente de edición, así que los tienen los cinco
+  overlays — y cualquiera que se agregue en el futuro.
+
 ## [0.21.1] - 2026-09-30
 
 ### Cambiado

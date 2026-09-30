@@ -271,20 +271,6 @@ export function DeltaBar({ previewMode = false, injectedTelemetry = null, settin
         <>
           <EditCorners />
 
-          {/* Handles invisibles de resize en las 4 esquinas (área más grande para que sea fácil agarrarlos) */}
-          {[
-            "top-0 left-0 cursor-nwse-resize",
-            "top-0 right-0 cursor-nesw-resize",
-            "bottom-0 left-0 cursor-nesw-resize",
-            "bottom-0 right-0 cursor-nwse-resize",
-          ].map((cls, i) => (
-            <div
-              key={`h-${i}`}
-              className={`absolute size-5 z-40 ${cls}`}
-              style={{ WebkitAppRegion: "no-drag" }}
-            />
-          ))}
-
           {/* Hint con fondo azul sólido */}
           <div
             className="absolute top-1 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded text-[9px] font-bold tracking-widest z-50 shadow"
