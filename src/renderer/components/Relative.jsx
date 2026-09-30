@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { EditCorners } from "./ui/edit-corners.jsx";
 import { Flag } from "./ui/flag.jsx";
+import { classColorCss, classColorAlpha } from "../lib/class-colors.js";
 // `incidentColor` local (más abajo) es el del contador PROPIO en el header;
 // éste es el del semáforo de cada rival.
 
@@ -100,13 +101,6 @@ function RatingChange({ value, fontSize }) {
 
 // Convierte CarClassColor de iRacing a CSS. Puede venir como índice de paleta
 // (valores chicos, p.ej. el mock) o como entero RGB de 24 bits (p.ej. 0xFFFFFF).
-const CLASS_PALETTE = { 1: "#f6c915", 2: "#3b82f6", 3: "#ef4444", 4: "#22c55e", 5: "#a855f7", 6: "#f97316", 7: "#06b6d4" };
-function classColorCss(c) {
-  if (c == null || c === 0) return null;
-  if (c > 0 && c <= 16) return CLASS_PALETTE[c] || "rgb(160,160,170)";
-  const hex = (c & 0xffffff).toString(16).padStart(6, "0");
-  return `#${hex}`;
-}
 
 function formatGap(seconds) {
   if (seconds == null || !isFinite(seconds)) return "—";
@@ -520,21 +514,36 @@ const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg, multiCl
   const classColor = multiClass ? classColorCss(d.carClassColor) : null;
 
 
-  // Background: player con gradient ámbar (Racelabs), líder con tinte cian,
-  // resto alterna muy sutil.
-  const rowBg = isPlayer
+  // Vueltas de diferencia: sólo un destello en el BORDE DERECHO que se desvanece
+  // hacia adentro. Antes teñía la fila entera, y con eso tapaba el color de
+  // la clase y competía con el resaltado del player.
+  //   rojo    = te lleva una vuelta o más
+  //   celeste = vos se la llevás a él
+  const lapEdge = lapAhead
+    ? "linear-gradient(270deg, rgba(239,68,68,0.62) 0%, rgba(239,68,68,0.22) 9%, rgba(239,68,68,0.06) 18%, transparent 30%)"
+    : lapBehind
+    ? "linear-gradient(270deg, rgba(56,189,248,0.62) 0%, rgba(56,189,248,0.22) 9%, rgba(56,189,248,0.06) 18%, transparent 30%)"
+    : null;
+
+  // Color de la clase saliendo de la barra izquierda, como en el standings.
+  const classBg = !isPlayer && classColor
+    ? `linear-gradient(90deg, ${classColorAlpha(d.carClassColor, 0.34)} 0%, ${classColorAlpha(d.carClassColor, 0.10)} 24%, transparent 52%)`
+    : null;
+
+  // Base de la fila: el player con su ámbar, el líder con tinte cian, el resto
+  // alternando muy sutil.
+  const baseBg = isPlayer
     ? "linear-gradient(90deg, rgba(234,179,8,0.28) 0%, rgba(234,179,8,0.12) 70%, rgba(234,179,8,0.04) 100%)"
     : offRow
     ? "linear-gradient(90deg, rgba(148,163,184,0.20) 0%, rgba(148,163,184,0.10) 70%, rgba(148,163,184,0.03) 100%)"
-    : lapAhead
-    ? "linear-gradient(90deg, rgba(248,113,113,0.20) 0%, rgba(248,113,113,0.08) 70%, rgba(248,113,113,0.02) 100%)"
-    : lapBehind
-    ? "linear-gradient(90deg, rgba(74,222,128,0.20) 0%, rgba(74,222,128,0.08) 70%, rgba(74,222,128,0.02) 100%)"
-    : isLeader
+    : isLeader && !classBg
     ? "linear-gradient(90deg, rgba(125,211,252,0.10) 0%, rgba(125,211,252,0.02) 100%)"
     : d.classPosition % 2 === 0
-    ? "rgba(255,255,255,0.015)"
-    : "rgba(255,255,255,0.04)";
+    ? "linear-gradient(0deg, rgba(255,255,255,0.015), rgba(255,255,255,0.015))"
+    : "linear-gradient(0deg, rgba(255,255,255,0.04), rgba(255,255,255,0.04))";
+
+  // Se apilan: el borde de vuelta arriba, después la clase, y la base abajo.
+  const rowBg = [lapEdge, classBg, baseBg].filter(Boolean).join(", ");
 
   // El borde izquierdo marca al player (ámbar); en multiclase, el resto usa el
   // color de su clase; si no, el líder va cian y los demás sin borde.
@@ -606,11 +615,12 @@ const DriverRow = React.memo(function DriverRow({ driver, isPlayer, cfg, multiCl
           style={{
             color: "rgba(255,255,255,0.55)",
             fontSize: `${cfg.fontSize - 1}px`,
-            minWidth: "20px",
+            minWidth: "24px",
             textAlign: "left",
           }}
         >
-          {d.carNumber}
+          {/* Con # adelante, como en el Standings: sin el se confunde con la posicion. */}
+          #{d.carNumber}
         </span>
       )}
 

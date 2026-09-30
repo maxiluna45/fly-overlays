@@ -6,6 +6,20 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.21.1] - 2026-09-30
+
+### Cambiado
+- **El Relative en multiclase se lee como el Standings.** El color de la clase
+  ahora sale de la barra izquierda con un degradado corto, con el mismo color
+  que la cabecera de esa clase en el Standings — los dos overlays comparten la
+  paleta, así que no pueden quedar despareados.
+- **La diferencia de vueltas pasó al borde derecho.** Rojo si ese auto te lleva
+  una vuelta o más, celeste si se la llevás vos, como un destello que se
+  desvanece hacia adentro. Antes teñía la fila entera: tapaba el color de la
+  clase y competía con el resaltado de tu propia fila.
+- En el Relative el número del auto se muestra con `#` adelante, igual que en el
+  Standings, para no confundirlo con la posición.
+
 ## [0.21.0] - 2026-09-30
 
 ### Agregado
