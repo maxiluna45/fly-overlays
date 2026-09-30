@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { EditCorners } from "./ui/edit-corners.jsx";
 import { Flag } from "./ui/flag.jsx";
+import { compactRows } from "../lib/standings-rows.js";
+import { classColorCss } from "../lib/class-colors.js";
 
 // Colores de licencia iRacing (1-7). Mismo criterio que Relative.
 const LIC_COLORS = {
@@ -26,12 +28,16 @@ function resolveLicLevel(d) {
 }
 
 // Color de clase (índice de paleta o entero RGB de 24 bits).
-const CLASS_PALETTE = { 1: "#f6c915", 2: "#3b82f6", 3: "#ef4444", 4: "#22c55e", 5: "#a855f7", 6: "#f97316", 7: "#06b6d4" };
-function classColorCss(c) {
-  if (c == null || c === 0) return null;
-  if (c > 0 && c <= 16) return CLASS_PALETTE[c] || "rgb(160,160,170)";
-  const hex = (c & 0xffffff).toString(16).padStart(6, "0");
-  return `#${hex}`;
+
+// Strength of Field de un grupo de pilotos, con la fórmula oficial de iRacing
+// (no un promedio simple): SoF = 1600/ln2 · ln( n / Σ 2^(-iR/1600) ).
+// Misma que usa el Relative para el SoF de la sesión, acá aplicada por clase.
+function sofOf(list) {
+  const conIr = (list || []).filter((d) => (d.irating || 0) > 0);
+  if (conIr.length === 0) return null;
+  const BR = 1600 / Math.LN2;
+  const denom = conIr.reduce((acc, d) => acc + Math.pow(2, -d.irating / 1600), 0);
+  return denom > 0 ? Math.round(BR * Math.log(conIr.length / denom)) : null;
 }
 
 function formatIrating(ir) {
@@ -82,11 +88,12 @@ export function Standings({ previewMode = false, injectedTelemetry = null, setti
     showLicense: true,
     showIRating: true,
     showCarNumber: true,
-    showFlag: true,
+    showFlag: false, // iRacing manda ClubName "None": sin dato, columna oculta
     playerCountry: "ar",
     showBestLap: true,
     // 'leader' = gap al líder de clase · 'interval' = intervalo al de adelante
     gapMode: "leader",
+    compact: true, // 5 primeros + tu entorno; F11 despliega la tabla entera
     maxRows: 24,
     rowHeight: 24,
     fontSize: 11,
@@ -218,14 +225,24 @@ export function Standings({ previewMode = false, injectedTelemetry = null, setti
       });
     }
 
-    // Limitar filas: prioriza la clase del player, pero garantiza que el player esté.
-    const capped = out.slice(0, cfg.maxRows);
-    if (playerIdx >= 0 && !capped.some((d) => d.carIdx === playerIdx)) {
-      const self = out.find((d) => d.carIdx === playerIdx);
-      if (self) { capped[capped.length - 1] = self; }
+    // El recorte vive en lib/standings-rows.js: en compacto son los 5 primeros
+    // de tu clase, un corte y tu entorno; desplegado, la tabla entera (con
+    // maxRows como tope duro para no desbordar la pantalla).
+    const recortadas = compactRows(out, { playerIdx, compact: cfg.compact !== false });
+    return recortadas.slice(0, cfg.maxRows);
+  }, [drivers, playerIdx, isRace, cfg.gapMode, cfg.maxRows, cfg.compact]);
+
+  // Participantes por clase y total, para la cabecera y el pie: la pregunta de
+  // siempre es "largué 12, pero cuántos somos".
+  const totales = useMemo(() => {
+    const porClase = new Map();
+    for (const d of drivers) {
+      const cid = String(d.carClassId ?? '');
+      if (!porClase.has(cid)) porClase.set(cid, []);
+      porClase.get(cid).push(d);
     }
-    return capped;
-  }, [drivers, playerIdx, isRace, cfg.gapMode, cfg.maxRows]);
+    return { total: drivers.length, porClase };
+  }, [drivers]);
 
   return (
     <div
@@ -297,30 +314,114 @@ export function Standings({ previewMode = false, injectedTelemetry = null, setti
           )}
 
           {/* Filas */}
-          <div className="flex-1 overflow-hidden flex flex-col">
+          <style>{`@keyframes flyRowIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }`}</style>
+          {/* key por modo: al alternar reducido/completo el bloque se vuelve a
+              montar y las filas entran animadas en vez de aparecer de golpe. */}
+          <div
+            className="flex-1 overflow-hidden flex flex-col"
+            key={cfg.compact !== false ? "compacto" : "completo"}
+          >
             {rows.length === 0 ? (
               <div className="flex-1 flex items-center justify-center" style={{ color: "rgba(255,255,255,0.4)", fontSize: `${cfg.fontSize}px` }}>
                 {telemetry.connected ? "Esperando datos..." : "Sin conexión con iRacing"}
               </div>
             ) : (
-              rows.map((d, i) => (
-                <StandingsRow
-                  key={`s-${d.carIdx}-${i}`}
-                  driver={d}
-                  isPlayer={d.carIdx === playerIdx}
-                  cfg={cfg}
-                  multiClass={multiClass}
-                  showBestCol={showBestCol}
-                  showLastCol={showLastCol}
-                />
-              ))
+              rows.map((d, i) => {
+                // Tope de 14 escalones: con 20+ filas, esperar 20 delays se
+                // siente lento en vez de suave.
+                const anim = { animation: `flyRowIn 220ms ease-out both`, animationDelay: `${Math.min(i, 14) * 18}ms` };
+                if (d._classHeader) {
+                  return (
+                    <div key={`hw-${d.classId}`} style={anim}>
+                    <ClassHeader
+                      key={`h-${d.classId}`}
+                      classId={d.classId}
+                      rows={d.rows}
+                      count={d.count}
+                      cfg={cfg}
+                      isPlayerClass={d.rows.some((r) => r.carIdx === playerIdx)}
+                    />
+                    </div>
+                  );
+                }
+                // El corte entre los primeros y tu entorno: sin esto, el 5to y
+                // el que va 3 delante tuyo parecen consecutivos.
+                if (d._separator) {
+                  return (
+                    <div key={`sep-${i}`} className="flex items-center justify-center" style={{ height: `${Math.max(6, (cfg.rowHeight ?? 24) * 0.42)}px`, flexShrink: 0, ...anim }}>
+                      <div style={{ width: "100%", height: "1px", background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.14) 20%, rgba(255,255,255,0.14) 80%, transparent)" }} />
+                    </div>
+                  );
+                }
+                return (
+                  <div key={`sw-${d.carIdx}-${i}`} style={anim}>
+                  <StandingsRow
+                    key={`s-${d.carIdx}-${i}`}
+                    driver={d}
+                    isPlayer={d.carIdx === playerIdx}
+                    cfg={cfg}
+                    multiClass={multiClass}
+                    showBestCol={showBestCol}
+                    showLastCol={showLastCol}
+                  />
+                  </div>
+                );
+              })
             )}
           </div>
+
+          {/* Pie: cuántos son en total. En multiclase el desglose ya está en
+              cada cabecera, acá va la suma. */}
+          {totales.total > 0 && (
+            <div
+              className="flex items-center justify-between px-2.5 py-1 border-t font-mono"
+              style={{ borderColor: "rgba(255,255,255,0.06)", fontSize: `${Math.max(7, cfg.fontSize - 3)}px`, color: "rgba(255,255,255,0.4)", letterSpacing: "0.06em" }}
+            >
+              <span>{totales.total} EN PISTA</span>
+              {cfg.compact !== false && <span style={{ color: "rgba(255,255,255,0.28)" }}>VISTA REDUCIDA</span>}
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
 }
+
+// Cabecera de clase: barra de color, nombre, cuántos son y el SoF del grupo.
+// Sin esto, en multiclase las tres tablas se leían como una sola lista y no se
+// entendía por qué las posiciones volvían a empezar.
+const ClassHeader = React.memo(function ClassHeader({ classId, rows, count, cfg, isPlayerClass }) {
+  const ref = rows && rows[0];
+  const color = classColorCss(ref?.carClassColor) || "rgb(160,160,170)";
+  // carClassShort es lo que manda el payload real (CarClassShortName del sim).
+  const nombre = ref?.carClassShort || ref?.carClassName || `CLASE ${classId}`;
+  const sof = sofOf(rows);
+  return (
+    <div
+      className="flex items-center gap-1.5 px-2 font-mono flex-shrink-0"
+      style={{
+        height: `${Math.max(14, (cfg.rowHeight ?? 24) * 0.78)}px`,
+        background: `linear-gradient(90deg, ${color}2e, transparent 70%)`,
+        borderLeft: `3px solid ${color}`,
+        borderTop: "1px solid rgba(255,255,255,0.05)",
+      }}
+    >
+      <span
+        className="font-bold tracking-wider px-1 rounded-sm"
+        style={{ fontSize: `${Math.max(8, cfg.fontSize - 2)}px`, background: color, color: "rgba(0,0,0,0.85)" }}
+      >
+        {String(nombre).toUpperCase()}
+      </span>
+      {isPlayerClass && (
+        <span style={{ fontSize: `${Math.max(7, cfg.fontSize - 4)}px`, color: "rgb(234,179,8)", letterSpacing: "0.1em" }}>TU CLASE</span>
+      )}
+      <span className="ml-auto" style={{ fontSize: `${Math.max(7, cfg.fontSize - 3)}px`, color: "rgba(255,255,255,0.5)" }}>
+        {count} {count === 1 ? "auto" : "autos"}
+        {sof != null && ` · SoF ${sof}`}
+      </span>
+    </div>
+  );
+});
 
 const StandingsRow = React.memo(function StandingsRow({ driver: d, isPlayer, cfg, multiClass, showBestCol, showLastCol }) {
   const licLevel = resolveLicLevel(d);

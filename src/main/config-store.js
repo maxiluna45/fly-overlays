@@ -139,6 +139,9 @@ const DEFAULTS = {
     // sesión → tu vuelta anterior). Mapeable a un botón del volante desde el
     // software del volante (tecla) o bindeando el botón en el dashboard.
     cycleDeltaRef: 'F10',
+    // Alterna el standings entre vista reducida y tabla completa. Igual que
+    // el anterior, se puede bindear a un botón del volante.
+    toggleStandingsView: 'F11',
   },
   // Carpeta de telemetría .ibt de iRacing. null = usar la ruta por defecto
   // (Documentos/iRacing/telemetry). El usuario puede sobreescribirla.

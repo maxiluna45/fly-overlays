@@ -6,6 +6,34 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.21.0] - 2026-09-30
+
+### Agregado
+- **El Standings separa las clases.** En multiclase cada grupo abre con su
+  propia cabecera: barra del color de la clase, nombre, cuántos autos tiene y el
+  SoF de ese grupo (con la fórmula oficial de iRacing, la misma que usa el
+  Relative). Antes las tres tablas se leían como una sola lista y no se entendía
+  por qué las posiciones volvían a empezar.
+- **Vista reducida del Standings.** En vez de mostrarte del 1 al 10 y después
+  pegarte a vos suelto al final, ahora muestra los 5 primeros de tu clase, un
+  corte, y tu entorno: los 3 que tenés adelante y los 3 de atrás. De las otras
+  clases se ve sólo el podio. Si vas 6º o 7º los dos bloques se tocan y la lista
+  sale de corrido, sin el corte ni filas repetidas.
+- **F11 alterna entre la vista reducida y la tabla completa**, con las filas
+  entrando de a poco en vez de aparecer de golpe. Es un atajo configurable como
+  los demás, así que se puede bindear a un botón del volante desde el panel. La
+  preferencia queda guardada: arranca como la dejaste.
+- **Cuántos son en pista.** El total va en el pie del Standings, y en multiclase
+  cada cabecera de clase trae además el suyo. Era la pregunta de siempre:
+  "largué 12º, pero ¿cuántos somos?".
+
+### Cambiado
+- El Standings también deja de mostrar la columna de banderas, por el mismo
+  motivo que el Relative en 0.19.1: iRacing no publica el club. Le quedaba un
+  default propio que pisaba al de la configuración general.
+- El modo preview (F9) ahora genera tres clases en vez de una, así se pueden ver
+  las cabeceras de clase y los colores sin entrar a una carrera multiclase.
+
 ## [0.20.0] - 2026-09-30
 
 ### Agregado

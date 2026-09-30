@@ -359,6 +359,15 @@ class IrsdkClient {
       ["D 2.9", 2, 2.9, 2],
     ];
     const iratings = [14500, 1850, 2400, 3200, 1100, 6700, 1500, 2800, 1400, 1700];
+    // Tres clases, con el player en la del medio. El preview es la única forma
+    // de ver las cabeceras de clase sin entrar a una carrera multiclase.
+    const clases = [
+      { id: 3188, name: "LMP2", color: 2 },
+      { id: 2708, name: "GT3", color: 1 },
+      { id: 1534, name: "GT4", color: 4 },
+    ];
+    //          idx:  0  1  2  3  4  5  6  7  8  9
+    const claseDe = [ 0, 0, 0, 1, 1, 1, 1, 1, 2, 2 ];
     const baseLap = 95 + (t % 7) * 0.2; // varía un poco con el tiempo
     const playerIdx = 6;
     const drivers = driverNames.map((name, i) => {
@@ -375,7 +384,8 @@ class IrsdkClient {
       const lastLapTime = baseLap + (i * 0.15) + Math.sin(t + i) * 0.2;
       return {
         carIdx: i,
-        classPosition: i + 1,
+        // Posicion DENTRO de su clase, no global: es lo que manda el payload real.
+        classPosition: claseDe.slice(0, i).filter((c) => c === claseDe[i]).length + 1,
         position: i + 1,
         name,
         abbrev: null,
@@ -387,15 +397,18 @@ class IrsdkClient {
         licLevel,
         licSubLevel: licSub,
         licColor,
-        carClassId: 0,
-        carClassShort: "",
-        carClassColor: 1,
-        isPlayerClass: true,
+        carClassId: clases[claseDe[i]].id,
+        carClassName: clases[claseDe[i]].name,
+        carClassShort: clases[claseDe[i]].name,
+        carClassColor: clases[claseDe[i]].color,
+        isPlayerClass: claseDe[i] === claseDe[playerIdx],
         relDelta,
         relMeters: relDelta * 7, // distancia longitudinal aprox. para el radar
         gapToPlayer: Math.abs(relDelta),
         isAhead: relDelta > 0,
-        lapDelta: 0,
+        // Uno adelante con una vuelta de ventaja y uno atras una vuelta abajo:
+        // sin esto el preview no muestra el borde de color de las vueltas.
+        lapDelta: i === 1 ? 1 : i === 9 ? -1 : 0,
         lapCompleted: isPlayer ? currentLapNum - 1 : currentLapNum - 1,
         lapDistPct: isPlayer ? (currentLapTime / 12) : Math.min(1, (currentLapTime + (i - playerIdx) * 0.5) / 12),
         onTrack: true,

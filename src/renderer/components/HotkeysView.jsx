@@ -57,6 +57,7 @@ const CATEGORIES = [
     title: "Delta Bar",
     items: [
       { key: "cycleDeltaRef", label: "Ciclar referencia del delta", desc: "Tu mejor (sesión) → mejor de la sesión → vuelta anterior → personal → óptima" },
+      { key: "toggleStandingsView", label: "Standings: reducido / completo", desc: "Alterna entre los 5 primeros + tu entorno y la tabla entera" },
     ],
     wheelBind: true, // esta categoría también muestra el binding de botón de volante
   },

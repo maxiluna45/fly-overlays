@@ -331,6 +331,10 @@ const HOTKEY_ACTIONS = {
     const next = cycleDeltaReference();
     console.log(`[main] delta ref → ${next}`);
   },
+  toggleStandingsView: () => {
+    const compact = toggleStandingsCompact();
+    console.log(`[main] standings → ${compact ? 'reducido' : 'tabla completa'}`);
+  },
 };
 
 // (Re)registra TODOS los atajos globales desde config. Se llama al iniciar y
@@ -394,6 +398,17 @@ function cycleDeltaReference() {
   return next;
 }
 ipcMain.handle('delta:cycle-ref', () => cycleDeltaReference());
+
+// Alterna el standings entre la vista reducida (5 primeros + tu entorno) y la
+// tabla completa. Se guarda en la config del overlay: arranca como lo dejaste.
+function toggleStandingsCompact() {
+  const ov = configStore.getOverlay('standings');
+  if (!ov) return null;
+  const compact = (ov.settings || {}).compact !== false;
+  overlayManager.applyOverlayUpdate('standings', { settings: { ...(ov.settings || {}), compact: !compact } });
+  return !compact;
+}
+ipcMain.handle('standings:toggle-view', () => toggleStandingsCompact());
 
 // Re-bindear un atajo global desde el apartado Hotkeys. Valida nombre,
 // rechaza duplicados contra los demás atajos y revierte si Electron no puede
