@@ -1,5 +1,8 @@
 const { BrowserWindow, screen } = require('electron');
 const path = require('path');
+const { createLogger } = require('./logger');
+
+const log = createLogger('overlay');
 
 const isDev = process.env.NODE_ENV === 'development';
 
@@ -123,7 +126,13 @@ class OverlayManager {
 
   show(id) {
     if (this.windows.has(id)) {
-      this.windows.get(id).show();
+      const win = this.windows.get(id);
+      win.show();
+      // Mostrar la ventana reaplica sus estilos extendidos en Windows, y ahí
+      // vive el "ignorar mouse". Sin volver a aplicar el lock, un overlay que
+      // ya estaba en modo edición se queda atravesable: se le ven las esquinas
+      // celestes pero no se lo puede agarrar.
+      this._applyLockStateFor(id, win);
     } else {
       this._create(id);
     }
@@ -200,7 +209,15 @@ class OverlayManager {
       .map(([id]) => id);
     const anyUnlocked = ids.some((id) => this.isUnlocked(id));
     const next = !anyUnlocked;
-    for (const id of ids) this.setUnlocked(id, next);
+    // Primero TODOS los estados, después una sola pasada de visibilidad y
+    // recién al final el lock de cada ventana. Con setUnlocked() en un bucle,
+    // cada vuelta re-mostraba todos los overlays --incluidos los que ya habían
+    // recibido el mouse-- y los volvía a dejar atravesables: de ahí que con F7
+    // quedaran clavados, a veces todos y a veces todos menos uno.
+    for (const id of ids) this.unlockedState.set(id, next);
+    this.applySessionVisibility();
+    for (const id of ids) this._applyLockState(id);
+    log.info(`edit mode ${next ? 'ON' : 'OFF'}`, { overlays: ids.join(',') });
     return next;
   }
 

@@ -6,6 +6,21 @@ El formato sigue las convenciones de Keep a Changelog (keepachangelog.com) y el
 versionado sigue Semantic Versioning (semver.org): MAJOR para cambios que rompen
 compatibilidad, MINOR para funcionalidad nueva compatible, PATCH para correcciones.
 
+## [0.21.3] - 2026-09-30
+
+### Corregido
+- **Los overlays quedaban clavados en el modo edición (F7).** A veces ninguno se
+  podía mover, a veces sólo uno, sin patrón fijo: se veían las esquinas celestes
+  de edición pero la ventana no se dejaba agarrar. Al entrar en edit mode se
+  recorrían los overlays uno por uno y, en cada vuelta, se volvían a mostrar
+  **todos** — incluidos los que ya habían recibido el mouse. En Windows, mostrar
+  una ventana reaplica sus estilos, y ahí es donde vive el "ignorar mouse", así
+  que los overlays ya procesados volvían a quedar atravesables. Con cinco
+  overlays, al primero se le devolvía el mouse en el paso 5 y se lo volvía a
+  mostrar en el 24. Ahora se fijan todos los estados, se hace una sola pasada de
+  visibilidad y recién después se configura el mouse de cada ventana, que además
+  vuelve a aplicarse cada vez que un overlay se muestra.
+
 ## [0.21.2] - 2026-09-30
 
 ### Corregido
